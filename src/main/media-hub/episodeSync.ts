@@ -65,7 +65,8 @@ export interface SyncShow {
 
 const DAY = 24 * 60 * 60 * 1000
 
-/** How long a show stays in the record after the last pass that added to it. */
+/** How long a show stays in the record after the last pass that added to
+ *  it, and the record itself after it was last written. */
 export const SHOW_SYNC_TTL_MS = 90 * DAY
 /** An episode marked here this recently may still have its own push on the
  *  way. Sending it again could land a second play at Trakt, so the
@@ -247,6 +248,10 @@ function quietKey(service: EpisodeService, mark: string, id: string): string {
  */
 export function noteMerge(record: ShowSyncRecord, note: MergeNote, now: number): ShowSyncRecord {
   const entries = { ...record.entries }
+  // A row no pass has added to for SHOW_SYNC_TTL_MS goes, unreviewed.
+  for (const [id, entry] of Object.entries(entries)) {
+    if (now - entry.at > SHOW_SYNC_TTL_MS) delete entries[id]
+  }
   const quiet = { ...record.quiet }
   const existing = entries[note.show.id]
   const prev = existing?.parts[note.service]

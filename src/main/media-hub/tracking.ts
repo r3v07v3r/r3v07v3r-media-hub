@@ -239,8 +239,9 @@ interface SimklSyncResult {
  * pushMalProgress) and does not hold up the next. The history pushes are
  * wrapped in keptSimkl/keptTrakt/keptMal, which write a failure down to be
  * retried on the next watch-sync pass or manual Sync (historyRetry.ts). The
- * sync review only catches a disagreement over a Simkl movie; drift on a
- * series, at Trakt or at MAL that a retry cannot fix is not detected yet.
+ * sync review catches a disagreement over a Simkl movie, and the episode
+ * comparison (episodeSync.ts) a show's episodes missing at Simkl or Trakt;
+ * drift at MAL that a retry cannot fix is not detected.
  */
 function queueRemotePushes(
   item: { id: string; type?: string },
@@ -725,7 +726,9 @@ interface SimklPinPollResponse {
 // problem that deserves its own design — and anime already has a
 // dedicated, deeper reconciler for exactly that in malSync.ts. Scoping
 // this pass to movies means it's simple enough to reason about
-// completely rather than half-solving the harder case.
+// completely rather than half-solving the harder case. Series and anime
+// have that design now, as sets compared show by show after the pulls:
+// episodeSync.ts, the review panel's shows section.
 
 /** How long a real reconciliation attempt (success or failure) suppresses
  *  the next one. Opening and closing the app repeatedly — during testing,

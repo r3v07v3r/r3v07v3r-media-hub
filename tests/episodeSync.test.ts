@@ -559,6 +559,16 @@ async function main(): Promise<void> {
     assert.equal(Object.keys(record.entries).length, 1)
   })
 
+  await check('a row no pass has added to for 90 days goes', () => {
+    let record = recordWith({ service: 'trakt', mark: 'trakt-1', show: SHOW, arrived: eps(1, 9) })
+    record = noteMerge(
+      record,
+      { service: 'trakt', mark: 'trakt-1', show: OTHER, arrived: eps(1, 1) },
+      T0 + 91 * 24 * 60 * 60 * 1000
+    )
+    assert.deepEqual(Object.keys(record.entries), [OTHER.id])
+  })
+
   await check('what a pull wrote is noted per show as arrivals; films are not', () => {
     const record = noteArrivals(
       { entries: {}, quiet: {} },
