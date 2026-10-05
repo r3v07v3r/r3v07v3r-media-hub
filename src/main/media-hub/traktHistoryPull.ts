@@ -133,6 +133,10 @@ export interface TraktPullDeps {
    *  answers with when it is about to write. For a first pass with nothing
    *  on record. How many viewings it wrote. */
   fullImport(held: () => ReadonlySet<string>): Promise<{ plays: number }>
+  /** The viewings this pull wrote, for the record of what each pass merged
+   *  (episodeSync.ts's noteArrivals). Optional so a test that is not about
+   *  it can leave it out. */
+  merged?(rows: ImportedPlay[]): void
   /** Where the import files Trakt's plays (traktClient.ts's fileTraktPlays). */
   file(rows: ImportedPlay[]): Promise<ImportedPlay[]>
   /** The backup before history rows are written (autoBackup.ts). */
@@ -205,6 +209,7 @@ export async function pullTraktHistory(deps: TraktPullDeps): Promise<TraktPullRe
     if (fresh.length) {
       deps.backup()
       plays = db.importWatched(fresh)
+      deps.merged?.(fresh)
     }
     // From when this pull asked, so a viewing that lands during it is read
     // again next time rather than missed.

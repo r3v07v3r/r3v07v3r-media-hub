@@ -33,6 +33,9 @@ import type {
   PartyStatusResult,
   ProfilePublic,
   ReconcileResolution,
+  EpisodeSyncService,
+  ShowSyncAction,
+  ShowSyncRow,
   WatchStatusDiscrepancy
 } from '@shared/media-hub/types'
 import type { ChangedEpisode, TitleStatus } from '@shared/media-hub/types'
@@ -288,6 +291,13 @@ interface AppStateValue {
     discrepancy: WatchStatusDiscrepancy,
     resolution: ReconcileResolution
   ) => void
+  /** The review panel's shows section: per show, the episodes that arrived
+   *  from each service and the ones sent to it, not reviewed yet — see
+   *  main/media-hub/episodeSync.ts. */
+  syncShows: ShowSyncRow[]
+  /** One choice on one show row. The row leaves at once; the changes for
+   *  the services go out a few seconds after the last choice. */
+  decideSyncShow: (row: ShowSyncRow, action: ShowSyncAction, service?: EpisodeSyncService) => void
 
   // The flat "browse everything" pool (movies + series + anime, real
   // catalog:list data when available, the previous session's remembered
@@ -1210,6 +1220,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // run — repeatedly closing and reopening the app can't turn into
   // repeated Simkl requests.
   const [syncDiscrepancies, setSyncDiscrepancies] = useState<WatchStatusDiscrepancy[]>([])
+  const [syncShows, setSyncShows] = useState<ShowSyncRow[]>([])
   const [syncReviewOpen, setSyncReviewOpen] = useState(false)
   const [controlCentreOpen, setControlCentreOpen] = useState(false)
 
@@ -1223,6 +1234,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   if (discrepanciesFor !== libraryKey) {
     setDiscrepanciesFor(libraryKey)
     setSyncDiscrepancies([])
+    setSyncShows([])
     setSyncReviewOpen(false)
   }
 
@@ -1233,14 +1245,28 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       api
         .reconcileCheck()
         .then((result) => {
-          if (!result.discrepancies.length) return
+          const shows = result.shows ?? []
+          setSyncShows(shows)
+          if (!result.discrepancies.length && !shows.length) return
           setSyncDiscrepancies(result.discrepancies)
-          pushNotification({
-            tone: 'info',
-            message:
+          const said: string[] = []
+          if (result.discrepancies.length) {
+            said.push(
               result.discrepancies.length === 1
                 ? `"${result.discrepancies[0].title}" is out of sync with Simkl.`
-                : `${result.discrepancies.length} titles are out of sync with Simkl.`,
+                : `${result.discrepancies.length} titles are out of sync with Simkl.`
+            )
+          }
+          if (shows.length) {
+            said.push(
+              shows.length === 1
+                ? `Episodes of "${shows[0].title}" were synced with your tracking services.`
+                : `Episodes of ${shows.length} shows were synced with your tracking services.`
+            )
+          }
+          pushNotification({
+            tone: 'info',
+            message: said.join(' '),
             action: { label: 'Review', run: () => setSyncReviewOpen(true) }
           })
         })
@@ -1282,6 +1308,91 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           homeFeed.refresh()
         })
         .catch(() => {})
+    },
+    [watchedIdsResult, homeFeed, pushNotification]
+  )
+
+  // Rows a pass adds after the launch check (the catch-up on focus, the
+  // half-hourly job, or the launch check's own comparison, which it does
+  // not wait for) are pushed from main, so the top bar's button counts
+  // them even when launch found nothing.
+  useEffect(() => {
+    const api = window.api?.mediaHub?.tracking
+    if (!api?.onEpisodeReview) return
+    return api.onEpisodeReview((event) => setSyncShows(event.shows))
+  }, [])
+
+  // And read again whenever the panel opens.
+  useEffect(() => {
+    if (!syncReviewOpen) return
+    const api = window.api?.mediaHub?.tracking
+    if (!api?.episodeReview) return
+    let current = true
+    api
+      .episodeReview()
+      .then((result) => {
+        if (current) setSyncShows(result.shows)
+      })
+      .catch(() => {})
+    return () => {
+      current = false
+    }
+  }, [syncReviewOpen])
+
+  const decideSyncShow = useCallback(
+    (row: ShowSyncRow, action: ShowSyncAction, service?: EpisodeSyncService) => {
+      const api = window.api?.mediaHub?.tracking
+      if (!api?.episodeDecide) return
+      // Optimistic, like the film rows: the row leaves now. The choice is
+      // recorded in main before the call returns; one that could not be is
+      // put back below and said out loud.
+      setSyncShows((prev) => prev.filter((r) => r.id !== row.id))
+      const putBack = (error?: string): void => {
+        setSyncShows((prev) => (prev.some((r) => r.id === row.id) ? prev : [...prev, row]))
+        pushNotification({
+          tone: 'error',
+          message: `Could not keep your choice for "${row.title}". ${error ?? 'Nothing was changed.'}`
+        })
+      }
+      api
+        .episodeDecide({ id: row.id, action, ...(service ? { service } : {}) })
+        .then((result) => {
+          if (!result.ok) {
+            putBack(result.error)
+            return
+          }
+          for (const { service: blocked, seasons } of result.cannotSend) {
+            const name = blocked === 'simkl' ? 'Simkl' : 'Trakt'
+            pushNotification({
+              tone: 'info',
+              message: `"${row.title}": ${seasons.length === 1 ? `season ${seasons[0]}` : `seasons ${seasons.join(', ')}`} cannot be sent to ${name}, so it was left as it is there.`
+            })
+          }
+          // What is left of the row (another service's part) comes back.
+          void api
+            .episodeReview()
+            .then((next) => setSyncShows(next.shows))
+            .catch(() => {})
+          if (result.removedHere) {
+            watchedIdsResult.refresh()
+            homeFeed.refresh()
+          }
+        })
+        // A call that failed outright (a database error part way) is said,
+        // and the section is read again for where it now stands; the row
+        // comes back if even that cannot be read.
+        .catch(() => {
+          pushNotification({
+            tone: 'error',
+            message: `Something went wrong with your choice for "${row.title}".`
+          })
+          api
+            .episodeReview()
+            .then((next) => setSyncShows(next.shows))
+            .catch(() =>
+              setSyncShows((prev) => (prev.some((r) => r.id === row.id) ? prev : [...prev, row]))
+            )
+        })
     },
     [watchedIdsResult, homeFeed, pushNotification]
   )
@@ -3026,7 +3137,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       controlCentreOpen,
       setSyncReviewOpen,
       setControlCentreOpen,
-      resolveSyncDiscrepancy
+      resolveSyncDiscrepancy,
+      syncShows,
+      decideSyncShow
     }),
     [
       profiles,
@@ -3120,7 +3233,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       syncDiscrepancies,
       syncReviewOpen,
       controlCentreOpen,
-      resolveSyncDiscrepancy
+      resolveSyncDiscrepancy,
+      syncShows,
+      decideSyncShow
     ]
   )
 

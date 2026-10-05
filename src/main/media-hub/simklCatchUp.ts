@@ -33,7 +33,12 @@
 //    failure costs that kind a retry, never the others their progress, and
 //    never a stamp that would make the next pass skip what was missed.
 
-import type { CatalogItem, CatchUpReport, MediaKind } from '../../shared/media-hub/types'
+import type {
+  CatalogItem,
+  CatchUpReport,
+  ImportedPlay,
+  MediaKind
+} from '../../shared/media-hub/types'
 import type { MediaHubDatabase } from './database'
 import type { HttpError } from './httpClient'
 import { getDatabase } from './dbState'
@@ -112,6 +117,10 @@ export interface CatchUpDeps {
    *  own gate. Resolves to the viewings it wrote. Run only with Trakt
    *  connected; optional so a test that is not about it can leave it out. */
   traktHistory?(): Promise<number>
+  /** The viewings a kind just wrote, for the record of what each pass
+   *  merged (episodeSync.ts's noteArrivals). Optional so a test that is not
+   *  about it can leave it out. */
+  merged?(rows: ImportedPlay[]): void
   /** True while something is playing: nothing may compete with it. */
   busy(): boolean
   now(): number
@@ -586,6 +595,7 @@ async function catchUpPass(
       report.followed += plan.follow.length
       unplanned += applied.unplanned.length
       unplan = plan.unplan.filter((item) => applied.unplanned.includes(item.id))
+      if (plan.plays.length) deps.merged?.(plan.plays)
     } catch (error) {
       // Nothing landed and nothing is recorded — a title marked seen whose
       // rows never landed would be skipped by every later pass — so the
@@ -875,7 +885,14 @@ export async function catchUpFromServices(options: CatchUpOptions = {}): Promise
       }).catch((error) => logError('catch-up:artwork', error))
     },
     traktHistory: async () =>
-      (await trakt.pullTraktHistoryNow('visible', () => tracking.removalsHeldBack('trakt'))).plays,
+      (
+        await trakt.pullTraktHistoryNow(
+          'visible',
+          () => tracking.removalsHeldBack('trakt'),
+          (rows) => tracking.noteEpisodeArrivals('trakt', rows)
+        )
+      ).plays,
+    merged: (rows) => tracking.noteEpisodeArrivals('simkl', rows),
     busy: () => currentPressure() === 'critical',
     now: () => Date.now(),
     log: logError

@@ -199,11 +199,11 @@ Each tracking service needs its own API application: create one on the service's
 enter the Client ID (and, for Trakt, the client secret; MyAnimeList's is optional) under
 **Control centre → Accounts**.
 
-| Service         | What it does                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Simkl**       | Pushes watch history (and live scrobbles, if turned on); takes in what was watched elsewhere (films, series and anime episodes) when the app opens and comes back to the front, adding only; syncs the plan-to-watch list both ways; shows your Simkl lists. When a movie's watched state differs between this app and Simkl, an **Out of sync with Simkl** panel lets you pick which side is right, and Trakt is given the same answer. |
-| **Trakt**       | Pushes watch history, ratings and (if turned on) live scrobbles for movies and series (anime is not sent); reads your watchlist and lists; imports an existing account's history and ratings once, safely repeatable, and from then on takes in what is watched there every half hour and when the app opens, adding only.                                                                                                               |
-| **MyAnimeList** | Pushes anime progress and syncs the plan-to-watch list; **Preview sync with MAL** shows what would change before you apply it.                                                                                                                                                                                                                                                                                                           |
+| Service         | What it does                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Simkl**       | Pushes watch history (and live scrobbles, if turned on); takes in what was watched elsewhere (films, series and anime episodes) when the app opens and comes back to the front, adding only; syncs the plan-to-watch list both ways; shows your Simkl lists. When a movie's watched state differs between this app and Simkl, the **Sync review** panel lets you pick which side is right, and Trakt is given the same answer. |
+| **Trakt**       | Pushes watch history, ratings and (if turned on) live scrobbles for movies and series (anime is not sent); reads your watchlist and lists; imports an existing account's history and ratings once, safely repeatable, and from then on takes in what is watched there every half hour and when the app opens, adding only.                                                                                                     |
+| **MyAnimeList** | Pushes anime progress and syncs the plan-to-watch list; **Preview sync with MAL** shows what would change before you apply it.                                                                                                                                                                                                                                                                                                 |
 
 **Keep watchlists in sync** (under Accounts → Tracking) is the two-way rule: planning or un-planning
 here pushes out, and a title a service drops is removed here too, but only if this app pulled it in
@@ -217,6 +217,17 @@ A mark, un-mark, season or whole title that does not reach a service (offline, a
 rate limit) is kept and sent again with each sync, every half hour and on **Sync now**, up to ten
 times (a try made while offline does not count). The Watchlists panel under Accounts → Tracking says
 how many are still waiting.
+
+On the desktop, the watched episodes of each show are also compared with Simkl's and Trakt's whole
+record of that show whenever either changes, and the two are merged: episodes watched here that a
+service lacks are sent to it, with the date you watched them, and the first time a Trakt account is compared, its episodes of the
+shows you have here are taken in. Nothing is removed by this. The **Sync review** panel lists every
+show that was merged, season by season, with **Undo**, **Make Trakt match here** and **Make here
+match Trakt** (and the same for Simkl); those choices are the only way an episode is ever removed at
+a service, and always by naming the exact episodes. An anime season the app cannot match to an entry
+at a service is shown as one that cannot be sent there. The phone and TV app take in what the
+services hold, as before, and have no panel. The rules are in
+[docs/WATCHLIST-SYNC.md](docs/WATCHLIST-SYNC.md#episodes-show-by-show).
 
 - **Bring an existing history in** from **Control centre → General → Your library**: IMDb's ratings
   export (needs nothing) and a Letterboxd "Export Your Data" zip (needs TMDB connected, to match

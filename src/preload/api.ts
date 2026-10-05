@@ -82,6 +82,9 @@ import type {
   ReconcileSyncReport,
   ReleaseNotesResult,
   SavedFilter,
+  ShowSyncDecision,
+  ShowSyncDecisionResult,
+  ShowSyncRow,
   SimklPinStart,
   SimklPollResult,
   SimklStatus,
@@ -648,6 +651,22 @@ export function createApi(transport: ApiTransport) {
           transport.invoke(MEDIA_HUB_CHANNELS.trackingReconcileCheck),
         reconcileResolve: (payload: ReconcileResolvePayload): Promise<ReconcileResolveResult> =>
           transport.invoke(MEDIA_HUB_CHANNELS.trackingReconcileResolve, payload),
+        /** The shows section of the review panel: per show, what arrived
+         *  from each service and what was sent where, not reviewed yet. */
+        episodeReview: (): Promise<{ shows: ShowSyncRow[] }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.trackingEpisodeReview),
+        /** One choice on one show row: keep, undo, or make one side match
+         *  the other. The changes for the services are queued and sent a
+         *  few seconds after the last choice. */
+        episodeDecide: (payload: ShowSyncDecision): Promise<ShowSyncDecisionResult> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.trackingEpisodeDecide, payload),
+        /** Fires when a pass after launch (a focus catch-up, the half-hourly
+         *  job) changed the shows section, with the section as it now is. */
+        onEpisodeReview: (onEvent: (event: { shows: ShowSyncRow[] }) => void): (() => void) =>
+          subscribe<{ shows: ShowSyncRow[] }>(
+            MEDIA_HUB_CHANNELS.trackingEpisodeReviewChanged,
+            onEvent
+          ),
         /** Fires when a batch of "keep local" decisions has been pushed out
          *  to the tracking services — or has failed to be. The resolve call
          *  itself only queues the decision (see tracking.ts), so this is

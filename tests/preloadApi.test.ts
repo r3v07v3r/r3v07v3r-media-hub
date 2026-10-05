@@ -134,6 +134,19 @@ check('a request is one invoke carrying exactly the payload the handler reads', 
     args: [{ leaveListsToJob: true }]
   })
 
+  // A choice on a show row in the review panel: the handler reads id, action
+  // and service from this one object.
+  void api.mediaHub.tracking.episodeDecide({
+    id: 'tt0000001',
+    action: 'here-match-service',
+    service: 'trakt'
+  })
+  assert.deepEqual(calls.at(-1), {
+    kind: 'invoke',
+    channel: MEDIA_HUB_CHANNELS.trackingEpisodeDecide,
+    args: [{ id: 'tt0000001', action: 'here-match-service', service: 'trakt' }]
+  })
+
   // No payload means NO argument, not an explicit undefined: a handler that
   // counts its arguments must see the same call it always has.
   void api.mediaHub.bootstrap()
@@ -156,6 +169,15 @@ check('a subscription listens on its channel and its unsubscribe stops it', () =
     channel: MEDIA_HUB_CHANNELS.libraryChanged,
     args: []
   })
+})
+
+check('the shows section of the review panel is pushed on its own channel', () => {
+  const { transport, calls } = recordingTransport()
+  const stop = createApi(transport).mediaHub.tracking.onEpisodeReview(() => {})
+  assert.deepEqual(calls, [
+    { kind: 'on', channel: MEDIA_HUB_CHANNELS.trackingEpisodeReviewChanged, args: [] }
+  ])
+  stop()
 })
 
 check('a pushed payload reaches the subscriber as-is', () => {

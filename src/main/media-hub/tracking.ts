@@ -39,6 +39,9 @@ import type {
   ImportedPlay,
   SetTitleStatusPayload,
   SetTitleStatusResult,
+  ShowSyncDecision,
+  ShowSyncDecisionResult,
+  ShowSyncRow,
   SimklPinStart,
   SimklPollResult,
   SimklStatus,
@@ -63,7 +66,7 @@ import {
   rankPersonalizedRecommendationsScored,
   watchCadenceProfile
 } from '../../shared/media-hub/catalog-logic'
-import { watchedLaterSeasons } from '../../shared/media-hub/serviceIds'
+import { toSimklAnimeEpisode, watchedLaterSeasons } from '../../shared/media-hub/serviceIds'
 import {
   abandonedIds,
   liveExclusions,
@@ -89,7 +92,7 @@ import {
   laterSeasonOf,
   resolveAnimeGroupTarget
 } from './animeSeasons'
-import { catchUpFromServices, recentSimklActivities } from './simklCatchUp'
+import { catchUpFromServices, noteSimklActivities, recentSimklActivities } from './simklCatchUp'
 import { getDatabase } from './dbState'
 import {
   applyLocalPlanChange,
@@ -120,6 +123,7 @@ import {
   pushTraktSeasonHistory,
   pushTraktTitleHistory,
   pullTraktHistoryNow,
+  traktRequest,
   type TraktPushResult
 } from './traktClient'
 import {
@@ -169,6 +173,7 @@ import {
   forgetSimklWatchedCache,
   invalidateSimklWatchedCache,
   simklActivities,
+  simklLibrary,
   simklRequest,
   simklUrl,
   simklWatchedSnapshot
@@ -180,10 +185,34 @@ import {
   recordFilmDiff,
   runWatchSync
 } from './watchSync'
-import { parseSimklActivities } from './simklCatchUpRules'
+import { parseSimklActivities, type SimklLibraryTitle } from './simklCatchUpRules'
 import { titlePushQueue, titlePushKey } from './titlePushQueue'
 import { cachedMetadata } from './titleNames'
 import { imdbForSimklKeyedId, isSimklKeyedId } from './simklKeyedHistory'
+import { isTraktPushable } from './trakt'
+import { traktPullKey, traktPullStateFor } from './traktHistoryPull'
+import { kitsuIdLookup } from './idBridge'
+import { backupBeforeRewrite } from './autoBackup'
+import {
+  compareEpisodeSets,
+  decideShow,
+  liveShowSync,
+  noteArrivals,
+  readShowSync,
+  undoneHeldBack,
+  withWatchedAt,
+  seasonsOf,
+  simklAnimeRead,
+  simklShowsRead,
+  traktShowsRead,
+  writeShowSync,
+  type AnimePlace,
+  type Ep,
+  type EpisodeService,
+  type EpisodeSource,
+  type RemoteRead,
+  type SyncShow
+} from './episodeSync'
 
 /** Result of a single "push this watch-state change to Simkl" attempt, merged into every mark/unmark handler's response. */
 interface SimklSyncResult {
@@ -212,8 +241,9 @@ interface SimklSyncResult {
  * pushMalProgress) and does not hold up the next. The history pushes are
  * wrapped in keptSimkl/keptTrakt/keptMal, which write a failure down to be
  * retried on the next watch-sync pass or manual Sync (historyRetry.ts). The
- * sync review only catches a disagreement over a Simkl movie; drift on a
- * series, at Trakt or at MAL that a retry cannot fix is not detected yet.
+ * sync review catches a disagreement over a Simkl movie, and the episode
+ * comparison (episodeSync.ts) a show's episodes missing at Simkl or Trakt;
+ * drift at MAL that a retry cannot fix is not detected.
  */
 function queueRemotePushes(
   item: { id: string; type?: string },
@@ -533,6 +563,11 @@ export function removalsHeldBack(service: 'simkl' | 'trakt'): Set<string> {
       keys.add(key)
     }
   }
+  // An Undo of episodes that cannot be removed at the service they came
+  // from (episodeSync.ts's noteUndone): held back here instead.
+  const record = readShowSync(db, profile)
+  const mark = trackingAccountMarks()[service]
+  for (const key of undoneHeldBack(record, service, mark, Date.now())) keys.add(key)
   return keys
 }
 
@@ -698,7 +733,9 @@ interface SimklPinPollResponse {
 // problem that deserves its own design — and anime already has a
 // dedicated, deeper reconciler for exactly that in malSync.ts. Scoping
 // this pass to movies means it's simple enough to reason about
-// completely rather than half-solving the harder case.
+// completely rather than half-solving the harder case. Series and anime
+// have that design now, as sets compared show by show after the pulls:
+// episodeSync.ts, the review panel's shows section.
 
 /** How long a real reconciliation attempt (success or failure) suppresses
  *  the next one. Opening and closing the app repeatedly — during testing,
@@ -1461,11 +1498,23 @@ export async function runBackgroundWatchSync(): Promise<void> {
       // its requests must not jump ahead of the screen someone is looking
       // at, and must stand down along with the rest of the job once
       // playback starts.
-      activities: () => simklActivities('background'),
+      // Noted, as the catch-up notes its own, so the episode comparison
+      // after this pass can go by it without asking again.
+      activities: async () => {
+        const account = simklAccountMark()
+        const payload = await simklActivities('background')
+        noteSimklActivities(account, payload, Date.now())
+        return payload
+      },
       syncPlanned: (options) => syncPlannedFromServices('background', options),
       flushPushes: () => flushPendingPushes('background'),
       retryHistory: () => retryHistoryPushes('background'),
-      pullTraktHistory: () => pullTraktHistoryNow('background', () => removalsHeldBack('trakt')),
+      pullTraktHistory: () =>
+        pullTraktHistoryNow(
+          'background',
+          () => removalsHeldBack('trakt'),
+          (rows) => noteEpisodeArrivals('trakt', rows)
+        ),
       reviewAsked: () => reviewAsked,
       reconcile: backgroundReconcile,
       now: () => Date.now(),
@@ -1473,6 +1522,8 @@ export async function runBackgroundWatchSync(): Promise<void> {
     },
     watchSyncMemory
   )
+  // After the pulls: what each service lacks, show by show.
+  await compareEpisodesAfterPull()
 }
 
 /** Single-flight wrapper — the debounce timer and a reconcile check can
@@ -1730,6 +1781,276 @@ async function computeMovieDiscrepancies(
   return { discrepancies, fetched: snapshot.fetched }
 }
 
+// ---------------------------------------------------------------------
+// Episodes, show by show — see episodeSync.ts.
+//
+// After the pulls (the catch-up, the Trakt pull, the half-hourly pass), each
+// service whose activity stamp moved is read whole once and compared show by
+// show; what it lacks is sent to it, and what each pass merged is recorded
+// for the review panel's shows section. Only on a backend whose interface
+// has that panel (reviewAsked): the phone and TV app keep the add-only
+// catch-up, and their pulls still note what they took in.
+
+/** How old the catch-up's /sync/activities answer may be for the comparison
+ *  to go by it. Older, or none, and Simkl is left for a later pass rather
+ *  than asked again: the comparison makes no gate request of its own. */
+const EPISODE_STAMP_MAX_AGE_MS = 5 * 60 * 1000
+/** A choice's pushes wait this long for the next choice, as "keep local"
+ *  does (PENDING_FLUSH_DELAY_MS), so working down the list goes out as one
+ *  request per service and title. */
+const EPISODE_DECISION_FLUSH_MS = 3000
+
+function episodeMarks(): Record<EpisodeService, string> {
+  const marks = trackingAccountMarks()
+  return { simkl: marks.simkl, trakt: marks.trakt }
+}
+
+/** Whether an episode of a show can be named to a service at all: an id the
+ *  service knows, and for an anime at Simkl, an entry the placing rules can
+ *  show is that season (toSimklAnimeEpisode). Trakt is never sent anime. */
+function canSendEpisode(service: EpisodeService, show: SyncShow, ep: Ep): boolean {
+  if (service === 'trakt') {
+    return isTraktPushable({ id: show.id, type: show.type, title: show.title })
+  }
+  if (!hasExpressibleSimklId(show.id)) return false
+  if (show.type !== 'anime') return true
+  return toSimklAnimeEpisode({ id: show.id, ...ep }, animeSiblingsWhenGrouped()) !== null
+}
+
+/**
+ * Sends episodes held here to one service, as an add, on the title's own
+ * chain, so a failure is kept and retried (keptSimkl, keptTrakt). Read again
+ * when the push runs: an episode un-marked in the meantime is not sent. Each
+ * episode carries the time it was watched here (withWatchedAt); a retry
+ * after a failure goes without it, as every retried push does.
+ */
+function sendEpisodesTo(service: EpisodeService, show: SyncShow, eps: Ep[]): void {
+  const item = { id: show.id, type: show.type, title: show.title, year: show.year ?? '' }
+  const profile = getDatabase().activeProfile()
+  queueRemotePushes(item, () => {
+    const db = getDatabase()
+    if (db.activeProfile() !== profile) return []
+    const dates = new Map<string, string>()
+    for (const row of db.history()) {
+      if (String(row.id) !== show.id || row.season == null || row.episode == null) continue
+      const key = `${row.season}:${row.episode}`
+      const held = dates.get(key)
+      if (row.watchedAt && (!held || Date.parse(row.watchedAt) > Date.parse(held))) {
+        dates.set(key, row.watchedAt)
+      } else if (!held) {
+        dates.set(key, '')
+      }
+    }
+    const rows = eps.filter((ep) => dates.has(`${ep.season}:${ep.episode}`))
+    if (!rows.length) return []
+    const at: HistoryPushAt = { item, rows, action: 'add', profile }
+    const seasons = bySeason(rows)
+    return service === 'simkl'
+      ? [
+          keptSimkl(
+            at,
+            syncSimklHistory(
+              '/sync/history',
+              withWatchedAt(titleHistoryPayload(item, seasons, animeSiblingsWhenGrouped()), dates),
+              'background'
+            )
+          )
+        ]
+      : [keptTrakt(at, pushTraktTitleHistory(item, seasons, 'add', dates))]
+  })
+}
+
+/** History keys with a change owed to the service or on its way there. */
+function episodeKeysOwed(service: EpisodeService): Set<string> {
+  const db = getDatabase()
+  const keys = removalsHeldBack(service)
+  for (const entry of Object.values(
+    readHistoryPending(db, db.activeProfile(), trackingAccountMarks())
+  )) {
+    if (entry.service === service) keys.add(watchKeyOf(entry.item.id, entry.season, entry.episode))
+  }
+  return keys
+}
+
+/** Where a Simkl anime entry is kept here, by the placing rules: a later
+ *  season only where laterSeasonOf can show it is that season of the page,
+ *  never by its position in the group. */
+async function placeSimklAnime(title: SimklLibraryTitle): Promise<AnimePlace> {
+  let kitsu = title.kitsu ?? null
+  if (!kitsu) {
+    let answered = true
+    for (const [service, value] of [
+      ['mal', title.mal],
+      ['anidb', title.anidb]
+    ] as const) {
+      if (!value) continue
+      const found = await kitsuIdLookup(service, value, 'background')
+      if (found.kitsuId) {
+        kitsu = found.kitsuId
+        break
+      }
+      if (!found.answered) answered = false
+    }
+    if (!kitsu) return answered ? { kind: 'none' } : { kind: 'unanswered' }
+  }
+  const id = `kitsu:${kitsu}`
+  const later = laterSeasonOf(id)
+  if (later) return { kind: 'placed', id: later.id, season: later.season }
+  const target = resolveAnimeGroupTarget(id)
+  if (target.id === id) return { kind: 'placed', id, season: 1 }
+  return { kind: 'mismatched', ids: [id, target.id] }
+}
+
+async function readEpisodeSource(source: EpisodeSource): Promise<RemoteRead> {
+  switch (source) {
+    case 'simkl-shows':
+      return simklShowsRead(await simklLibrary('show', 'background', null))
+    case 'simkl-anime':
+      if (!animeGroupingReady()) throw new Error('The anime catalog is still being organised.')
+      return simklAnimeRead(await simklLibrary('anime', 'background', null), placeSimklAnime)
+    case 'trakt-shows':
+      return traktShowsRead(await traktRequest('/sync/watched/shows', {}, 'background'))
+  }
+}
+
+/** A source's activity stamp as the pass that just ran read it: Simkl's from
+ *  the catch-up's (or the job's) /sync/activities answer, Trakt's from what
+ *  the history pull recorded. */
+function episodeSourceStamp(source: EpisodeSource): string | null {
+  const db = getDatabase()
+  if (source === 'trakt-shows') {
+    const state = traktPullStateFor(
+      db.getCache(traktPullKey(db.activeProfile()), { allowExpired: true }),
+      trackingAccountMarks().trakt
+    )
+    return state?.stamps?.episodes ?? null
+  }
+  const payload = recentSimklActivities(simklAccountMark(), EPISODE_STAMP_MAX_AGE_MS)
+  if (payload === undefined) return null
+  const stamps = parseSimklActivities(payload)
+  if (source === 'simkl-anime') return animeGroupingReady() ? stamps.anime : null
+  return stamps.shows
+}
+
+let episodeCompareInFlight: Promise<void> | null = null
+
+/** The comparison, after a pull. One at a time; never throws. */
+function compareEpisodesAfterPull(): Promise<void> {
+  if (!reviewAsked) return Promise.resolve()
+  if (episodeCompareInFlight) return episodeCompareInFlight
+  const run = compareEpisodeSets({
+    db: getDatabase(),
+    marks: episodeMarks,
+    stamp: episodeSourceStamp,
+    read: readEpisodeSource,
+    pending: episodeKeysOwed,
+    canSend: canSendEpisode,
+    send: sendEpisodesTo,
+    // At most once a day, like the Trakt pull's.
+    backup: () => backupBeforeRewrite('episode-sync', { notWithinMs: 24 * 60 * 60 * 1000 }),
+    announce: () => {
+      requestRecommendationsRebuild()
+      notifyLibraryChanged('episode-sync', 'history')
+    },
+    now: () => Date.now(),
+    log: logError
+  })
+    .then((report) => {
+      if (report.added || report.sent) {
+        logError(
+          'episode-sync',
+          `compared=${report.compared.join(',')} added=${report.added} sent=${report.sent}`
+        )
+      }
+      if (report.compared.length) announceShowSyncRows()
+    })
+    .catch((error) => logError('episode-sync', error))
+    .finally(() => {
+      episodeCompareInFlight = null
+    })
+  episodeCompareInFlight = run
+  return run
+}
+
+/**
+ * Notes what a pull just wrote as arrivals from `service`, for the shows
+ * section. Called by the catch-up and the Trakt pull straight after their
+ * write, before anything else can change the profile. Never throws.
+ */
+export function noteEpisodeArrivals(service: EpisodeService, rows: readonly ImportedPlay[]): void {
+  try {
+    const db = getDatabase()
+    const profile = db.activeProfile()
+    const record = readShowSync(db, profile)
+    const next = noteArrivals(record, service, episodeMarks()[service], rows, Date.now())
+    if (next !== record && writeShowSync(db, profile, next)) announceShowSyncRows()
+  } catch (error) {
+    logError('episode-sync:arrivals', error)
+  }
+}
+
+/** The shows section as the panel draws it. */
+function showSyncRows(): ShowSyncRow[] {
+  const db = getDatabase()
+  const entries = liveShowSync(readShowSync(db, db.activeProfile()), episodeMarks(), Date.now())
+  if (!entries.length) return []
+  const posters = new Map(
+    db
+      .indexByIds(entries.map((entry) => entry.id))
+      .items.map((item) => [String(item.id), item.poster || ''] as const)
+  )
+  return entries.map((entry) => {
+    const services: ShowSyncRow['services'] = {}
+    for (const [service, part] of Object.entries(entry.parts) as [
+      EpisodeService,
+      NonNullable<(typeof entry.parts)[EpisodeService]>
+    ][]) {
+      const all = [...part.arrived, ...part.sent, ...part.unsendable]
+      services[service] = {
+        arrived: part.arrived,
+        sent: part.sent,
+        unsendable: part.unsendable,
+        blockedSeasons: seasonsOf(all).filter(
+          (season) => !canSendEpisode(service, entry, { season, episode: 1 })
+        )
+      }
+    }
+    return {
+      id: entry.id,
+      type: entry.type,
+      title: entry.title,
+      year: entry.year ?? '',
+      poster: posters.get(entry.id) ?? '',
+      at: entry.at,
+      services
+    }
+  })
+}
+
+/** Tells the review panel the shows section changed: a pass after launch
+ *  (a focus catch-up, the half-hourly job) adds rows the launch check did
+ *  not have, and the top bar's button counts them. Only where there is a
+ *  panel (reviewAsked); never throws. */
+function announceShowSyncRows(): void {
+  if (!reviewAsked) return
+  try {
+    sendToRenderer(MEDIA_HUB_CHANNELS.trackingEpisodeReviewChanged, { shows: showSyncRows() })
+  } catch (error) {
+    logError('episode-sync:announce', error)
+  }
+}
+
+let episodeFlushTimer: NodeJS.Timeout | null = null
+
+/** Sends what the panel's choices queued, a few seconds after the last one. */
+function scheduleEpisodeFlush(): void {
+  if (episodeFlushTimer) clearTimeout(episodeFlushTimer)
+  episodeFlushTimer = setTimeout(() => {
+    episodeFlushTimer = null
+    void retryHistoryPushes('interactive')
+  }, EPISODE_DECISION_FLUSH_MS)
+}
+
 /** Registers every `tracking:*`, `home:personalized`, and `simkl:*` IPC handler. Call once during main-process startup. */
 export function registerTrackingIpc(): void {
   handle<undefined, TrackingListResult>(MEDIA_HUB_CHANNELS.trackingList, async () => {
@@ -1818,11 +2139,15 @@ export function registerTrackingIpc(): void {
    */
   handle<{ force?: boolean; leaveListsToJob?: boolean } | undefined, CatchUpReport>(
     MEDIA_HUB_CHANNELS.trackingCatchUp,
-    async (_e, payload) =>
-      catchUpFromServices({
+    async (_e, payload) => {
+      const report = await catchUpFromServices({
         force: payload?.force === true,
         leaveListsToJob: payload?.leaveListsToJob === true
       })
+      // The episode comparison behind it, without holding the answer up.
+      void compareEpisodesAfterPull()
+      return report
+    }
   )
 
   /**
@@ -2334,10 +2659,8 @@ export function registerTrackingIpc(): void {
   // own header comment on why) rather than main-process-scheduled: the
   // renderer already owns exactly when "the app has settled in and this
   // won't compete with anything the person is actively doing" is true.
-  handle<undefined, ReconcileCheckResult>(MEDIA_HUB_CHANNELS.trackingReconcileCheck, async () => {
-    // Before anything can return: this is the proof that the interface in
-    // front of this backend has a review panel at all — see reviewAsked.
-    reviewAsked = true
+  /** The films half of the check — the review panel's original rows. */
+  const checkFilms = async (): Promise<ReconcileCheckResult> => {
     if (!simklCredentials().accessToken) return { ran: false, discrepancies: [] }
     const db = getDatabase()
     // Ahead of the cooldown below, which throttles the diff, not this.
@@ -2413,7 +2736,82 @@ export function registerTrackingIpc(): void {
       logError('tracking:reconcile', error)
       return { ran: true, discrepancies: [] }
     }
+  }
+
+  handle<undefined, ReconcileCheckResult>(MEDIA_HUB_CHANNELS.trackingReconcileCheck, async () => {
+    // Before anything can return: this is the proof that the interface in
+    // front of this backend has a review panel at all — see reviewAsked.
+    reviewAsked = true
+    const films = await checkFilms()
+    // The shows section as it stands, and the comparison after the
+    // catch-up the films check has just run (or the launch's own, without
+    // Simkl) behind it. Not awaited: a first comparison can read two whole
+    // Simkl lists and look up anime ids for minutes, and the films must not
+    // wait for it. What it adds reaches the panel on
+    // trackingEpisodeReviewChanged.
+    void compareEpisodesAfterPull()
+    return { ...films, shows: showSyncRows() }
   })
+
+  /** The shows section, read again — the panel asks when it opens, since a
+   *  pass may have added rows since launch. */
+  handle<undefined, { shows: ShowSyncRow[] }>(MEDIA_HUB_CHANNELS.trackingEpisodeReview, () => {
+    reviewAsked = true
+    return { shows: showSyncRows() }
+  })
+
+  /**
+   * One choice on one show row — see episodeSync.ts's decideShow. The
+   * changes owed to the services are written down before anything here is
+   * removed, and sent a few seconds after the last choice with the history
+   * pushes still owed; a push that fails is retried there and leaves the
+   * choice standing.
+   */
+  handle<ShowSyncDecision, ShowSyncDecisionResult>(
+    MEDIA_HUB_CHANNELS.trackingEpisodeDecide,
+    (_e, payload) => {
+      const db = getDatabase()
+      const profile = db.activeProfile()
+      const service =
+        payload?.service === 'simkl' || payload?.service === 'trakt' ? payload.service : undefined
+      const action = payload?.action
+      if (
+        action !== 'keep' &&
+        action !== 'undo' &&
+        action !== 'service-match-here' &&
+        action !== 'here-match-service'
+      ) {
+        return {
+          ok: false,
+          queued: false,
+          removedHere: 0,
+          cannotSend: [],
+          error: 'Unknown choice.'
+        }
+      }
+      const marks = trackingAccountMarks()
+      const outcome = decideShow(
+        {
+          db,
+          marks: () => marks,
+          canSend: canSendEpisode,
+          readPending: () => readHistoryPending(db, profile, marks),
+          writePending: (pending) => writeHistoryPending(db, profile, pending),
+          backup: () => backupBeforeRewrite('episode-sync', { notWithinMs: 24 * 60 * 60 * 1000 }),
+          now: () => Date.now()
+        },
+        String(payload?.id ?? ''),
+        action,
+        service
+      )
+      if (outcome.queued) scheduleEpisodeFlush()
+      if (outcome.removedHere) {
+        requestRecommendationsRebuild()
+        notifyLibraryChanged('episode-sync', 'history')
+      }
+      return outcome
+    }
+  )
 
   handle<
     { discrepancy: WatchStatusDiscrepancy; resolution: ReconcileResolution },

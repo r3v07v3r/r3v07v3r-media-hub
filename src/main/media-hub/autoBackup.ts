@@ -38,7 +38,7 @@ const AUTO_PREFIX = 'auto-'
 /** What the step about to rewrite rows is called, in the file name and the
  *  log. Letters, digits and dashes only. */
 export type RewriteReason =
-  'anime-regroup' | 'anime-repair' | 'trakt-import' | 'trakt-pull' | 'mal-apply'
+  'anime-regroup' | 'anime-repair' | 'trakt-import' | 'trakt-pull' | 'mal-apply' | 'episode-sync'
 
 /** The automatic backups in `dir`, oldest first. The name starts with the
  *  time it was written, so name order is time order. */

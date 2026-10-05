@@ -172,6 +172,11 @@ export const MEDIA_HUB_CHANNELS = {
   trackingListPositions: 'mediahub:tracking:list-positions',
   trackingReconcileCheck: 'mediahub:tracking:reconcile-check',
   trackingReconcileResolve: 'mediahub:tracking:reconcile-resolve',
+  /** The review panel's shows section: what was merged show by show (see
+   *  main/media-hub/episodeSync.ts), and one choice on one show. */
+  trackingEpisodeReview: 'mediahub:tracking:episode-review',
+  trackingEpisodeDecide: 'mediahub:tracking:episode-decide',
+  trackingEpisodeReviewChanged: 'mediahub:tracking:episode-review-changed', // push event — a pass after launch changed the shows section
   trackingReconcileSync: 'mediahub:tracking:reconcile-sync', // push event — a queued "keep local" batch went out (or didn't)
   /** Pushed when MAIN wrote library rows of its own accord — a background
    *  watchlist pull, a MAL reconcile, an id repair, the household title
