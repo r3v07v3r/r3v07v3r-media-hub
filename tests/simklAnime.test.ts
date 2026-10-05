@@ -18,7 +18,7 @@
 
 import assert from 'node:assert/strict'
 
-import { animeGroupIndexesOf } from '../src/main/media-hub/animeSeasons'
+import { animeGroupIndexesOf, laterSeasonsOf } from '../src/main/media-hub/animeSeasons'
 import {
   batchHistoryPayload,
   hasSimklContent,
@@ -325,6 +325,31 @@ check('a show numbered by TMDB: only a member whose own season is its place', ()
 check('a mapping nobody has looked up proves nothing', () => {
   assert.equal(animeSeasonMatchesPage('kitsu:1', 'kitsu:2', 2, tvdbOf), false)
   assert.equal(animeSeasonMatchesPage(TMDB_SHOW, 'kitsu:2', 2, tvdbOf), false)
+})
+
+check('the later seasons of the whole catalog are the members whose place is their season', () => {
+  // What the library's filters are handed (animeSeasons.ts's laterSeasons):
+  // the same answer for every id that laterSeasonOf gives one at a time.
+  const grouped = animeGroupIndexesOf([
+    { id: SHOW, groupedIds: [SEASON_2, SEASON_3] },
+    { id: TMDB_SHOW, groupedIds: ['kitsu:12268', 'kitsu:13881', 'kitsu:12511', 'kitsu:41971'] },
+    { id: ALONE }
+  ])
+  const laterSeasons = laterSeasonsOf(grouped.positions, (showId, member, season) =>
+    animeSeasonMatchesPage(showId, member, season, tvdbOf)
+  )
+  assert.deepEqual(
+    [...laterSeasons],
+    [
+      [SEASON_2, { id: SHOW, season: 2 }],
+      [SEASON_3, { id: SHOW, season: 3 }],
+      ['kitsu:12268', { id: TMDB_SHOW, season: 2 }],
+      ['kitsu:13881', { id: TMDB_SHOW, season: 3 }]
+    ],
+    'the OVA at place 4 and the unmapped season at place 5 keep their own rows'
+  )
+  // A show is not its own later season, and neither is a title in no group.
+  for (const id of [SHOW, TMDB_SHOW, ALONE]) assert.equal(laterSeasons.has(id), false, id)
 })
 
 check('a season whose member cannot be shown to be it is not sent to Simkl', () => {

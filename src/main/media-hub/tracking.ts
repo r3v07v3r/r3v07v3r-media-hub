@@ -66,6 +66,7 @@ import {
   liveExclusions,
   readStoredRecommendations,
   reasonsFor,
+  recommendable,
   requestRecommendationsRebuild,
   storeRecommendations,
   SERVED_COUNT
@@ -80,6 +81,7 @@ import {
 import { catalogData, metadata } from './catalog'
 import {
   animeGroupingReady,
+  animeSiblingIds,
   animeSiblingsWhenGrouped,
   laterSeasonOf,
   resolveAnimeGroupTarget
@@ -2182,7 +2184,9 @@ export function registerTrackingIpc(): void {
     // title as watched for up to 20 minutes.
     const history: HistoryEntry[] = db.history()
     const tracked = db.tracked()
-    const exclusions = liveExclusions(history)
+    // A merged anime's later seasons are never suggested on their own — see
+    // LiveExclusions.siblingIds.
+    const exclusions = liveExclusions(history, animeSiblingIds())
 
     // The suggestion row, from the list the background job already ranked
     // — see recommendations.ts. This is the whole point of that module:
@@ -2215,12 +2219,7 @@ export function registerTrackingIpc(): void {
 
       preferredGenres = db.preferredGenres(4)
       const dropped = abandonedIds()
-      const candidates = all.filter(
-        (item) =>
-          !exclusions.watchedIds.has(String(item.id)) &&
-          !exclusions.trackedIds.has(String(item.id)) &&
-          !exclusions.dislikedIds.has(String(item.id))
-      )
+      const candidates = all.filter((item) => recommendable(item, exclusions))
       // No credits or taste profile on this branch, deliberately.
       // Assembling them means a cache read per candidate — a couple of
       // thousand of them — and this is the launch path the stored list

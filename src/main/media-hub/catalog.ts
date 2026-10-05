@@ -72,7 +72,7 @@ import {
   invalidateAnimeGroupIndex,
   kitsuRealEpisodes,
   groupedVideosAreComplete,
-  laterSeasonLookup,
+  laterSeasons,
   laterSeasonOf
 } from './animeSeasons'
 import { keepAnimeHistoryWithShows } from './animeSyncRepair'
@@ -1729,7 +1729,7 @@ export function registerCatalogIpc(): void {
         : []
       if (!ids.length) return { items: [], completedIds: [] }
       // A later season's card is complete when that season of its show is.
-      return getDatabase().indexByIds(ids, laterSeasonLookup())
+      return getDatabase().indexByIds(ids, laterSeasons())
     }
   )
 
@@ -1754,7 +1754,7 @@ export function registerCatalogIpc(): void {
     if (!isValidCatalogKind(query?.kind)) throw new Error('Unsupported catalog.')
     // The index keeps a row for every season of a merged anime, so the
     // grid shows later seasons as tiles too; same correction as byIds.
-    return getDatabase().indexQuery(query, query.kind === 'anime' ? laterSeasonLookup() : undefined)
+    return getDatabase().indexQuery(query, query.kind === 'anime' ? laterSeasons() : undefined)
   })
 
   handle<CatalogFacetsPayload, CatalogFacets>(

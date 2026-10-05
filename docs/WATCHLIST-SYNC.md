@@ -462,11 +462,25 @@ behaves as a title of its own.
   the Anime library, whose index keeps a row for every season. The side
   panel names the episode Play will start, from the same viewings.
 
-One thing does not follow it yet. The library's Hide watched and Hide
-completed filters are applied inside the index query, by the row's own id,
-so a finished later season is marked as watched in the Anime library but is
-not filtered out of it. My Stuff filters after the badge is worked out, and
-does hide it.
+The Anime library's Hide watched and Hide completed filters read the same
+place. They are applied inside the index query, so the query is handed the
+grouping and counts a later season's viewings under its show: the tile the
+grid badges as watched or completed is the tile the filter takes out, and
+the total above the grid counts what is left. My Stuff filters after the
+badge is worked out, and always hid it.
+
+Recommendations go by membership, not by place. The suggestion row and the
+For You shelves draw on the index as well as the catalog, and the index
+keeps a row for every member of a merged show, so a later season used to be
+offered as a title of its own, including one already watched to the end
+(its viewings are under the show, not under the id that was checked). No
+member is offered now, and the show's own row is the one that competes for
+a place. A member is dropped as a candidate, dropped again when a stored
+list is read, and is not offered as what comes next either: the next season
+of a merged show is inside the show. This is every member, not only the
+ones whose place is their season, since nothing here acts on the place: a
+film or an OVA the grouping filed among the seasons is not suggested on its
+own either.
 
 Home follows the same split. A later season on the plan with nothing of it
 watched is in Plan to Watch as its own card. Once an episode of it has been
