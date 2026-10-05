@@ -161,3 +161,50 @@
   color: var(--text-primary);
   background: rgba(255, 255, 255, 0.06);
 }
+
+/* The two sections, shows first. */
+.sectionTitle {
+  padding: 12px 22px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* A show row is the ordinary row plus its seasons, opened on demand. */
+.showRow {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.showRow .row {
+  border-bottom: none;
+}
+.showDetail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 22px 14px 76px;
+}
+.serviceBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.serviceName {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.seasonLine {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.serviceActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
