@@ -10,8 +10,10 @@
 //   - a search reply never waits on a catalogue crawl: on a cold install
 //     the only request a search makes is the provider's own search;
 //   - a title found only by that search gets an index row once it is
-//     opened (metadata()) or tracked (indexTrackedTitle), so the grids and
-//     My Stuff, which read the index by id, can show it;
+//     opened (metadata(), from the network or from its cached entry) or
+//     tracked through any of the tracking handlers (plan, mark watched, mark
+//     a season, set a status, not for me), so the grids and My Stuff, which
+//     read the index by id, can show it; un-planning writes nothing;
 //   - the crawl announces the index it wrote, which is what lets the phone's
 //     Browse grid, empty on a fresh install, fill in when the crawl lands.
 //
@@ -103,6 +105,8 @@ async function main(): Promise<void> {
   const { setDatabase } = await import('../src/main/media-hub/dbState')
   const { catalogData, indexTrackedTitle, metadata, registerCatalogIpc } =
     await import('../src/main/media-hub/catalog')
+  const { registerTrackingIpc } = await import('../src/main/media-hub/tracking')
+  const { metaCacheKey } = await import('../src/main/media-hub/titleNames')
   const { setActiveWindow } = await import('../src/main/media-hub/rendererBridge')
   const { BrowserWindow, ipcMain } = await import('../src/headless/electronShim')
   const { MEDIA_HUB_CHANNELS } = await import('../src/shared/media-hub/ipc-channels')
@@ -113,12 +117,17 @@ async function main(): Promise<void> {
   // never finished a crawl, the state a search used to wait out.
   db.indexUpsert('movie', [card('tt6000001', 'Harbour Lights')], { source: 'cinemeta+simkl' })
   registerCatalogIpc()
+  registerTrackingIpc()
 
   const window = new BrowserWindow()
   const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame }
   const search = (payload: Record<string, unknown>): Promise<unknown> =>
     ipcMain.dispatchInvoke(event, MEDIA_HUB_CHANNELS.catalogSearch, [payload])
   const ids = (items: CatalogItem[]): string[] => items.map((item) => String(item.id))
+  const invoke = (channel: string, payload: unknown): Promise<unknown> =>
+    ipcMain.dispatchInvoke(event, channel, [payload])
+  const indexedKinds = (id: string): string[] =>
+    db.indexByIds([id]).items.map((item) => String(item.type))
 
   await check('a provider that answers is reachable, and its find is listed', async () => {
     providerMode = 'answer'
@@ -195,6 +204,79 @@ async function main(): Promise<void> {
     assert.equal(db.indexCount('movie'), before)
   })
 
+  await check('opening a title served from its cached entry gives it a row too', async () => {
+    // A title opened before this rule existed, or opened once and now
+    // reached again within its day: the cached entry answers, no request is
+    // made, and the index still gains the row.
+    db.putCache(
+      metaCacheKey('movie', 'tt7000005'),
+      card('tt7000005', 'Cached Harbour'),
+      60 * 60 * 1000
+    )
+    requests.length = 0
+    const opened = await metadata('movie', 'tt7000005')
+    assert.equal(opened.title, 'Cached Harbour')
+    assert.ok(!requests.some((url) => url.includes('/meta/')), `requests: ${requests.join(', ')}`)
+    assert.deepEqual(indexedKinds('tt7000005'), ['movie'])
+  })
+
+  await check('each tracking handler indexes the search card it was given', async () => {
+    const art = 'https://m.media-amazon.com/images/p.jpg'
+    await invoke(MEDIA_HUB_CHANNELS.trackingToggle, {
+      id: 'tt7100001',
+      type: 'movie',
+      title: 'Planned Harbour',
+      poster: art
+    })
+    assert.ok(db.isTracked('tt7100001'), 'the toggle planned it')
+    assert.deepEqual(indexedKinds('tt7100001'), ['movie'], 'plan')
+
+    await invoke(MEDIA_HUB_CHANNELS.trackingMarkWatched, {
+      item: { id: 'tt7100002', type: 'movie', title: 'Watched Harbour' }
+    })
+    assert.deepEqual(indexedKinds('tt7100002'), ['movie'], 'mark watched')
+
+    await invoke(MEDIA_HUB_CHANNELS.trackingMarkSeasonWatched, {
+      item: { id: 'tt7100003', type: 'series', title: 'Harbour Season' },
+      season: 1,
+      episodes: [{ season: 1, episode: 1 }]
+    })
+    assert.deepEqual(indexedKinds('tt7100003'), ['series'], 'mark a season')
+
+    await invoke(MEDIA_HUB_CHANNELS.trackingSetTitleStatus, {
+      item: { id: 'tt7100004', type: 'movie', title: 'Status Harbour' },
+      status: 'planned'
+    })
+    assert.deepEqual(indexedKinds('tt7100004'), ['movie'], 'set a status')
+
+    await invoke(MEDIA_HUB_CHANNELS.dislikedAdd, {
+      id: 'tt7100005',
+      type: 'movie',
+      title: 'Disliked Harbour'
+    })
+    assert.deepEqual(indexedKinds('tt7100005'), ['movie'], 'not for me')
+  })
+
+  await check('un-planning a title the index lacks writes nothing', async () => {
+    db.track({ id: 'tt7100009', type: 'movie', title: 'Unplanned Harbour' } as never)
+    await invoke(MEDIA_HUB_CHANNELS.trackingToggle, {
+      id: 'tt7100009',
+      type: 'movie',
+      title: 'Unplanned Harbour'
+    })
+    assert.equal(db.isTracked('tt7100009'), false, 'the toggle un-planned it')
+    assert.deepEqual(indexedKinds('tt7100009'), [])
+  })
+
+  await check('a status set on a typeless Kitsu id does not land in the movie grid', async () => {
+    // The status handler reads a missing type as 'movie'.
+    await invoke(MEDIA_HUB_CHANNELS.trackingSetTitleStatus, {
+      item: { id: 'kitsu:7100006', title: 'Typeless Harbour' },
+      status: 'planned'
+    })
+    assert.deepEqual(indexedKinds('kitsu:7100006'), [])
+  })
+
   await check('tracking a search card that was never opened gives it a row', async () => {
     indexTrackedTitle({
       id: 'tt7000002',
@@ -223,9 +305,9 @@ async function main(): Promise<void> {
     const pushed: Array<{ channel: string; payload: unknown }> = []
     window.webContents.setPushSink((channel, payload) => pushed.push({ channel, payload }))
     setActiveWindow(window as never)
-    assert.equal(db.indexCount('series'), 0)
+    const before = db.indexCount('series')
     await catalogData('series')
-    assert.ok(db.indexCount('series') > 0, 'the crawl wrote the index')
+    assert.ok(db.indexCount('series') > before, 'the crawl wrote the index')
     // library:changed is coalesced for 300 ms.
     await new Promise((resolve) => setTimeout(resolve, 400))
     const changes = pushed.filter((push) => push.channel === MEDIA_HUB_CHANNELS.libraryChanged)

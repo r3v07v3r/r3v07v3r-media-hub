@@ -824,7 +824,17 @@ async function resolveMetadata(
     // write only happens when the stored count differs, which is what
     // keeps this affordable on the calendar's and trackers' sweeps. Never
     // from a degraded entry, exactly as the fresh path never is.
-    if (!db.getCache<boolean>(degradedKey)) db.indexRefreshAiredCount(type, served)
+    //
+    // The same goes for indexing a title that has no row (see the fresh
+    // path): the entry may predate that rule, or the title was opened once
+    // from search and is now reached from My Stuff or a sweep, and a cache
+    // hit that skipped it would leave the title missing from the grids and
+    // My Stuff for the rest of the entry's day. One primary-key lookup when
+    // the row exists.
+    if (!db.getCache<boolean>(degradedKey)) {
+      db.indexRefreshAiredCount(type, served)
+      indexIfMissing(type, served)
+    }
     return withCredits(served, type, resolvedId, priority)
   }
 
