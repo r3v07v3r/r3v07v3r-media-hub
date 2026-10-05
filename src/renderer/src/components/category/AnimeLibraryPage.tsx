@@ -1271,6 +1271,19 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
           )}
         </div>
 
+        {/* The online catalog failed or did not answer in time, so the
+            results are only what the library already had. Said above a
+            short list as well as in place of an empty one: either way the
+            missing title may simply not be in the library yet. */}
+        {searchActive &&
+          !categorySearch.loading &&
+          categorySearch.providerUnreachable &&
+          searchResults.length > 0 && (
+            <div className={`${styles.offlineBanner} ${styles.searchBanner}`} role="status">
+              <Icon name="wifi-off" size={15} />
+              {`The online ${config.pluralLabel} catalog could not be reached, so only titles already in the library are shown.`}
+            </div>
+          )}
         {searchActive ? (
           <LibraryShelf
             title={`Search results for “${categorySearch.query}”`}
@@ -1284,7 +1297,9 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
                 ? `Searching the ${config.pluralLabel} catalog…`
                 : categorySearch.error
                   ? `The ${config.pluralLabel} search could not be reached. Try again.`
-                  : `No ${config.pluralLabel} matched that search.`
+                  : categorySearch.providerUnreachable
+                    ? `The online ${config.pluralLabel} catalog could not be reached, and nothing already in the library matched.`
+                    : `No ${config.pluralLabel} matched that search.`
             }
           />
         ) : (

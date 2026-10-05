@@ -20,6 +20,9 @@ export default function Search() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [searched, setSearched] = useState(false)
+  // The online catalog for this kind failed or did not answer in time, so
+  // `results` holds only what the library already had.
+  const [providerUnreachable, setProviderUnreachable] = useState(false)
   // Bumped on every search kicked off; a response is only applied if it's
   // still the most recent one by the time it lands — discards a stale
   // answer from a query the person has already typed past.
@@ -31,6 +34,7 @@ export default function Search() {
       requestRef.current += 1
       setResults([])
       setSearched(false)
+      setProviderUnreachable(false)
       setError(null)
       setLoading(false)
       return
@@ -45,10 +49,11 @@ export default function Search() {
     setLoading(true)
     setError(null)
     mediaHub.catalog
-      .search(searchKind, trimmed)
-      .then((items) => {
+      .searchWithStatus(searchKind, trimmed)
+      .then((answer) => {
         if (requestRef.current !== requestId) return
-        setResults(items)
+        setResults(answer.items)
+        setProviderUnreachable(answer.providerUnreachable)
         setSearched(true)
         setLoading(false)
       })
@@ -110,7 +115,16 @@ export default function Search() {
       )}
       <LoadingNote loading={loading} />
       {error && <StatusNote tone="error">{error}</StatusNote>}
-      {!loading && !error && searched && !results.length && (
+      {/* With the online catalog out of reach, an empty or short list is
+          "not in the library yet", not "does not exist", and says so. */}
+      {!loading && !error && searched && providerUnreachable && (
+        <StatusNote>
+          {results.length
+            ? `The online ${kindLabel(kind).toLowerCase()} catalog could not be reached, so only titles already in the library are shown.`
+            : `The online ${kindLabel(kind).toLowerCase()} catalog could not be reached, and nothing already in the library matched "${query.trim()}".`}
+        </StatusNote>
+      )}
+      {!loading && !error && searched && !providerUnreachable && !results.length && (
         <StatusNote>{`No results for "${query.trim()}".`}</StatusNote>
       )}
       <div className="poster-grid">

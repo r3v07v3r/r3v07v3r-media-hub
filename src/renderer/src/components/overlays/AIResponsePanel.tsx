@@ -78,6 +78,7 @@ export function AIResponsePanel() {
     assistantSimilar,
     assistantSimilarSource,
     assistantSearching,
+    assistantProviderUnreachable,
     closeAssistant,
     openDetail
   } = useAppState()
@@ -112,17 +113,30 @@ export function AIResponsePanel() {
       </span>
 
       <div className={styles.aiPanelBody}>
-        {(assistantSearching || assistantResults.length > 0) && (
+        {(assistantSearching || assistantResults.length > 0 || assistantProviderUnreachable) && (
           <section className={styles.aiSection}>
             <h2 className={styles.aiSectionHeading}>In R3</h2>
             {assistantSearching ? (
               <TileSkeletons />
             ) : (
-              <ul className={styles.aiTiles}>
-                {assistantResults.map((media) => (
-                  <TitleTile key={media.id} media={media} onOpen={open} />
-                ))}
-              </ul>
+              <>
+                {/* Said whether or not anything was found: with the online
+                    catalogs out of reach, an empty row or a short one is
+                    "not in the library yet", not "does not exist". */}
+                {assistantProviderUnreachable && (
+                  <p className={styles.aiSectionNote} role="status">
+                    The online catalogs could not be reached, so only titles already in the library
+                    are shown.
+                  </p>
+                )}
+                {assistantResults.length > 0 && (
+                  <ul className={styles.aiTiles}>
+                    {assistantResults.map((media) => (
+                      <TitleTile key={media.id} media={media} onOpen={open} />
+                    ))}
+                  </ul>
+                )}
+              </>
             )}
           </section>
         )}

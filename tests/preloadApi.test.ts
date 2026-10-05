@@ -107,6 +107,15 @@ check('a request is one invoke carrying exactly the payload the handler reads', 
     args: [{ kind: 'movie', query: 'in time' }]
   })
 
+  // The reporting form is the same channel with one more field, so a caller
+  // that never asks for the report keeps getting the bare list.
+  void api.mediaHub.catalog.searchWithStatus('anime', 'frieren')
+  assert.deepEqual(calls.at(-1), {
+    kind: 'invoke',
+    channel: MEDIA_HUB_CHANNELS.catalogSearch,
+    args: [{ kind: 'anime', query: 'frieren', report: true }]
+  })
+
   // No payload means NO argument, not an explicit undefined: a handler that
   // counts its arguments must see the same call it always has.
   void api.mediaHub.bootstrap()

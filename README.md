@@ -237,7 +237,10 @@ over to its second face. It is where the installation is configured and watched:
 - **Search and ask in one field.** Press Enter in the top bar and it searches the movie, series and
   anime catalogs together and shows real titles you can open. With a local model connected its
   answer appears underneath: what the top result is, whether it fits what you have watched, and
-  other titles worth trying. On a category page the same field filters that page instead.
+  other titles worth trying. On a category page the same field filters that page instead. Every
+  search looks in the library on this device and asks the online catalog (Cinemeta, or Kitsu for
+  anime) at the same time; when the online catalog cannot be reached, the results say so and show
+  what the library already holds, rather than reporting that nothing matched.
 - **Run the AI locally.** The assistant and the Recommend Next buttons use an
   [Ollama](https://ollama.com) model on your own machine; nothing is sent to a hosted service. An
   Ollama at its usual `http://127.0.0.1:11434` is found on its own. Without one the search still
