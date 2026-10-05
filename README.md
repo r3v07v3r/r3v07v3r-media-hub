@@ -94,6 +94,7 @@ limits:
    your resolution limit only. A partial download is resumed from the source it originally came
    from rather than restarted.
 2. **A paired [r3-cache](daemon/README.md) server on your LAN**, when it holds the title complete.
+   A server that has not answered within 3 seconds is treated as away, and the app moves on.
 3. **Your Jellyfin server.** On **Media server** a copy within your limits plays straight away and
    TorBox is never asked. On **Balanced**, the default, it also plays straight away unless a copy
    more than twice as sharp could exist within your limits: a 1080p copy always plays, a 720p copy

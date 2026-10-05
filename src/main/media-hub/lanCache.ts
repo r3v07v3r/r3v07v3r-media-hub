@@ -40,6 +40,14 @@ import { discoverLanCaches } from './lanCacheDiscovery'
  *  server that has gone away mid-download. */
 const UPDATE_NOW_TIMEOUT_MS = 3 * 60 * 1000
 
+/** How long the play-time lookup waits for the daemon. It is awaited before
+ *  TorBox is tried, so httpClient's thirty-second default meant a paired
+ *  daemon that drops packets (a laptop away from home) held the play click
+ *  for half a minute. A daemon on the same network answers in well under a
+ *  second; one that has not answered in three is treated as away, and the
+ *  tier contributes nothing. */
+export const LAN_LOOKUP_TIMEOUT_MS = 3_000
+
 function request<T>(pathname: string, init: RequestInit = {}, timeoutMs?: number): Promise<T> {
   const connection = getLanCacheConnection()
   if (!connection) throw new Error('No cache server is paired.')
@@ -88,7 +96,9 @@ export async function findLanCacheCandidate(contentKey: string): Promise<StreamC
   if (!contentKey || !isLanCacheConnected()) return null
   try {
     const catalog = await request<LanCacheCatalogResponse>(
-      `/api/catalog?keys=${encodeURIComponent(contentKey)}`
+      `/api/catalog?keys=${encodeURIComponent(contentKey)}`,
+      {},
+      LAN_LOOKUP_TIMEOUT_MS
     )
     const item = catalog.items.find((entry) => entry.contentKey === contentKey && entry.complete)
     if (!item) return null
