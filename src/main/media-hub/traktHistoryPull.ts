@@ -12,7 +12,9 @@
 //
 // Two things it does that the import does not:
 //
-//  - A viewing already held here is skipped, not written again. Every
+//  - A viewing already held here is skipped, not written again, and so is
+//    one whose removal Trakt has not taken yet (un-marked here, the push
+//    still on its way or failed and owed). Every
 //    episode played here is pushed to Trakt and comes back on the next pull
 //    stamped with Trakt's own time, which the import would record as a
 //    second play. The catch-up skips Simkl's echo the same way
@@ -106,6 +108,12 @@ export interface TraktPullDeps {
   lastActivities(): Promise<unknown>
   /** Every page of /sync/history from `startAt` (Trakt's start_at), raw rows. */
   history(startAt: string): Promise<{ rows: unknown[]; truncated: boolean }>
+  /** History keys (`id:season:episode`) whose removal Trakt has not taken
+   *  yet, owed after a failed push or still on its way (tracking.ts's
+   *  removalsHeldBack). Counted as held, so a viewing un-marked here is not
+   *  filed back in from Trakt before the removal lands. Optional so a test
+   *  that is not about it can leave it out. */
+  removalsOwed?(): ReadonlySet<string>
   /** Where the import files Trakt's plays (traktClient.ts's fileTraktPlays). */
   file(rows: ImportedPlay[]): Promise<ImportedPlay[]>
   /** The backup before history rows are written (autoBackup.ts). */
@@ -163,9 +171,10 @@ export async function pullTraktHistory(deps: TraktPullDeps): Promise<TraktPullRe
     const filed = await deps.file(parsed.rows)
     if (moved()) return { plays: 0, read: true }
 
-    const held = new Set(
-      db.history().map((row) => `${row.id}:${row.season ?? 'movie'}:${row.episode ?? 'movie'}`)
-    )
+    const held = new Set([
+      ...db.history().map((row) => `${row.id}:${row.season ?? 'movie'}:${row.episode ?? 'movie'}`),
+      ...(deps.removalsOwed?.() ?? [])
+    ])
     const fresh = filed.filter(
       (row) => !held.has(`${row.id}:${row.season ?? 'movie'}:${row.episode ?? 'movie'}`)
     )

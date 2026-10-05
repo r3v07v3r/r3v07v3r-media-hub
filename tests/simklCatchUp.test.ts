@@ -1141,6 +1141,23 @@ async function passes(): Promise<void> {
     }
   )
 
+  await checkAsync(
+    'a film queued for removal by "Use Local" in the review panel is not imported',
+    async () => {
+      // tt0000002 is watched at Simkl and not here; the person ruled for
+      // this side, and the removal has not reached Simkl yet. Imported, the
+      // next flush would find both sides agreeing and tell Trakt "watched".
+      const h = harness()
+      h.deps.removalsOwed = () => new Set(['tt0000002:movie:movie'])
+      const { report } = await passOf(h)
+      assert.equal(
+        h.db.history().some((row) => row.id === 'tt0000002'),
+        false
+      )
+      assert.equal(report.plays, 3, 'the episodes still land')
+    }
+  )
+
   await checkAsync('with Trakt connected, its history comes last and counts', async () => {
     const h = harness()
     h.deps.traktHistory = async () => {

@@ -15,6 +15,7 @@ import type { PendingWatchStatusPush } from '../src/shared/media-hub/types'
 import {
   applyPushOutcome,
   queuePendingPush,
+  reviewRemovalsOwed,
   splitForFlush,
   traktFollowUps,
   withPushedRemoteState
@@ -187,6 +188,20 @@ check('Trakt hears of confirmed and settled entries, never of failed ones', () =
     traktFollowUps(queue, new Set(['tt1']), new Set(['tt3'])).map((e) => e.id),
     ['tt1', 'tt3']
   )
+})
+
+check('a queued "Use Local" removal is held back from the catch-up', () => {
+  // Unwatched here, watched at Simkl, and the person picked local: until
+  // Simkl takes the removal, the catch-up must not import the film, or the
+  // next flush finds both sides agreeing and tells Trakt "watched".
+  const queue = [
+    entry({ id: 'tt1', remoteWatched: true }),
+    entry({ id: 'tt2', remoteWatched: false }),
+    entry({ id: 'tt3', type: 'series', remoteWatched: true })
+  ]
+  assert.deepEqual([...reviewRemovalsOwed(queue, [])], ['tt1:movie:movie'])
+  // A title the flush gave up on keeps only its id, and is held as well.
+  assert.deepEqual([...reviewRemovalsOwed([], ['tt4'])], ['tt4:movie:movie'])
 })
 
 check('batches many movies into one request body', () => {

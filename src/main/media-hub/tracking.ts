@@ -52,6 +52,7 @@ import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import {
   applyPushOutcome,
   queuePendingPush,
+  reviewRemovalsOwed,
   splitForFlush,
   traktFollowUps,
   withPushedRemoteState
@@ -123,8 +124,11 @@ import {
 } from './traktClient'
 import {
   historyRetryBatches,
+  holdRemovalsOnTheWay,
   readHistoryPending,
   recordHistoryPush,
+  removalsInFlight,
+  removalsOwed,
   settleHistoryRetry,
   watchKeyOf,
   writeHistoryPending,
@@ -210,17 +214,30 @@ interface SimklSyncResult {
  */
 function queueRemotePushes(
   item: { id: string; type?: string },
-  pushes: () => Array<Promise<unknown>>
+  pushes: () => Array<Promise<unknown>>,
+  /** The history change, when this is one. A removal's rows are held back
+   *  from the catch-up and the Trakt pull until its pushes are answered —
+   *  see holdRemovalsOnTheWay. */
+  change?: HistoryPushAt
 ): void {
+  const release =
+    change?.action === 'remove'
+      ? holdRemovalsOnTheWay(
+          change.profile,
+          change.rows.map((row) => watchKeyOf(String(change.item.id), row.season, row.episode))
+        )
+      : () => {}
   // Bound to the accounts connected when it was asked for. A push that
   // waits behind a slow one reads the credentials only when it runs, so
   // disconnecting Simkl and connecting another account in between would
   // post the first account's history to the second. A stamp that no
   // longer matches means the task is dropped, not run.
   const stamp = connectedAccountsStamp()
-  void titlePushQueue.run(titlePushKey(item), () =>
-    connectedAccountsStamp() === stamp ? Promise.allSettled(pushes()) : Promise.resolve([])
-  )
+  void titlePushQueue
+    .run(titlePushKey(item), () =>
+      connectedAccountsStamp() === stamp ? Promise.allSettled(pushes()) : Promise.resolve([])
+    )
+    .finally(release)
 }
 
 /** Which accounts are connected right now — the tail of each token is
@@ -456,6 +473,29 @@ function historyPendingCount(): number {
   }
 }
 
+/**
+ * The active profile's history keys that a read from `service` must not
+ * bring back: a removal owed to it after a failed push (historyRetry.ts), a
+ * removal still on its way to it, and, for Simkl, a film the review panel
+ * ruled is not watched that Simkl has not been told about yet
+ * (reconcileQueue.ts's reviewRemovalsOwed). The Simkl catch-up and the
+ * Trakt history pull add these to what they count as already held here.
+ */
+export function removalsHeldBack(service: 'simkl' | 'trakt'): Set<string> {
+  const db = getDatabase()
+  const profile = db.activeProfile()
+  const keys = new Set([
+    ...removalsOwed(readHistoryPending(db, profile, trackingAccountMarks()), service),
+    ...removalsInFlight(profile)
+  ])
+  if (service === 'simkl') {
+    for (const key of reviewRemovalsOwed(pendingPushes(profile), abandonedReconcileIds(profile))) {
+      keys.add(key)
+    }
+  }
+  return keys
+}
+
 /** A `Partial<CatalogItem>` with a required id — assignable everywhere MediaHubDatabase's looser `{id: unknown}` item shape is expected, without a cast at the call site. */
 type TrackableItem = Partial<CatalogItem> & { id: string }
 
@@ -488,11 +528,15 @@ function pushTitleHistory(
   const profile = getDatabase().activeProfile()
   if (item.type === 'movie') {
     const at: HistoryPushAt = { item, rows: [{ season: null, episode: null }], action, profile }
-    queueRemotePushes(item, () => [
-      keptSimkl(at, syncSimklHistory(path, historyPayload(item, {}))),
-      keptTrakt(at, pushTraktHistory(item, {}, action)),
-      pushMalProgress(item)
-    ])
+    queueRemotePushes(
+      item,
+      () => [
+        keptSimkl(at, syncSimklHistory(path, historyPayload(item, {}))),
+        keptTrakt(at, pushTraktHistory(item, {}, action)),
+        pushMalProgress(item)
+      ],
+      at
+    )
     return
   }
   const seasons = bySeason(
@@ -507,22 +551,26 @@ function pushTitleHistory(
     action,
     profile
   }
-  queueRemotePushes(item, () => [
-    keptSimkl(
-      at,
-      syncSimklHistory(path, titleHistoryPayload(item, seasons, animeSiblingsWhenGrouped()))
-    ),
-    keptTrakt(at, pushTraktTitleHistory(item, seasons, action)),
-    keptMal(
-      at,
-      pushMalTitleProgress(item, {
-        status: malStatus,
-        seasons: seasons.map((s) => s.season),
-        seasonTotals,
-        profile
-      })
-    )
-  ])
+  queueRemotePushes(
+    item,
+    () => [
+      keptSimkl(
+        at,
+        syncSimklHistory(path, titleHistoryPayload(item, seasons, animeSiblingsWhenGrouped()))
+      ),
+      keptTrakt(at, pushTraktTitleHistory(item, seasons, action)),
+      keptMal(
+        at,
+        pushMalTitleProgress(item, {
+          status: malStatus,
+          seasons: seasons.map((s) => s.season),
+          seasonTotals,
+          profile
+        })
+      )
+    ],
+    at
+  )
 }
 
 interface MarkWatchedPayload {
@@ -1376,7 +1424,7 @@ export async function runBackgroundWatchSync(): Promise<void> {
       syncPlanned: (options) => syncPlannedFromServices('background', options),
       flushPushes: () => flushPendingPushes('background'),
       retryHistory: () => retryHistoryPushes('background'),
-      pullTraktHistory: () => pullTraktHistoryNow('background'),
+      pullTraktHistory: () => pullTraktHistoryNow('background', () => removalsHeldBack('trakt')),
       reviewAsked: () => reviewAsked,
       reconcile: backgroundReconcile,
       now: () => Date.now(),
@@ -1888,17 +1936,21 @@ export function registerTrackingIpc(): void {
       // services second.
       const profile = getDatabase().activeProfile()
       const at: HistoryPushAt = { item, rows: [rowOf(p)], action: 'remove', profile }
-      queueRemotePushes(item, () => [
-        keptSimkl(
-          at,
-          syncSimklHistory(
-            '/sync/history/remove',
-            historyPayload(item, p, animeSiblingsWhenGrouped())
-          )
-        ),
-        keptTrakt(at, pushTraktHistory(item, p, 'remove')),
-        keptMal(at, pushMalProgress(item, { season: p.season ?? undefined, profile }))
-      ])
+      queueRemotePushes(
+        item,
+        () => [
+          keptSimkl(
+            at,
+            syncSimklHistory(
+              '/sync/history/remove',
+              historyPayload(item, p, animeSiblingsWhenGrouped())
+            )
+          ),
+          keptTrakt(at, pushTraktHistory(item, p, 'remove')),
+          keptMal(at, pushMalProgress(item, { season: p.season ?? undefined, profile }))
+        ],
+        at
+      )
       return { ok: true, simklSynced: false, malSynced: false }
     }
   )

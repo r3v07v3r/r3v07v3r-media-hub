@@ -16,7 +16,9 @@
 // changes a service refused: retried with each sync, given up on after ten
 // tries, never sent to a different account, and replaced by any later push
 // for the same episode. Pinned against a real temporary database, because
-// "survives a restart" is a property of the store.
+// "survives a restart" is a property of the store. A removal owed to a
+// service, or still on its way to it, is what the Simkl catch-up and the
+// Trakt pull must count as held, or they would take the viewing back in.
 //
 // Run with: npx tsx tests/trackingPushes.test.ts
 
@@ -32,8 +34,10 @@ import {
   historyRetryBatches,
   readHistoryPending,
   recordHistoryPush,
+  holdRemovalsOnTheWay,
+  removalsInFlight,
+  removalsOwed,
   settleHistoryRetry,
-  simklRemovalsOwed,
   writeHistoryPending,
   type HistoryPushOutcome,
   type PendingHistoryPushes
@@ -230,7 +234,7 @@ check('a push made while the retry was out is not overwritten by its outcome', (
   assert.equal(settled.pending['simkl|tt0000001|1|2'].action, 'remove')
 })
 
-check('removals owed to Simkl are what the catch-up must not take back in', () => {
+check('removals owed to a service are what a read from it must not take back in', () => {
   let pending = recordHistoryPush({}, outcome({ action: 'remove' }), T0)
   pending = recordHistoryPush(
     pending,
@@ -248,7 +252,26 @@ check('removals owed to Simkl are what the catch-up must not take back in', () =
     outcome({ item: FILM, rows: [{ season: null, episode: null }] }),
     T0
   )
-  assert.deepEqual([...simklRemovalsOwed(pending)], ['tt0000001:1:2'])
+  // Simkl's owed removal is the episode; the film's removal is owed to
+  // Trakt (the Simkl add for it is not a removal).
+  assert.deepEqual([...removalsOwed(pending, 'simkl')], ['tt0000001:1:2'])
+  assert.deepEqual([...removalsOwed(pending, 'trakt')], ['tt0000002:movie:movie'])
+  assert.deepEqual([...removalsOwed(pending, 'mal')], [])
+})
+
+check('a removal on its way is held back until its push is answered', () => {
+  // Nothing is written down for a push until it fails, so between the
+  // un-mark and the answer only this says the services still list it.
+  const release = holdRemovalsOnTheWay(PROFILE, ['tt0000001:1:2', 'tt0000001:1:3'])
+  assert.deepEqual([...removalsInFlight(PROFILE)].sort(), ['tt0000001:1:2', 'tt0000001:1:3'])
+  assert.deepEqual([...removalsInFlight('profile-b')], [], 'per profile')
+  // A second un-mark of the same episode while the first is in flight.
+  const second = holdRemovalsOnTheWay(PROFILE, ['tt0000001:1:2'])
+  release()
+  release()
+  assert.deepEqual([...removalsInFlight(PROFILE)], ['tt0000001:1:2'], 'the second still holds it')
+  second()
+  assert.deepEqual([...removalsInFlight(PROFILE)], [])
 })
 
 console.log(`\n${pass} passing`)

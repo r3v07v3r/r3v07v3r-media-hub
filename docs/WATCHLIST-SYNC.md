@@ -288,8 +288,9 @@ ten failed tries and it is let go, and the log says so. A later push for
 the same episode replaces it, whichever way it went, and one that got
 through clears it. An owed change local has since moved away from (an add
 for an episode no longer watched here, a removal for one watched again) is
-dropped rather than replayed. While a removal is owed to Simkl, the
-catch-up does not take that viewing back in from Simkl. The Tracking panel
+dropped rather than replayed. While a removal is owed to Simkl or Trakt,
+or still on its way there, the catch-up and the Trakt history pull do not
+take that viewing back in from that service. The Tracking panel
 shows how many changes are still owed.
 
 **Scrobbles are off unless turned on.** The player's start, pause and stop
@@ -409,10 +410,15 @@ with viewings recorded here, the unscoped Simkl removal is not sent.
   that entry is here. An episode Simkl files under season 0, or 2 and
   later, is refused. The next section has the mapping, and what became of
   later seasons pushed before it existed.
-- A local un-watch whose removal at Simkl failed is not taken back in
-  while the removal is still owed (see "History pushes that fail are
-  kept"). Once it has been given up on after ten tries, it can come back
-  when that title next has activity there.
+- A local un-watch is not taken back in while its removal at Simkl is
+  still on its way or owed after a failure (see "History pushes that fail
+  are kept"). Once it has been given up on after ten tries, it can come
+  back when that title next has activity there.
+- A film the review panel's "Use Local" ruled not watched is not taken
+  back in while that decision is still queued for Simkl, nor once the
+  queue has given up on it (90 days). Taken in, the next flush would find
+  both sides agreeing and pass "watched" on to Trakt, the opposite of what
+  was chosen.
 
 ## Trakt's history
 
@@ -439,7 +445,8 @@ account, durably, like Simkl's stamps.
   episode played here is pushed to Trakt and comes back on the next pull
   with Trakt's own time, and would otherwise be recorded as a second play.
   A rewatch on Trakt of something already watched here therefore adds no
-  play here.
+  play here. A viewing un-marked here whose removal Trakt has not taken
+  yet (on its way, or owed after a failure) is skipped the same way.
 - **It starts from the moment it first runs.** With nothing on record for
   the profile and account, a pass records Trakt's stamps and the time and
   reads nothing; the account's past is the import button's. An import that

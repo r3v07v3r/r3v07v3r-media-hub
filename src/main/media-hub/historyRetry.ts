@@ -256,15 +256,53 @@ export function settleHistoryRetry(
 }
 
 /**
- * Local history keys whose removal is still owed to Simkl. The catch-up
- * (simklCatchUp.ts) treats these as already held, so a viewing somebody
- * un-marked here is not brought back from Simkl before the removal lands.
+ * Local history keys whose removal is still owed to one service. The Simkl
+ * catch-up (simklCatchUp.ts) and the Trakt history pull (traktHistoryPull.ts)
+ * treat these as already held, so a viewing somebody un-marked here is not
+ * brought back from the service before the removal lands.
  */
-export function simklRemovalsOwed(pending: PendingHistoryPushes): Set<string> {
+export function removalsOwed(pending: PendingHistoryPushes, service: HistoryService): Set<string> {
   const keys = new Set<string>()
   for (const entry of Object.values(pending)) {
-    if (entry.service !== 'simkl' || entry.action !== 'remove') continue
+    if (entry.service !== service || entry.action !== 'remove') continue
     keys.add(watchKeyOf(entry.item.id, entry.season, entry.episode))
+  }
+  return keys
+}
+
+// Removals asked for and not yet answered. An un-mark writes the local row
+// and queues its pushes on the title's chain, and until they have gone out
+// the services still list the viewing: a catch-up or a Trakt pull that read
+// them in that window would take it straight back in. Nothing is written
+// down for a push until it fails (recordHistoryPush), so these are held in
+// memory for as long as the push is on its way, per profile.
+const removalsOnTheWay = new Map<string, number>()
+
+/**
+ * Notes removals of `keys` (watchKeyOf) for `profile` as on their way, and
+ * returns the call that releases them once the push has been answered.
+ */
+export function holdRemovalsOnTheWay(profile: string, keys: Iterable<string>): () => void {
+  const held = [...new Set(keys)].map((key) => `${profile}|${key}`)
+  for (const key of held) removalsOnTheWay.set(key, (removalsOnTheWay.get(key) ?? 0) + 1)
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    for (const key of held) {
+      const count = (removalsOnTheWay.get(key) ?? 0) - 1
+      if (count > 0) removalsOnTheWay.set(key, count)
+      else removalsOnTheWay.delete(key)
+    }
+  }
+}
+
+/** The local history keys of `profile` whose removal is on its way now. */
+export function removalsInFlight(profile: string): Set<string> {
+  const prefix = `${profile}|`
+  const keys = new Set<string>()
+  for (const key of removalsOnTheWay.keys()) {
+    if (key.startsWith(prefix)) keys.add(key.slice(prefix.length))
   }
   return keys
 }

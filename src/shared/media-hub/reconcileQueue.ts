@@ -138,3 +138,29 @@ export function traktFollowUps(
 ): PendingWatchStatusPush[] {
   return queue.filter((entry) => confirmed.has(entry.id) || settled.has(entry.id))
 }
+
+/**
+ * The films (as local history keys, `id:movie:movie`) the review panel has
+ * ruled must not be watched at Simkl, and Simkl has not been told yet: a
+ * queued "Use Local" whose recorded Simkl value is watched, and every title
+ * the flush gave up on. The catch-up treats them as already held, so it
+ * does not take the film back in from Simkl before the removal lands; that
+ * would have the next flush find both sides agreeing, settle the decision,
+ * and tell Trakt the opposite of what the person chose.
+ *
+ * A "Use Simkl" entry has the local record already rewritten to Simkl's
+ * value, so holding it changes nothing. A given-up title is held whichever
+ * way the decision went: the record keeps only its id, and for a film that
+ * is watched here, holding it changes nothing either.
+ */
+export function reviewRemovalsOwed(
+  queue: readonly PendingWatchStatusPush[],
+  abandonedIds: Iterable<string>
+): Set<string> {
+  const keys = new Set<string>()
+  for (const entry of queue) {
+    if (entry.type === 'movie' && entry.remoteWatched) keys.add(`${entry.id}:movie:movie`)
+  }
+  for (const id of abandonedIds) keys.add(`${id}:movie:movie`)
+  return keys
+}

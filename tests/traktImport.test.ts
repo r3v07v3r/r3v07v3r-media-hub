@@ -9,8 +9,9 @@
 //
 // Then the incremental pull that follows an import (traktHistoryPull.ts):
 // gated on Trakt's /sync/last_activities, reading /sync/history only from
-// the last pull on, filing rows where the import files them, and never
-// writing this device's own pushes back as second plays.
+// the last pull on, filing rows where the import files them, never
+// writing this device's own pushes back as second plays, and never filing
+// back a viewing un-marked here whose removal Trakt has not taken yet.
 //
 // Run with: npx tsx tests/traktImport.test.ts
 
@@ -306,6 +307,24 @@ async function pulls(): Promise<void> {
     h.calls.length = 0
     assert.equal((await pullTraktHistory(h.deps)).plays, 0)
     assert.equal(h.calls.includes('backup'), false)
+  }
+
+  {
+    // An episode un-marked here whose removal Trakt has not taken (failed
+    // and owed, or still on its way) is not filed back in from Trakt.
+    const h = pullHarness()
+    markTraktHistoryPulled(h.db, 'profile-a', 'trakt-1', Date.parse('2026-10-05T11:00:00.000Z'))
+    h.rows = [
+      episodeRow('Severance', 1, 1, '2026-10-05T10:00:00.000Z'),
+      episodeRow('Severance', 1, 2, '2026-10-05T10:30:00.000Z')
+    ]
+    h.deps.removalsOwed = () => new Set(['tt11280740:1:1'])
+    const pulled = await pullTraktHistory(h.deps)
+    assert.equal(pulled.plays, 1)
+    assert.deepEqual(
+      h.db.history().map((row) => `${row.id}:${row.season}:${row.episode}`),
+      ['tt11280740:1:2']
+    )
   }
 
   {
