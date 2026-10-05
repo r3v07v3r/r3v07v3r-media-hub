@@ -459,9 +459,12 @@ member's place. What happens instead:
   placed is kept under its own id, at season 1. The show's own id, when it
   cannot be shown to be the first season, is skipped and counted.
 - **The MyAnimeList import.** An entry that cannot be placed is compared
-  with, and written under, the rows of its own id. The show's own id, when
-  it cannot be shown to be the first season, is listed with the unmatched
-  entries, and nothing is pulled or pushed for it.
+  with, and written under, the rows of its own id: every row under it,
+  whatever season its own page labels them, which is the count the push
+  sends for it. The show's own id, when it cannot be shown to be the first
+  season, is listed with the unmatched entries, and nothing is pulled or
+  pushed for it. A rating follows the entry: under the show for a season of
+  it, under its own id otherwise.
 - **The Trakt import.** A later member that cannot be placed is kept under
   its own id with Trakt's season numbers, as a title that was never merged
   is, and so is a rating of it. The show's own id is the show either way:
