@@ -186,8 +186,9 @@ from that service originally. The rules are written down in [docs/WATCHLIST-SYNC
 Simkl and Trakt either way; scrobbles add a request for every start, pause and stop, and Simkl
 allows an account 500 requests a day, shared with a linked phone.
 
-> Known limitation: a mark made while a service is unreachable is logged and dropped, not retried.
-> Only the Simkl movie comparison above catches the difference later.
+A mark, un-mark, season or whole title that does not reach a service (offline, an expired token, a
+rate limit) is kept and sent again with each sync, every half hour and on **Sync now**, up to ten
+times. The Tracking panel says how many are still waiting.
 
 - **Bring an existing history in** from **Control centre → General → Your library**: IMDb's ratings
   export (needs nothing) and a Letterboxd "Export Your Data" zip (needs TMDB connected, to match
@@ -552,13 +553,13 @@ Use the full base URL, including `http://` or `https://` and a non-default port 
 
 Found by the 2026-09-27 audit and tracked in [docs/AUDIT-2026-09-27.md](docs/AUDIT-2026-09-27.md):
 
-- A watch mark made while a tracking service is unreachable is dropped rather than retried.
 - A partly downloaded title can only resume from the source it came from, so it still needs that
   source connected.
 
 Three problems the same audit found are fixed: anime is now served from the r3-cache tier, cached
 titles play without TorBox or Jellyfin, and plan-to-watch and history pushes for a title keep
-their order. The placeholder weather readout is gone, and the Simkl episode fallback now sends
+their order. A watch mark that fails to reach a tracking service is now kept and retried rather
+than dropped. The placeholder weather readout is gone, and the Simkl episode fallback now sends
 its client id.
 
 ## License

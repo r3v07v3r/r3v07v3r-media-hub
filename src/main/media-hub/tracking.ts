@@ -117,8 +117,20 @@ import {
   pushTraktRating,
   pushTraktScrobble,
   pushTraktSeasonHistory,
-  pushTraktTitleHistory
+  pushTraktTitleHistory,
+  type TraktPushResult
 } from './traktClient'
+import {
+  historyRetryBatches,
+  readHistoryPending,
+  recordHistoryPush,
+  settleHistoryRetry,
+  watchKeyOf,
+  writeHistoryPending,
+  type HistoryRetryBatch,
+  type HistoryService,
+  type PendingHistoryPush
+} from './historyRetry'
 import {
   encrypt,
   readSettings,
@@ -126,6 +138,7 @@ import {
   simklCredentials,
   writeSettings,
   traktCredentials,
+  trackingAccountMarks,
   malCredentials
 } from './settingsStore'
 import { scrobblingEnabled } from './preferences'
@@ -180,10 +193,12 @@ interface SimklSyncResult {
  * pushes in the order they were asked for; the three services within one
  * push run together, since each only has to stay ordered against itself.
  *
- * Ordered is all it is. A push that fails logs itself (syncSimklHistory,
- * traktClient, pushMalProgress), does not hold up the next, and is not
- * retried. The sync review only catches a disagreement over a Simkl movie;
- * drift on a series, at Trakt or at MAL is not detected yet.
+ * A push that fails logs itself (syncSimklHistory, traktClient,
+ * pushMalProgress) and does not hold up the next. The history pushes are
+ * wrapped in keptSimkl/keptTrakt/keptMal, which write a failure down to be
+ * retried on the next watch-sync pass or manual Sync (historyRetry.ts). The
+ * sync review only catches a disagreement over a Simkl movie; drift on a
+ * series, at Trakt or at MAL that a retry cannot fix is not detected yet.
  */
 function queueRemotePushes(
   item: { id: string; type?: string },
@@ -237,6 +252,202 @@ async function syncSimklHistory(
   }
 }
 
+// ---------------------------------------------------------------------
+// History pushes that did not arrive — see historyRetry.ts.
+
+/** What one history push was about, for writing down how it went. */
+interface HistoryPushAt {
+  item: { id: string; type?: string; title?: string; year?: unknown }
+  rows: readonly { season: number | null; episode: number | null }[]
+  action: 'add' | 'remove'
+  /** The profile whose history the push was for, captured with it. */
+  profile: string
+}
+
+/** A playback position as the row it is kept under — see markWatched. */
+function rowOf(playback: PlaybackPosition): { season: number | null; episode: number | null } {
+  return {
+    season: Number.isFinite(playback.season) ? (playback.season as number) : null,
+    episode: Number.isFinite(playback.episode) ? (playback.episode as number) : null
+  }
+}
+
+/** The title as an owed push keeps it: enough to build the request again. */
+function pendingItem(at: HistoryPushAt): PendingHistoryPush['item'] {
+  const episodic = at.rows.some((row) => row.episode != null)
+  return {
+    id: String(at.item.id),
+    type: (at.item.type ?? (episodic ? 'series' : 'movie')) as MediaKind,
+    title: String(at.item.title ?? ''),
+    ...(at.item.year ? { year: String(at.item.year) } : {})
+  }
+}
+
+/**
+ * Writes down how one push went: a failure becomes an owed change, and a
+ * success clears whatever an earlier failure for the same rows left owing.
+ * Never throws — the push has already happened, and this is bookkeeping.
+ */
+function noteHistoryPush(service: HistoryService, at: HistoryPushAt, error?: string): void {
+  try {
+    const db = getDatabase()
+    const marks = trackingAccountMarks()
+    const pending = readHistoryPending(db, at.profile, marks)
+    const next = recordHistoryPush(
+      pending,
+      {
+        service,
+        mark: marks[service],
+        item: pendingItem(at),
+        rows: at.rows,
+        action: at.action,
+        error
+      },
+      Date.now()
+    )
+    // A success with nothing owed is the ordinary case, and not a write.
+    if (JSON.stringify(next) === JSON.stringify(pending)) return
+    writeHistoryPending(db, at.profile, next)
+  } catch (caught) {
+    logError('history:pending', caught)
+  }
+}
+
+function keptSimkl(at: HistoryPushAt, push: Promise<SimklSyncResult>): Promise<SimklSyncResult> {
+  return push.then((result) => {
+    if (result.simklSynced || result.simklError) noteHistoryPush('simkl', at, result.simklError)
+    return result
+  })
+}
+
+function keptTrakt(at: HistoryPushAt, push: Promise<TraktPushResult>): Promise<TraktPushResult> {
+  return push.then((result) => {
+    if (result.sent || result.error) noteHistoryPush('trakt', at, result.error)
+    return result
+  })
+}
+
+function keptMal(
+  at: HistoryPushAt,
+  push: Promise<{ malSynced: boolean; malError?: string }>
+): Promise<{ malSynced: boolean; malError?: string }> {
+  return push.then((result) => {
+    if (result.malSynced || result.malError) noteHistoryPush('mal', at, result.malError)
+    return result
+  })
+}
+
+/** Sends one batch of owed changes. Undefined is success; a string is the
+ *  failure; null is a push that cannot be expressed to that service at all. */
+async function sendHistoryRetry(
+  batch: HistoryRetryBatch,
+  profile: string,
+  priority: TaskPriority
+): Promise<string | null | undefined> {
+  const item = { ...batch.item, year: batch.item.year ?? '' }
+  const seasons = bySeason(
+    batch.rows
+      .filter((row) => row.episode != null)
+      .map((row) => ({ season: row.season ?? 1, episode: row.episode as number }))
+  )
+  const film = item.type === 'movie'
+  switch (batch.service) {
+    case 'simkl': {
+      const path = batch.action === 'add' ? '/sync/history' : '/sync/history/remove'
+      const body = film
+        ? historyPayload(item, {})
+        : titleHistoryPayload(item, seasons, animeSiblingsWhenGrouped())
+      const result = await syncSimklHistory(path, body, priority)
+      return result.simklSynced ? undefined : (result.simklError ?? null)
+    }
+    case 'trakt': {
+      const result = film
+        ? await pushTraktHistory(item, {}, batch.action)
+        : await pushTraktTitleHistory(item, seasons, batch.action)
+      return result.sent ? undefined : (result.error ?? null)
+    }
+    case 'mal': {
+      const result = await pushMalTitleProgress(item, {
+        seasons: [...new Set(batch.rows.map((row) => row.season ?? 1))],
+        profile
+      })
+      return result.malSynced ? undefined : (result.malError ?? null)
+    }
+  }
+}
+
+let historyRetryInFlight: Promise<void> | null = null
+
+/**
+ * Sends the history pushes still owed for the active profile, one request
+ * per service, title and direction, each on its title's own chain so it
+ * stays in order with the pushes made since. Run at the start of every
+ * watch-sync pass and every manual Sync. One at a time.
+ */
+function retryHistoryPushes(priority: TaskPriority): Promise<void> {
+  if (historyRetryInFlight) return historyRetryInFlight
+  const run = runHistoryRetry(priority)
+    .catch((error) => logError('history:retry', error))
+    .finally(() => {
+      historyRetryInFlight = null
+    })
+  historyRetryInFlight = run
+  return run
+}
+
+async function runHistoryRetry(priority: TaskPriority): Promise<void> {
+  const db = getDatabase()
+  const profile = db.activeProfile()
+  const marks = trackingAccountMarks()
+  const pending = readHistoryPending(db, profile, marks)
+  if (!Object.keys(pending).length) return
+  const held = new Set(
+    db.history().map((row) => watchKeyOf(String(row.id), row.season ?? null, row.episode ?? null))
+  )
+  const { batches, dropped } = historyRetryBatches(pending, held)
+  if (dropped.length) {
+    const now = readHistoryPending(db, profile, marks)
+    for (const key of dropped) if (now[key]?.at === pending[key].at) delete now[key]
+    writeHistoryPending(db, profile, now)
+  }
+  for (const batch of batches) {
+    await titlePushQueue.run(titlePushKey(batch.item), async () => {
+      // Whose history and whose account this is about, checked again after
+      // the wait for the chain: a switch in between leaves it for later.
+      if (db.activeProfile() !== profile) return
+      if (trackingAccountMarks()[batch.service] !== marks[batch.service]) return
+      const error = await sendHistoryRetry(batch, profile, priority)
+      const settled = settleHistoryRetry(
+        readHistoryPending(db, profile, trackingAccountMarks()),
+        batch,
+        error
+      )
+      writeHistoryPending(db, profile, settled.pending)
+      for (const entry of settled.abandoned) {
+        logError(
+          'history:push-abandoned',
+          new Error(
+            `gave up ${entry.action === 'add' ? 'adding' : 'removing'} ${entry.item.id} ` +
+              `${entry.season ?? 'movie'}:${entry.episode ?? 'movie'} at ${entry.service}: ` +
+              `${entry.lastError ?? 'unknown'}`
+          )
+        )
+      }
+    })
+  }
+}
+
+/** How many history changes are still owed for the active profile, for the
+ *  sync report. */
+function historyPendingCount(): number {
+  try {
+    const db = getDatabase()
+    return Object.keys(readHistoryPending(db, db.activeProfile(), trackingAccountMarks())).length
+  } catch {
+    return 0
+  }
+}
+
 /** A `Partial<CatalogItem>` with a required id — assignable everywhere MediaHubDatabase's looser `{id: unknown}` item shape is expected, without a cast at the call site. */
 type TrackableItem = Partial<CatalogItem> & { id: string }
 
@@ -265,10 +476,13 @@ function pushTitleHistory(
   } = {}
 ): void {
   const path = action === 'add' ? '/sync/history' : '/sync/history/remove'
+  // The MAL count is read when the push runs; it has to be this profile's.
+  const profile = getDatabase().activeProfile()
   if (item.type === 'movie') {
+    const at: HistoryPushAt = { item, rows: [{ season: null, episode: null }], action, profile }
     queueRemotePushes(item, () => [
-      syncSimklHistory(path, historyPayload(item, {})),
-      pushTraktHistory(item, {}, action),
+      keptSimkl(at, syncSimklHistory(path, historyPayload(item, {}))),
+      keptTrakt(at, pushTraktHistory(item, {}, action)),
       pushMalProgress(item)
     ])
     return
@@ -279,17 +493,27 @@ function pushTitleHistory(
       .map((row) => ({ season: row.season ?? 1, episode: row.episode as number }))
   )
   if (!seasons.length) return
-  // The MAL count is read when the push runs; it has to be this profile's.
-  const profile = getDatabase().activeProfile()
+  const at: HistoryPushAt = {
+    item,
+    rows: seasons.flatMap((s) => s.episodes.map((episode) => ({ season: s.season, episode }))),
+    action,
+    profile
+  }
   queueRemotePushes(item, () => [
-    syncSimklHistory(path, titleHistoryPayload(item, seasons, animeSiblingsWhenGrouped())),
-    pushTraktTitleHistory(item, seasons, action),
-    pushMalTitleProgress(item, {
-      status: malStatus,
-      seasons: seasons.map((s) => s.season),
-      seasonTotals,
-      profile
-    })
+    keptSimkl(
+      at,
+      syncSimklHistory(path, titleHistoryPayload(item, seasons, animeSiblingsWhenGrouped()))
+    ),
+    keptTrakt(at, pushTraktTitleHistory(item, seasons, action)),
+    keptMal(
+      at,
+      pushMalTitleProgress(item, {
+        status: malStatus,
+        seasons: seasons.map((s) => s.season),
+        seasonTotals,
+        profile
+      })
+    )
   ])
 }
 
@@ -939,11 +1163,14 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
   // it. Dropping a decision Simkl accepted because Trakt was unreachable
   // would re-raise a disagreement that no longer exists. pushTraktHistory
   // already logs and swallows its own errors for the same reason.
+  // A Trakt failure here is kept and retried like any other history push
+  // (keptTrakt), which leaves this queue's verdict alone.
   for (const entry of traktFollowUps(queue, confirmed, settled)) {
-    await pushTraktHistory(
-      { id: entry.id, type: entry.type, title: entry.title, year: entry.year },
-      {},
-      locallyWatched.has(entry.id) ? 'add' : 'remove'
+    const item = { id: entry.id, type: entry.type, title: entry.title, year: entry.year }
+    const action = locallyWatched.has(entry.id) ? 'add' : 'remove'
+    await keptTrakt(
+      { item, rows: [{ season: null, episode: null }], action, profile },
+      pushTraktHistory(item, {}, action)
     )
   }
 
@@ -1115,6 +1342,7 @@ export async function runBackgroundWatchSync(): Promise<void> {
       activities: () => simklActivities('background'),
       syncPlanned: (options) => syncPlannedFromServices('background', options),
       flushPushes: () => flushPendingPushes('background'),
+      retryHistory: () => retryHistoryPushes('background'),
       reviewAsked: () => reviewAsked,
       reconcile: backgroundReconcile,
       now: () => Date.now(),
@@ -1437,14 +1665,24 @@ export function registerTrackingIpc(): void {
    * added a pile of titles on the web and does not want to wait for the
    * next pass to see them.
    */
-  handle<undefined, PlannedSyncReport>(MEDIA_HUB_CHANNELS.trackingPlannedSync, async () =>
-    syncPlannedFromServices('interactive')
-  )
+  handle<undefined, PlannedSyncReport>(MEDIA_HUB_CHANNELS.trackingPlannedSync, async () => {
+    // The history pushes still owed go first, as at the start of the
+    // half-hourly pass: somebody pressing Sync wants the services caught up
+    // in both directions.
+    await retryHistoryPushes('interactive')
+    const report = await syncPlannedFromServices('interactive')
+    return { ...report, historyPending: historyPendingCount() }
+  })
 
   /** The last pull's result, so the panel has something to show before
-   *  anybody presses the button. */
-  handle<undefined, PlannedSyncReport | null>(MEDIA_HUB_CHANNELS.trackingPlannedReport, async () =>
-    lastPlannedSyncReport()
+   *  anybody presses the button. The count of history pushes still owed is
+   *  read now rather than stored with it. */
+  handle<undefined, PlannedSyncReport | null>(
+    MEDIA_HUB_CHANNELS.trackingPlannedReport,
+    async () => {
+      const report = lastPlannedSyncReport()
+      return report ? { ...report, historyPending: historyPendingCount() } : null
+    }
   )
 
   /**
@@ -1581,13 +1819,17 @@ export function registerTrackingIpc(): void {
       // is what "tracking does not update properly" felt like.
       // Ordered per title, not merely detached — see queueRemotePushes.
       const profile = getDatabase().activeProfile()
+      const at: HistoryPushAt = { item, rows: [rowOf(playback)], action: 'add', profile }
       queueRemotePushes(item, () => [
-        syncSimklHistory(
-          '/sync/history',
-          historyPayload(item, playback, animeSiblingsWhenGrouped())
+        keptSimkl(
+          at,
+          syncSimklHistory(
+            '/sync/history',
+            historyPayload(item, playback, animeSiblingsWhenGrouped())
+          )
         ),
-        pushTraktHistory(item, playback, 'add'),
-        pushMalProgress(item, { season: playback.season ?? undefined, profile })
+        keptTrakt(at, pushTraktHistory(item, playback, 'add')),
+        keptMal(at, pushMalProgress(item, { season: playback.season ?? undefined, profile }))
       ])
       return { ok: true, simklSynced: false, malSynced: false }
     }
@@ -1608,13 +1850,17 @@ export function registerTrackingIpc(): void {
       // this title — an unmark a moment after a mark must reach the
       // services second.
       const profile = getDatabase().activeProfile()
+      const at: HistoryPushAt = { item, rows: [rowOf(p)], action: 'remove', profile }
       queueRemotePushes(item, () => [
-        syncSimklHistory(
-          '/sync/history/remove',
-          historyPayload(item, p, animeSiblingsWhenGrouped())
+        keptSimkl(
+          at,
+          syncSimklHistory(
+            '/sync/history/remove',
+            historyPayload(item, p, animeSiblingsWhenGrouped())
+          )
         ),
-        pushTraktHistory(item, p, 'remove'),
-        pushMalProgress(item, { season: p.season ?? undefined, profile })
+        keptTrakt(at, pushTraktHistory(item, p, 'remove')),
+        keptMal(at, pushMalProgress(item, { season: p.season ?? undefined, profile }))
       ])
       return { ok: true, simklSynced: false, malSynced: false }
     }
@@ -1646,13 +1892,22 @@ export function registerTrackingIpc(): void {
       // a season marked watched here still unwatched on a connected Trakt
       // account.
       const profile = db.activeProfile()
+      const at: HistoryPushAt = {
+        item,
+        rows: list.map((p) => rowOf(p)),
+        action: 'add',
+        profile
+      }
       queueRemotePushes(item, () => [
-        syncSimklHistory(
-          '/sync/history',
-          seasonHistoryPayload(item, season, episodeNumbers, animeSiblingsWhenGrouped())
+        keptSimkl(
+          at,
+          syncSimklHistory(
+            '/sync/history',
+            seasonHistoryPayload(item, season, episodeNumbers, animeSiblingsWhenGrouped())
+          )
         ),
-        pushTraktSeasonHistory(item, season, episodeNumbers),
-        pushMalProgress(item, { season, profile })
+        keptTrakt(at, pushTraktSeasonHistory(item, season, episodeNumbers)),
+        keptMal(at, pushMalProgress(item, { season, profile }))
       ])
       return { ok: true, simklSynced: false, malSynced: false }
     }

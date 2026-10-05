@@ -52,6 +52,7 @@ import {
   type SimklLibraryTitle
 } from './simklCatchUpRules'
 import { pullPlannedGated, type SimklGate } from './watchSync'
+import { readHistoryPending, simklRemovalsOwed } from './historyRetry'
 
 /** What the pass needs from the database — the real one, or a test's. */
 export type CatchUpDb = Pick<
@@ -84,6 +85,11 @@ export interface CatchUpDeps {
   syncPlanned(gate: SimklGate): Promise<{ added: number; removed: number }>
   /** Ids whose un-plan is still owed to a service (watchlists.idsAwaitingRemoval). */
   awaitingRemoval(): ReadonlySet<string>
+  /** History keys (`id:season:episode`) whose removal is still owed to
+   *  Simkl (historyRetry.ts's simklRemovalsOwed). Treated as already held,
+   *  so a viewing un-marked here is not taken back in from Simkl before the
+   *  removal lands. Optional so a test that is not about it can leave it out. */
+  removalsOwed?(): ReadonlySet<string>
   /** idBridge.kitsuIdLookup — `answered` is false when nobody could be asked. */
   lookupKitsu(
     service: 'mal' | 'anidb',
@@ -525,9 +531,12 @@ async function catchUpPass(
     // underneath the plan between reading the local rows and writing.
     if (moved()) return finish()
     const local = {
-      watchedKeys: new Set(
-        db.history().map((row) => `${row.id}:${row.season ?? 'movie'}:${row.episode ?? 'movie'}`)
-      ),
+      watchedKeys: new Set([
+        ...db
+          .history()
+          .map((row) => `${row.id}:${row.season ?? 'movie'}:${row.episode ?? 'movie'}`),
+        ...(deps.removalsOwed?.() ?? [])
+      ]),
       trackedIds: new Set(db.tracked().map((item) => String(item.id))),
       awaitingRemoval: deps.awaitingRemoval()
     }
@@ -766,6 +775,14 @@ export async function catchUpFromServices(
         gate
       ),
     awaitingRemoval: watchlists.idsAwaitingRemoval,
+    removalsOwed: () =>
+      simklRemovalsOwed(
+        readHistoryPending(
+          getDatabase(),
+          getDatabase().activeProfile(),
+          settings.trackingAccountMarks()
+        )
+      ),
     lookupKitsu: (service, value) => idBridge.kitsuIdLookup(service, value, 'visible'),
     animeTarget: (kitsuId) => seasons.resolveAnimeGroupTarget(`kitsu:${kitsuId}`),
     animeReady: seasons.animeGroupingReady,

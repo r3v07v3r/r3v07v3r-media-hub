@@ -193,6 +193,15 @@ export function WatchlistSyncSection() {
           <span className={styles.statusMessage}>
             {summarise(report)} — {when(report.at)}.
           </span>
+          {/* Watch-history pushes that failed, kept and retried with each
+              sync (historyRetry.ts). Said only when there are some. */}
+          {Boolean(report.historyPending) && (
+            <span className={styles.statusMessage}>
+              {report.historyPending === 1
+                ? '1 watched change has not reached a service yet; it is retried with each sync.'
+                : `${report.historyPending} watched changes have not reached a service yet; they are retried with each sync.`}
+            </span>
+          )}
         </>
       )}
     </section>

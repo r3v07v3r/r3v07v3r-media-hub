@@ -358,6 +358,24 @@ async function passes(): Promise<void> {
     })
   })
 
+  await checkAsync(
+    'history pushes that failed are retried first, whatever the gate says',
+    async () => {
+      const h = harness()
+      h.deps.retryHistory = async () => {
+        h.calls.push('retry-owed-history-pushes')
+      }
+      const calls = await passOf(h)
+      assert.equal(calls[0], 'retry-owed-history-pushes')
+      // A gate that fails, and no Simkl account at all, still retry them:
+      // Trakt and MyAnimeList pushes are owed too.
+      h.activitiesError = Object.assign(new Error('Simkl is down'), { status: 503 })
+      assert.equal((await passOf(h))[0], 'retry-owed-history-pushes')
+      h.account = ''
+      assert.equal((await passOf(h))[0], 'retry-owed-history-pushes')
+    }
+  )
+
   await checkAsync('nothing changed: one Simkl request, and what is owed still goes', async () => {
     const h = harness()
     await passOf(h)

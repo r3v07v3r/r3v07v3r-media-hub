@@ -27,11 +27,12 @@
 // Code already running on the chain calls the work directly (see
 // applyLocalPlanChange in watchlists.ts).
 //
-// WHAT THIS DOES NOT DO. It orders pushes; it does not make them arrive. A
-// history push that fails is logged by the push itself and not retried.
-// Only plan changes are retried (planned:pending-removals in
-// watchlists.ts), and the reconcile pass that would notice a disagreement
-// afterwards covers Simkl movies only.
+// WHAT THIS DOES NOT DO. It orders pushes; it does not make them arrive.
+// What does is kept elsewhere: a history push that fails is written down
+// and retried with the next sync (historyRetry.ts, through tracking.ts),
+// and so is a plan change (planned:pending-removals in watchlists.ts). Both
+// retries run on this chain, so they stay in order with the pushes made
+// since.
 
 import { createKeyedSerialQueue } from '../../shared/media-hub/serialQueue'
 

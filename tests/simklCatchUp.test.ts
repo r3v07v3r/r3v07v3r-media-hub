@@ -1124,6 +1124,23 @@ async function passes(): Promise<void> {
     }
   )
 
+  await checkAsync(
+    'a viewing whose removal is still owed to Simkl is not taken back in',
+    async () => {
+      // Episode 2 was un-marked here and the removal failed, so Simkl still
+      // lists it. The retry is owed (historyRetry.ts); until it lands, the
+      // catch-up must not undo the un-mark.
+      const h = harness()
+      h.deps.removalsOwed = () => new Set(['tt0000001:1:2'])
+      await passOf(h)
+      const keys = h.db
+        .history()
+        .filter((row) => row.id === 'tt0000001')
+        .map((row) => `${row.season}:${row.episode}`)
+      assert.deepEqual(keys, ['1:1'])
+    }
+  )
+
   await checkAsync('nothing moved at Simkl: exactly one request, and nothing written', async () => {
     const h = harness()
     await passOf(h)

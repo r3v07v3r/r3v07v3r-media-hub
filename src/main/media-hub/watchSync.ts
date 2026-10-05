@@ -23,9 +23,10 @@
 //    backend whose interface has ever asked for that panel. The phone and
 //    TV app never do.
 //
-// What is OWED is not polling and is not gated: plan changes a service
-// refused are retried inside every pull, and queued history decisions are
-// flushed on every pass, whatever the gate said.
+// What is OWED is not polling and is not gated: history pushes that failed
+// when they were made are retried first, plan changes a service refused are
+// retried inside every pull, and queued history decisions are flushed on
+// every pass, whatever the gate said.
 //
 // The dependencies are injected, as in simklCatchUp.ts and for the same
 // reason: everything real reaches Electron, and the test drives a pass
@@ -286,6 +287,10 @@ export interface WatchSyncDeps extends GatedPullDeps {
   activities(): Promise<unknown>
   /** Sends the history decisions still queued (tracking's flushPendingPushes). */
   flushPushes(): Promise<unknown>
+  /** Sends the history pushes that failed when they were made
+   *  (tracking's retryHistoryPushes, historyRetry.ts). Optional so a test
+   *  that is not about it can leave it out. */
+  retryHistory?(): Promise<unknown>
   /** Whether anything in this process has asked for the review panel's
    *  check. False for the whole life of a backend whose interface has no
    *  such panel, and the diff is then never made. */
@@ -360,13 +365,23 @@ async function readGate(
 /**
  * One pass of the recurring watch-sync job.
  *
- * In the order things have to happen: the gate; the watchlists (which is
- * also where plan changes a service refused are retried); the history
- * decisions still queued; and last, if this backend has a review panel and
- * the films on either side moved, the diff that panel shows.
+ * In the order things have to happen: the history pushes still owed; the
+ * gate; the watchlists (which is also where plan changes a service refused
+ * are retried); the history decisions still queued; and last, if this
+ * backend has a review panel and the films on either side moved, the diff
+ * that panel shows.
  */
 export async function runWatchSync(deps: WatchSyncDeps, memory: WatchSyncMemory): Promise<void> {
   const { db } = deps
+  // Owed, like the flush below, and first: a push that failed half an hour
+  // ago has waited long enough, and needs no gate to be sent.
+  if (deps.retryHistory) {
+    try {
+      await deps.retryHistory()
+    } catch (error) {
+      deps.log('job:watch-sync:history-retry', error)
+    }
+  }
   // Who this pass is for, captured before the first wait. Switching profile
   // or Simkl account during it is ordinary, and the record written at the
   // end must not vouch for somebody else's library.

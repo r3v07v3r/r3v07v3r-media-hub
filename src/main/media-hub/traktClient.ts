@@ -266,12 +266,41 @@ export async function traktStatus(): Promise<TraktStatus> {
 }
 
 // ---------------------------------------------------------------------------
-// Pushes. Every one is fire-and-forget and swallows its own failure.
+// Pushes. Every one is fire-and-forget and swallows its own failure; the
+// history pushes report it, so a failed one can be kept and retried.
 //
 // A tracking service is a courtesy: the local database is the record, and an
 // expired token or an outage must never turn "I finished this episode" into an
 // error over the video. Simkl's pushes already work this way; these match.
 // ---------------------------------------------------------------------------
+
+/**
+ * How a history push went: `sent` when Trakt took it, `error` when it was
+ * tried and failed. Neither is a push that was never made — Trakt is not
+ * connected, or the title is one it cannot identify — which is not a
+ * failure and is not retried (tracking.ts keeps the failures, see
+ * historyRetry.ts).
+ */
+export interface TraktPushResult {
+  sent: boolean
+  error?: string
+}
+
+/** Sends one history body, logging and reporting a failure rather than
+ *  throwing it. */
+async function sendTraktHistory(
+  pathname: string,
+  payload: object,
+  scope: string
+): Promise<TraktPushResult> {
+  try {
+    await traktRequest(pathname, { method: 'POST', body: JSON.stringify(payload) })
+    return { sent: true }
+  } catch (error) {
+    logError(scope, error)
+    return { sent: false, error: (error as Error)?.message || String(error) }
+  }
+}
 
 /** Sends a watched (or un-watched) title. Silent when Trakt is not connected
  *  or the title is one Trakt cannot identify — see trakt.ts on anime. */
@@ -279,18 +308,15 @@ export async function pushTraktHistory(
   item: TraktPushItem,
   playback: TraktPlaybackPosition,
   action: 'add' | 'remove'
-): Promise<void> {
+): Promise<TraktPushResult> {
   const payload = historyPayload(item, playback)
-  if (!hasTraktContent(payload)) return
-  if (!traktCredentials().accessToken) return
-  try {
-    await traktRequest(action === 'add' ? '/sync/history' : '/sync/history/remove', {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    })
-  } catch (error) {
-    logError('trakt:history', error)
-  }
+  if (!hasTraktContent(payload)) return { sent: false }
+  if (!traktCredentials().accessToken) return { sent: false }
+  return sendTraktHistory(
+    action === 'add' ? '/sync/history' : '/sync/history/remove',
+    payload,
+    'trakt:history'
+  )
 }
 
 /** Same as pushTraktHistory, but for a whole season's episodes in one
@@ -300,15 +326,11 @@ export async function pushTraktSeasonHistory(
   item: TraktPushItem,
   season: number | undefined,
   episodeNumbers: number[]
-): Promise<void> {
+): Promise<TraktPushResult> {
   const payload = seasonHistoryPayload(item, season, episodeNumbers)
-  if (!hasTraktContent(payload)) return
-  if (!traktCredentials().accessToken) return
-  try {
-    await traktRequest('/sync/history', { method: 'POST', body: JSON.stringify(payload) })
-  } catch (error) {
-    logError('trakt:season-history', error)
-  }
+  if (!hasTraktContent(payload)) return { sent: false }
+  if (!traktCredentials().accessToken) return { sent: false }
+  return sendTraktHistory('/sync/history', payload, 'trakt:season-history')
 }
 
 /** Every named episode of a series, added or removed in one request — the
@@ -319,18 +341,15 @@ export async function pushTraktTitleHistory(
   item: TraktPushItem,
   seasons: readonly { season: number; episodes: readonly number[] }[],
   action: 'add' | 'remove'
-): Promise<void> {
+): Promise<TraktPushResult> {
   const payload = titleHistoryPayload(item, seasons)
-  if (!hasTraktContent(payload)) return
-  if (!traktCredentials().accessToken) return
-  try {
-    await traktRequest(action === 'add' ? '/sync/history' : '/sync/history/remove', {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    })
-  } catch (error) {
-    logError('trakt:title-history', error)
-  }
+  if (!hasTraktContent(payload)) return { sent: false }
+  if (!traktCredentials().accessToken) return { sent: false }
+  return sendTraktHistory(
+    action === 'add' ? '/sync/history' : '/sync/history/remove',
+    payload,
+    'trakt:title-history'
+  )
 }
 
 /** Sends a rating, or removes it when the score is this app's "cleared" 0. */

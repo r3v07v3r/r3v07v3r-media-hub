@@ -269,6 +269,23 @@ answers a history push with one, the request waits the time the service's
 more; a second 429, or a wait longer than a minute, is an ordinary failure
 (`retryOnceOn429` in `httpClient.ts`).
 
+**History pushes that fail are kept.** Marking an episode or a film,
+un-marking one, marking a season and setting a whole title's status each
+push the change to Simkl, Trakt and MyAnimeList after the local write. A
+push that fails (offline, an expired token, a 5xx, a second 429) is
+written down per service, title and episode (per season for MyAnimeList,
+which is sent a recount) in a durable record per profile
+(`historyRetry.ts`), stamped with the account it was owed to. It is sent
+again at the start of every half-hourly pass and every "Sync now", one
+request per service, title and direction, on the title's own push chain;
+ten failed tries and it is let go, and the log says so. A later push for
+the same episode replaces it, whichever way it went, and one that got
+through clears it. An owed change local has since moved away from (an add
+for an episode no longer watched here, a removal for one watched again) is
+dropped rather than replayed. While a removal is owed to Simkl, the
+catch-up does not take that viewing back in from Simkl. The Tracking panel
+shows how many changes are still owed.
+
 **Scrobbles are off unless turned on.** The player's start, pause and stop
 messages to Simkl and Trakt are sent only when "Scrobble while playing" is
 on (Accounts → Tracking). Each is a request against Simkl's daily
@@ -378,8 +395,10 @@ with viewings recorded here, the unscoped Simkl removal is not sent.
   that entry is here. An episode Simkl files under season 0, or 2 and
   later, is refused. The next section has the mapping, and what became of
   later seasons pushed before it existed.
-- A local un-watch whose removal at Simkl failed can come back when that
-  title next has activity there.
+- A local un-watch whose removal at Simkl failed is not taken back in
+  while the removal is still owed (see "History pushes that fail are
+  kept"). Once it has been given up on after ten tries, it can come back
+  when that title next has activity there.
 
 ## Anime: one show here, an entry per season at Simkl
 

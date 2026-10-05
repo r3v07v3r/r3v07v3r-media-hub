@@ -779,6 +779,10 @@ export interface PlannedSyncReport {
    *  them — only ever titles this app pulled in itself. See
    *  docs/WATCHLIST-SYNC.md rule 2. */
   removed: number
+  /** Watch-history changes (marks, un-marks) that failed to reach a service
+   *  and are waiting to be retried — see historyRetry.ts. Filled in when the
+   *  report is handed to the interface, not stored with it. */
+  historyPending?: number
 }
 
 /**
