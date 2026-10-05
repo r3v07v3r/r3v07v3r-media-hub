@@ -458,16 +458,22 @@ behaves as a title of its own.
   none are kept under its own id: `tracking:list` answers with where each
   started later season's viewings are (`laterSeasons`), and the index counts
   a later season's completion there as well. On the desktop this covers
-  every grid such a card appears in — the plan, My Stuff, search results and
-  the Anime library, whose index keeps a row for every season. The side
-  panel names the episode Play will start, from the same viewings.
+  every grid such a card appears in — the plan, My Stuff and the lists. The
+  side panel names the episode Play will start, from the same viewings.
 
-The Anime library's Hide watched and Hide completed filters read the same
-place. They are applied inside the index query, so the query is handed the
-grouping and counts a later season's viewings under its show: the tile the
-grid badges as watched or completed is the tile the filter takes out, and
-the total above the grid counts what is left. My Stuff filters after the
-badge is worked out, and always hid it.
+The Anime library and anime search do not list a later season at all. The
+index keeps a row for every season, so the grid used to show each one as a
+tile of its own; the library's query now leaves out every id that is a
+later season of a merged show, in the same statement that counts the
+total, on the desktop and on the phone. Search leaves those rows out of its
+index half, and a hit for a later season (from the index or from Kitsu) is
+answered with its show, in the place the season would have taken, so a
+season's own name still finds something. Only the seasons whose place is
+their season on the show's page are left out: any other member still opens
+as itself, and its tile is how it is reached. A plan card under a later
+season's id is read by id and still shows. With the later seasons gone,
+Hide watched and Hide completed read every tile that is left by its own id,
+which is where its viewings are kept.
 
 Recommendations go by membership, not by place. The suggestion row and the
 For You shelves draw on the index as well as the catalog, and the index

@@ -67,6 +67,7 @@ import {
   ANIME_GROUPED_KEY,
   animeGroupingMovedOn,
   buildGroupedAnimeVideos,
+  foldLaterSeasons,
   groupAnimeCatalog,
   groupedIdsFor,
   invalidateAnimeGroupIndex,
@@ -1752,8 +1753,9 @@ export function registerCatalogIpc(): void {
   // what is already there.
   handle<CatalogQuery, CatalogQueryResult>(MEDIA_HUB_CHANNELS.catalogQuery, async (_e, query) => {
     if (!isValidCatalogKind(query?.kind)) throw new Error('Unsupported catalog.')
-    // The index keeps a row for every season of a merged anime, so the
-    // grid shows later seasons as tiles too; same correction as byIds.
+    // The index keeps a row for every season of a merged anime. The grid
+    // shows the show, and leaves out each season that opens as the show
+    // (laterSeasons, the same answer laterSeasonOf gives one id at a time).
     return getDatabase().indexQuery(query, query.kind === 'anime' ? laterSeasons() : undefined)
   })
 
@@ -1802,11 +1804,23 @@ export function registerCatalogIpc(): void {
       // as fast as the network it exists to not need. With none, the
       // provider is the only hope, and it gets its full time.
       const remotePending = providerSearch(kind, q)
-      const local = getDatabase().indexSearch(kind, q, INDEX_SEARCH_CANDIDATES)
+      // A later season of a merged anime is answered as its show, as the
+      // grid shows it: the index leaves its row out, and a provider hit for
+      // it is folded into the show below.
+      const later = kind === 'anime' ? laterSeasons() : undefined
+      const local = getDatabase().indexSearch(kind, q, INDEX_SEARCH_CANDIDATES, later)
       const remote = local.length
         ? await settleWithin(remotePending, PROVIDER_GRACE_MS, [] as CatalogItem[])
         : await remotePending
-      const byTitle = mergeSearchResults(q, [local, remote], MAX_SEARCH_RESULTS)
+      const merged = mergeSearchResults(q, [local, remote], MAX_SEARCH_RESULTS)
+      const folding = later?.size ? merged.filter((item) => later.has(String(item.id))) : []
+      const byTitle = folding.length
+        ? foldLaterSeasons(
+            merged,
+            later!,
+            getDatabase().indexByIds(folding.map((item) => later!.get(String(item.id))!.id)).items
+          )
+        : merged
 
       // Then the same query against everything already known about each
       // title's cast, creators and story labels. This is what makes typing a

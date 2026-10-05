@@ -846,10 +846,10 @@ export function laterSeasonOf(catalogId: string): { id: string; season: number }
  * included: a member whose place is not its season on the show's page keeps
  * its own rows, and is not in here.
  *
- * For the caller that cannot ask one id at a time. The library's
- * watch-state filters run inside the index query, which needs the whole
- * mapping to count a later season's viewings where they are kept
- * (database.ts's indexQuery).
+ * For the caller that cannot ask one id at a time. The library grid and
+ * search leave these rows out inside the index query, which needs the whole
+ * mapping (database.ts's LATER_SEASON_SQL), and a card that names one counts
+ * its completion where its viewings are kept (indexByIds).
  *
  * Kept between calls. The gate reads two cache rows a member — 8 ms for the
  * 698 members of a real catalog — and that query is a keystroke-driven
@@ -862,6 +862,41 @@ export function laterSeasons(): ReadonlyMap<string, { id: string; season: number
     animeLaterSeasonIndex = laterSeasonsOf(animeGroupPositionIndex!, seasonMatchesPage)
   }
   return animeLaterSeasonIndex
+}
+
+/**
+ * A search answer with each later season of a merged show (an id in
+ * `later`) given as its show: the show takes the place of the first such
+ * season, and anything listed twice is listed once.
+ *
+ * The library grid leaves later seasons out (database.ts's
+ * LATER_SEASON_SQL), and a search does too, but a search that only dropped
+ * them would find nothing for a later season's own name, "Shippuuden" say,
+ * when the show it belongs to is in the library. `shows` are the shows those
+ * seasons belong to, as the index has them; a later season whose show is in
+ * neither `items` nor `shows` is left out.
+ */
+export function foldLaterSeasons(
+  items: readonly CatalogItem[],
+  later: ReadonlyMap<string, { id: string; season: number }>,
+  shows: readonly CatalogItem[]
+): CatalogItem[] {
+  const showById = new Map<string, CatalogItem>()
+  for (const show of [...shows, ...items]) {
+    if (show.type === 'anime' && !showById.has(String(show.id))) {
+      showById.set(String(show.id), show)
+    }
+  }
+  const seen = new Set<string>()
+  const out: CatalogItem[] = []
+  for (const item of items) {
+    const place = item.type === 'anime' ? later.get(String(item.id)) : undefined
+    const entry = place ? showById.get(place.id) : item
+    if (!entry || seen.has(String(entry.id))) continue
+    seen.add(String(entry.id))
+    out.push(entry)
+  }
+  return out
 }
 
 /**

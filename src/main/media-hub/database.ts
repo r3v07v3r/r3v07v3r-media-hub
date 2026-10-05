@@ -281,8 +281,6 @@ function indexWhere(
   profileId: string,
   laterSeasons?: LaterSeasons
 ): {
-  /** The tables the clauses read from, to go before SELECT — or ''. */
-  with: string
   sql: string
   values: Record<string, SQLInputValue>
   usesProfile: boolean
@@ -353,24 +351,26 @@ function indexWhere(
     }
   }
 
+  // A later season of a merged anime is not a title of its own on the
+  // grid: its show is, and the season is a tab on the show's page. Its row
+  // stays in the index (a plan card pulled under its id reads it through
+  // indexByIds), and is left out here, in the WHERE that both the count and
+  // the page are cut from. See LATER_SEASON_SQL.
+  const hideLaterSeasons = query.kind === 'anime' && Boolean(laterSeasons?.size)
+  if (hideLaterSeasons) {
+    clauses.push(LATER_SEASON_SQL)
+    values.laterSeasons = JSON.stringify([...laterSeasons!.keys()])
+  }
+
   // The watch-state exclusions run HERE, in the same query, not over the
   // returned page — see CatalogQuery's own note on why filtering afterwards
   // makes both the page size and `total` wrong once anything is paged.
   //
-  // A later season of a merged anime is read where its viewings are kept —
-  // see LATER_SEASONS_WITH. Only when one of the two filters that need it
-  // is on: every other query is the statement it always was.
-  const bySeason =
-    query.kind === 'anime' &&
-    Boolean(laterSeasons?.size) &&
-    Boolean(query.hideWatched || query.hideCompleted)
-  if (bySeason) {
-    values.laterSeasons = JSON.stringify(
-      Object.fromEntries([...laterSeasons!].map(([id, show]) => [id, [show.id, show.season]]))
-    )
-  }
+  // Every row they see is read by its own id. The rows that are not (a later
+  // season, whose viewings are kept under its show) are the ones left out
+  // above.
   if (query.hideWatched) {
-    clauses.push(`NOT ${bySeason ? SEASON_WATCHED_SQL : WATCHED_SQL}`)
+    clauses.push(`NOT ${WATCHED_SQL}`)
     usesProfile = true
   }
   if (query.hideDisliked) {
@@ -378,13 +378,12 @@ function indexWhere(
     usesProfile = true
   }
   if (query.hideCompleted) {
-    clauses.push(`NOT ${bySeason ? SEASON_COMPLETED_SQL : COMPLETED_SQL}`)
+    clauses.push(`NOT ${COMPLETED_SQL}`)
     usesProfile = true
   }
   if (usesProfile) values.profile = profileId
 
   return {
-    with: bySeason ? LATER_SEASONS_WITH : '',
     sql: clauses.join(' AND '),
     values,
     usesProfile
@@ -440,76 +439,41 @@ const COMPLETED_SQL =
  *
  * WATCHED_SQL and COMPLETED_SQL read the rows under a row's own id, and such
  * a row has none, so asked that way it is never watched and never complete.
- * indexByIds and indexQuery take this to count its `completedIds` membership
- * where the rows are (rowCompleted), and indexQuery's hideWatched and
- * hideCompleted filters read the same place (LATER_SEASONS_WITH below).
+ * indexByIds takes this to count its `completedIds` membership where the
+ * rows are (rowCompleted). indexQuery and indexSearch take it to leave such
+ * a row out (LATER_SEASON_SQL below).
  *
- * The whole mapping rather than a lookup, because the filters run inside the
+ * The whole mapping rather than a lookup, because the clause runs inside the
  * query and SQL cannot call back to ask about one id.
  */
 export type LaterSeasons = ReadonlyMap<string, { id: string; season: number }>
 
 /**
- * The two watch-state filters, for an anime query that was handed the
- * grouping: a later season of a merged show is read from its show's rows at
- * that season, and every other row exactly as WATCHED_SQL and COMPLETED_SQL
- * read it.
+ * Leaves out the later seasons of merged shows: the ids in LaterSeasons,
+ * bound as one JSON array parameter, @laterSeasons.
  *
- * These have to agree with what the card itself shows, or Hide watched
- * leaves a tile on the grid that is badged as watched:
+ * Only those ids, not every member a show fronts. A member whose place in
+ * its group cannot be shown to be its season on the show's page (a film or
+ * an OVA filed among the seasons, a mapping nobody has looked up) opens and
+ * saves as itself (animeSeasons.ts's laterSeasonOf), so its row is the only
+ * way to reach it and stays.
  *
- *  - watched: a viewing of that season under the show, or a row under the
- *    tile's own id — the renderer's rule (catalogItemToMediaItem).
- *  - completed: the distinct episodes watched of that season against the
- *    row's own aired count, and nothing else — rowCompleted's rule, the same
- *    count from the same rows.
+ * IN against the JSON list, never a join: SQLite builds an IN list into an
+ * index of its own once per statement, where a join against the mapping was
+ * planned as a scan of it per catalog row (see the measurements PR 189 took
+ * for the same mapping).
  *
- * The mapping arrives as one JSON parameter, `{seasonId: [showId, season]}`,
- * and three things about the shape are deliberate. None of these tables has
- * an index, so what SQLite does with one is the planner's guess:
- *
- *  - The catalog rows test membership with IN, never a join. An IN list is
- *    always built once into an index of its own; a join against the mapping
- *    was planned as a scan of it per catalog row on one of the two
- *    statements.
- *  - Each show's history is aggregated once (show_season), found through the
- *    history's own index, and not once per later season: a long runner has a
- *    dozen films folded in as seasons, and its thousand rows would be walked
- *    for every one of them. Written as a join of the mapping to the history
- *    instead, each statement took 165 ms.
- *  - What is left unindexed is small on both sides: the later seasons
- *    against the seasons somebody has started.
- *
- * Measured on a real library (5,965 anime rows, 290 of them later seasons,
- * 8,793 history rows), the count and page statements together, median of
- * 200, over several runs: 5 to 9 ms more than the same query by the row's
- * own id, which took 15 to 30 ms (and with a genre as well, about 10 ms on
- * top of 33 to 50). About 2 ms of the difference is building these tables,
- * paid by each statement, and the rest is the count testing every row
- * against them. A query with neither filter on carries none of it (2 ms
- * either way).
+ * Measured the way PR 189 measured the season-aware filters it replaces, on
+ * a generated library of the same size (5,965 anime rows, 290 of them later
+ * seasons, 8,793 history rows), the count and page statements together,
+ * median of 200, two runs: 2.7 ms more than the same query without it with
+ * no filter on (4.2 ms against 1.5), mostly the count testing every row; 1.3
+ * to 1.9 ms more with Hide watched, Hide completed or a genre on. The
+ * season-aware Hide watched and Hide completed cost 4.7 to 5.9 ms more on the
+ * same library, and with the later seasons left out there is nothing for
+ * them to read: every row that is left keeps its viewings under its own id.
  */
-const LATER_SEASONS_WITH =
-  'WITH later_season(season_id, show_id, season) AS MATERIALIZED (' +
-  " SELECT j.key, json_extract(j.value, '$[0]'), json_extract(j.value, '$[1]')" +
-  ' FROM json_each(@laterSeasons) j),' +
-  ' show_season(show_id, season, episodes) AS MATERIALIZED (' +
-  ' SELECT wh.content_id, wh.season, COUNT(DISTINCT wh.episode) FROM watch_history wh' +
-  ' WHERE wh.profile_id = @profile AND wh.season >= 2 AND wh.episode IS NOT NULL' +
-  ' AND wh.content_id IN (SELECT show_id FROM later_season)' +
-  ' GROUP BY wh.content_id, wh.season),' +
-  // Only the later seasons with a viewing: an inner join.
-  ' started_season(season_id, episodes) AS MATERIALIZED (' +
-  ' SELECT ls.season_id, ss.episodes FROM later_season ls' +
-  ' JOIN show_season ss ON ss.show_id = ls.show_id AND ss.season = ls.season) '
-const SEASON_WATCHED_SQL = `(catalog_index.id IN (SELECT season_id FROM started_season) OR ${WATCHED_SQL})`
-// COALESCE, because a later season nobody has started has no row to read a
-// count from, and a NULL here would make `NOT (...)` NULL and drop the row.
-const SEASON_COMPLETED_SQL =
-  `(CASE WHEN catalog_index.id NOT IN (SELECT season_id FROM later_season) THEN ${COMPLETED_SQL}` +
-  ` WHEN catalog_index.aired_episodes IS NULL OR catalog_index.aired_episodes <= 0 THEN 0` +
-  ` ELSE COALESCE((SELECT s.episodes FROM started_season s WHERE s.season_id = catalog_index.id), 0)` +
-  ` >= catalog_index.aired_episodes END)`
+const LATER_SEASON_SQL = 'catalog_index.id NOT IN (SELECT value FROM json_each(@laterSeasons))'
 
 /**
  * The ORDER BY for one sort key.
@@ -990,13 +954,19 @@ export interface MediaHubDatabase {
   /** One filtered, sorted, paged slice of the library, plus how many titles
    *  match the filters in total. See indexWhere/indexOrderBy for how each
    *  clause maps onto the in-memory filter it reproduces. `laterSeasons`
-   *  is for an anime query: see LaterSeasons. */
+   *  is for an anime query: those rows are left out (see LaterSeasons). */
   indexQuery(query: CatalogQuery, laterSeasons?: LaterSeasons): CatalogQueryResult
   /** Titles of one kind whose name contains every word of `query`, best
    *  match first — the local half of catalog:search. This is what makes a
    *  title the crawl has already seen findable with no request at all,
-   *  and findable offline. Empty for a query with no words in it. */
-  indexSearch(kind: MediaKind, query: string, limit?: number): CatalogItem[]
+   *  and findable offline. Empty for a query with no words in it.
+   *  `laterSeasons` leaves those anime rows out, as indexQuery does. */
+  indexSearch(
+    kind: MediaKind,
+    query: string,
+    limit?: number,
+    laterSeasons?: LaterSeasons
+  ): CatalogItem[]
   /** The genre/year/status values that actually occur for one kind — the
    *  filter bar's dropdown contents, over the whole library rather than
    *  over whatever slice happens to be loaded. */
@@ -3210,21 +3180,21 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       // and precompiling them all to avoid one prepare on a keystroke-driven
       // path would be the wrong trade.
       try {
-        // One `where` for both statements, the tables it reads from
-        // included, so `total` counts exactly the rows the pages are cut from.
+        // One `where` for both statements, so `total` counts exactly the rows
+        // the pages are cut from.
         const where = indexWhere(query, currentProfileId, laterSeasons)
         const limit = Math.max(0, Math.min(query.limit ?? 60, 500))
         const offset = Math.max(0, query.offset ?? 0)
         const total = Number(
           (
             sql
-              .prepare(`${where.with}SELECT COUNT(*) AS n FROM catalog_index WHERE ${where.sql}`)
+              .prepare(`SELECT COUNT(*) AS n FROM catalog_index WHERE ${where.sql}`)
               .get(where.values) as Row | undefined
           )?.n ?? 0
         )
         const rows = sql
           .prepare(
-            `${where.with}SELECT id,kind,title,year,rating,runtime_min,status,poster,background,logo,description,
+            `SELECT id,kind,title,year,rating,runtime_min,status,poster,background,logo,description,
                     total_seasons,total_episodes,aired_episodes,simkl_id,grouped_ids,
                     (SELECT group_concat(genre, char(31)) FROM catalog_index_genre g
                       WHERE g.id = catalog_index.id AND g.kind = catalog_index.kind) AS genres,
@@ -3257,7 +3227,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       }
     },
 
-    indexSearch(kind, query, limit = 100) {
+    indexSearch(kind, query, limit = 100, laterSeasons) {
       // Matched against title_key, the title in the query's own form
       // (comparableTitle, migration 5): lowercased, diacritics folded,
       // punctuation flattened to spaces — so "amelie" finds "Amélie",
@@ -3289,6 +3259,13 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           values[`t${i}`] = `%${token}%`
           return `title_key LIKE @t${i}`
         })
+        // A later season is found as its show, not as a result of its own:
+        // the same rows the grid leaves out (LATER_SEASON_SQL), left out
+        // before the LIMIT so they take no place another title could have.
+        if (kind === 'anime' && laterSeasons?.size) {
+          clauses.push(LATER_SEASON_SQL)
+          values.laterSeasons = JSON.stringify([...laterSeasons.keys()])
+        }
         const rows = sql
           .prepare(
             `SELECT id,kind,title,year,rating,runtime_min,status,poster,background,logo,description,
