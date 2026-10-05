@@ -5,9 +5,10 @@
 // the reversal it was given, and it goes away by itself after a few seconds
 // rather than waiting to be dismissed like the whole-show Undo does
 // (statusToasts.ts, notificationTtl.ts). An Undo pressed after the title
-// already went back another way does nothing (toggleApplies). Removing a
-// plan or a dislike offers no Undo: Plan, or Not interested, is already
-// the way back.
+// already went back another way does nothing (toggleApplies). Remove from
+// plan, from the card menu or the library side panel, has the same Undo,
+// and an Undo raises no toast of its own. Removing a dislike offers no
+// Undo: Not interested is already the way back.
 //
 // The Movies, Series and Anime grids (LibraryTile in AnimeLibraryPage.tsx)
 // open the same card menu as MediaCard, on right-click and on a "..."
@@ -47,10 +48,11 @@ import path from 'node:path'
 import {
   dislikedToast,
   planToastAfterStatus,
-  planToastAfterToggle,
   plannedToast,
   QUICK_UNDO_MS,
-  toggleApplies
+  toastAfterPlanToggle,
+  toggleApplies,
+  unplannedToast
 } from '../src/renderer/src/lib/mediaHub/statusToasts'
 import { notificationTtlMs } from '../src/renderer/src/lib/notificationTtl'
 import {
@@ -88,6 +90,17 @@ check('a plan toast names the title, is bound to the profile and undoes the plan
   assert.match(toast.message, /"Dune" is on your plan/)
   assert.equal(toast.profileId, 'p1')
   assert.equal(toast.action?.label, 'Undo')
+  toast.action?.run()
+  assert.equal(undone, 1)
+})
+
+check('a removal from the plan names the title and its Undo puts it back', () => {
+  let undone = 0
+  const toast = unplannedToast({ title: 'Dune' }, 'p1', () => undone++)
+  assert.match(toast.message, /"Dune" is off your plan/)
+  assert.equal(toast.profileId, 'p1')
+  assert.equal(toast.action?.label, 'Undo')
+  assert.equal(notificationTtlMs(toast), QUICK_UNDO_MS)
   toast.action?.run()
   assert.equal(undone, 1)
 })
@@ -159,16 +172,29 @@ check('both toggles in AppStateContext check the Undo target before acting', () 
   )
   assert.match(context, /if \(!toggleApplies\(myListRef\.current\.has\(media\.id\), to\)\) return/)
   assert.match(context, /if \(!toggleApplies\(prev\.has\(media\.id\), to\)\) return prev/)
-  assert.match(context, /if \(planToastAfterToggle\(result\?\.tracked\)\)/)
+  assert.match(context, /toastAfterPlanToggle\(result\?\.tracked, fromUndo\)/)
   assert.match(context, /if \(planToastAfterStatus\(status, wasPlanned, episodes\)\)/)
+  // Every Undo that runs the plan toggle says so, so it raises no toast.
+  assert.match(context, /plannedToast\([^;]*toggleMyListRef\.current\(media, false, true\)/)
+  assert.match(context, /unplannedToast\([^;]*toggleMyListRef\.current\(media, true, true\)/)
+  assert.match(
+    context,
+    /plannedToast\(media, result\.profileId, \(\) => toggleMyList\(media, false, true\)\)/
+  )
 })
 
-check('the card menu raises the plan toast for a plan and not for a removal', () => {
-  assert.equal(planToastAfterToggle(true), true)
-  assert.equal(planToastAfterToggle(false), false)
-  // No answer from the write (no bridge, or a failed call): no toast.
-  assert.equal(planToastAfterToggle(undefined), false)
-})
+check(
+  'the plan toggle raises the plan toast for a plan and the removal toast for a removal',
+  () => {
+    assert.equal(toastAfterPlanToggle(true, false), 'planned')
+    assert.equal(toastAfterPlanToggle(false, false), 'unplanned')
+    // No answer from the write (no bridge, or a failed call): no toast.
+    assert.equal(toastAfterPlanToggle(undefined, false), null)
+    // An Undo is not offered another.
+    assert.equal(toastAfterPlanToggle(true, true), null)
+    assert.equal(toastAfterPlanToggle(false, true), null)
+  }
+)
 
 check('the status pill raises the plan toast only for a new plan', () => {
   assert.equal(planToastAfterStatus('planned', false, undefined), true)

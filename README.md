@@ -174,8 +174,8 @@ Playback is mpv, embedded inside the app's own window on Windows; there is no tr
   **Plan to watch** and **Mark watched** (**Mark all watched** on a series) as separate items, and
   **Not interested**. A planned title can be taken off the plan from the same menu, or with
   **Remove from plan** in the library side panel. Marking a whole series watched marks
-  every aired episode, and clearing it offers an undo. Plan to watch and **Not interested** each
-  show a toast with an **Undo** for a few seconds. On the episode list, **Mark season watched**
+  every aired episode, and clearing it offers an undo. Plan to watch, Remove from plan and **Not
+  interested** each show a toast with an **Undo** for a few seconds. On the episode list, **Mark season watched**
   acts on a season's aired episodes, and <kbd>Ctrl</kbd>- or <kbd>Shift</kbd>-clicking episodes
   selects several to mark at once. Lists are separate from status.
 - **Rate what you have seen** out of 10 on a title's page. Each profile keeps its own scores, and
