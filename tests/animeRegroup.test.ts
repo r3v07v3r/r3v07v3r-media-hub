@@ -5,8 +5,9 @@
 // no database), the move itself (database.ts's moveAnimeHistory against a
 // real file), and the placing of seasons stranded before any grouping was
 // recorded. Then one regroup end to end: a film or an OVA leaving the shows
-// it was filed in as a season, from the grouping pass to the rows. The two wrappers in animeSyncRepair.ts are a settings marker,
-// a log line and a notification around these.
+// it was filed in as a season, from the grouping pass to the rows. The two
+// wrappers in animeSyncRepair.ts are a settings marker, a log line and a
+// notification around these.
 //
 // Run with: npx tsx tests/animeRegroup.test.ts   (or npm.cmd test)
 
@@ -30,7 +31,8 @@ import {
   groupedIdsFor,
   invalidateAnimeGroupIndex,
   laterSeasons,
-  resolveAnimeGroupTarget
+  resolveAnimeGroupTarget,
+  seasonMatchesPage
 } from '../src/main/media-hub/animeSeasons'
 import { createDatabase } from '../src/main/media-hub/database'
 import { setDatabase } from '../src/main/media-hub/dbState'
@@ -231,6 +233,76 @@ check('a front that left every show hands its rows to the one the rest went to',
     planAnimeRegroup([byTmdb('305074', 'film', 'one', 'two')], [byTmdb('999', 'one', 'two')]).left,
     [{ id: 'film', why: 'fronted by another id, and not provably the same series' }]
   )
+})
+
+// What seasonMatchesPage answers for the shows below: TheTVDB's season of
+// each id in series 305074. The film and the OVA are at season 0.
+const tvdbSeason: Record<string, number> = { film: 0, ova: 0, s1: 1, s2: 2, s3: 3 }
+const tvdbGate = (show: string, member: string, season: number): boolean =>
+  show in tvdbSeason && tvdbSeason[member] === season
+
+check('a show numbered by TMDB that comes apart gives each season to its own entry', () => {
+  // One TV season and a film: the film sorted first and fronted the show,
+  // so the season was watched as film:1:N. Neither is in a show now.
+  const filmFront = planAnimeRegroup([byTmdb('305074', 'film', 's1')], [], tvdbGate)
+  assert.deepEqual(filmFront.moves, [move('film', 1, 's1', 1)])
+  assert.deepEqual(filmFront.ratings, [{ fromId: 'film', toId: 's1' }])
+  // Season 0 (the film itself among TMDB's specials) cannot be placed.
+  assert.deepEqual(
+    filmFront.left.map((miss) => miss.id),
+    ['film']
+  )
+
+  // A first season whose second Kitsu calls an ONA: season 1 is the front's
+  // own and stays; season 2 goes to the ONA's own entry.
+  const ona = planAnimeRegroup([byTmdb('305074', 's1', 's2')], [], tvdbGate)
+  assert.deepEqual(ona.moves, [move('s1', 2, 's2', 1)])
+  assert.deepEqual(ona.ratings, [])
+  assert.deepEqual(
+    ona.left.map((miss) => miss.id),
+    ['s1']
+  )
+
+  // With nothing to ask, nothing moves, and the show is still reported.
+  const blind = planAnimeRegroup([byTmdb('305074', 'film', 's1')], [])
+  assert.deepEqual(blind.moves, [])
+  assert.deepEqual(
+    blind.left.map((miss) => miss.id),
+    ['film']
+  )
+})
+
+check('a later season that becomes its season on the page brings its own rows', () => {
+  // The film sat between the seasons, so s2 was at place 3, which is not
+  // TheTVDB's season 2: it opened and saved as itself. With the film out,
+  // its place is 2, it opens as the show, and the grid stops listing it.
+  const plan = planAnimeRegroup(
+    [byTmdb('305074', 's1', 'film', 's2')],
+    [byTmdb('305074', 's1', 's2')],
+    tvdbGate
+  )
+  assert.deepEqual(plan.moves, [move('s2', null, 's1', 2)])
+  assert.deepEqual(plan.ratings, [{ fromId: 's2', toId: 's1' }])
+  // A member whose place was already its season has its rows with the show.
+  assert.deepEqual(
+    planAnimeRegroup(
+      [byTmdb('305074', 's1', 's2', 'ova')],
+      [byTmdb('305074', 's1', 's2')],
+      tvdbGate
+    ).moves,
+    []
+  )
+})
+
+check('a film that fronted a show numbered by its members hands on its specials and rating', () => {
+  // AniList dated the film before the first season, so it fronted the show.
+  const plan = planAnimeRegroup([byMember('film', 's1', 's2')], [byMember('s1', 's2')])
+  assert.deepEqual(plan.moves, [
+    move('film', 2, 's1', 1),
+    move('film', 3, 's1', 2),
+    move('film', 0, 's1', 0)
+  ])
+  assert.deepEqual(plan.ratings, [{ fromId: 'film', toId: 's1' }])
 })
 
 check('a show numbered by TMDB that loses its front and gets it back ends where it started', () => {
@@ -919,6 +991,41 @@ async function groupingChecks(): Promise<void> {
     assert.deepEqual(db.animeGroupLedger(), after)
     db.close()
   })
+
+  await checkAsync(
+    'a one-season show that was fronted by its film gets its rows back',
+    async () => {
+      // TheTVDB files the film at season 0, so it sorted first and fronted the
+      // show: the season was watched as the film's TMDB season 1. With the film
+      // out there is one season left, and no show.
+      const FRONT_FILM = 'kitsu:61'
+      const ONLY = 'kitsu:62'
+      const crawl = [entry(FRONT_FILM, 'movie', '2016-01-01'), entry(ONLY, 'tv', '2015-01-01')]
+      const tvdb = {
+        [FRONT_FILM]: { seriesId: '88888', season: 0 },
+        [ONLY]: { seriesId: '88888', season: 1 }
+      }
+      const db = groupingDb(ids(crawl), tvdb, {})
+      const seriesOf = (id: string): string | null => (tvdb[id] ? tvdb[id].seriesId : '')
+      const before = animeGroupRecordsOf(await groupAnimeCatalog(withoutKind(crawl)), seriesOf)
+      assert.deepEqual(before, [{ id: FRONT_FILM, members: [FRONT_FILM, ONLY], series: '88888' }])
+      followAnimeRegroup(db, before, seasonMatchesPage)
+      mark(db, FRONT_FILM, 1, [1, 2])
+      mark(db, FRONT_FILM, 0, [1])
+
+      const after = animeGroupRecordsOf(await groupAnimeCatalog(crawl), seriesOf)
+      assert.deepEqual(after, [])
+      const result = followAnimeRegroup(db, after, seasonMatchesPage)
+      assert.deepEqual(keys(db, ONLY), ['1:1', '1:2'])
+      // TMDB's season 0 is not the film's own episode: it stays, and is named.
+      assert.deepEqual(keys(db, FRONT_FILM), ['0:1'])
+      assert.deepEqual(
+        result.left.map((miss) => miss.id),
+        [FRONT_FILM]
+      )
+      db.close()
+    }
+  )
 
   await checkAsync('what was built from the old membership is out of date', async () => {
     // The caches that depend on who the members are: the in-memory group

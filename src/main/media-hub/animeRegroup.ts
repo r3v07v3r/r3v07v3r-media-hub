@@ -30,7 +30,10 @@
 //    place does not change what season N shows, so its rows stay at their
 //    number; moving them by member would shift every watched mark on a page
 //    that was right. Only a change of the id itself is followed, season
-//    numbers kept.
+//    numbers kept. Two more things are followed where the per-entry
+//    TheTVDB mappings show where each season goes (placeIsSeason): a show
+//    that came apart altogether, and a later season that saved under its
+//    own id until its place became its season.
 //
 // Anything else (a show that gained or lost its mapping between the two
 // runs, a lookup that never answered) is left where it is and reported,
@@ -170,7 +173,6 @@ export function planAnimeRegroup(
   for (const group of before) {
     const show = group.id
     const front = now.get(show)
-    const showNow = front?.show ?? show
 
     if (!byMember(group)) {
       // Numbered by TMDB, or not known: the rows stay at their numbers, and
@@ -182,6 +184,10 @@ export function planAnimeRegroup(
       // as seasons. Its rows are still the show's TMDB seasons (its page never
       // showed the film), so they go where the rest of the show went.
       const went = front ?? successorOf(group, now)
+      if (!went && group.members.every((member) => !now.has(member))) {
+        cameApart(group, plan, placeIsSeason)
+        continue
+      }
       const showTo = went?.show ?? show
       if (showTo === show) continue
       if (group.series && went?.group.series === group.series) {
@@ -212,17 +218,39 @@ export function planAnimeRegroup(
       plan.moves.push({ fromId: show, fromSeason: season, toId: to.show, toSeason: to.season })
     })
     // What is the show's rather than a member's goes where its id went:
-    // the specials a Trakt import filed at season 0, and the rating.
-    if (front && showNow !== show && byMember(front.group)) {
-      plan.moves.push({ fromId: show, fromSeason: 0, toId: showNow, toSeason: 0 })
-      plan.ratings.push({ fromId: show, toId: showNow })
+    // the specials a Trakt import filed at season 0, and the rating. An id
+    // that left every show (a film that sorted first and fronted it, until
+    // films stopped being seasons) went where the rest of the show went.
+    const went = front ?? successorOf(group, now)
+    if (went && went.show !== show && byMember(went.group)) {
+      plan.moves.push({ fromId: show, fromSeason: 0, toId: went.show, toSeason: 0 })
+      plan.ratings.push({ fromId: show, toId: went.show })
     }
   }
 
   // Ids that stood alone and are part of a show now.
   for (const group of after) {
     group.members.forEach((member, index) => {
-      if (was.has(member)) return
+      const old = was.get(member)
+      if (old) {
+        // A later season that was in a show, at a place that was not its
+        // season on the page, opened and saved as itself: its rows are under
+        // its own id. Where its place now is its season (another member
+        // leaving moved it there, as a film leaving a show numbered by TMDB
+        // does), it opens as the show and the grid no longer lists it, so
+        // its rows join the show as a newly joined member's would.
+        if (
+          index > 0 &&
+          placeIsSeason &&
+          old.show !== member &&
+          !placeIsSeason(old.show, member, old.season) &&
+          placeIsSeason(group.id, member, index + 1)
+        ) {
+          plan.moves.push({ fromId: member, fromSeason: null, toId: group.id, toSeason: index + 1 })
+          plan.ratings.push({ fromId: member, toId: group.id })
+        }
+        return
+      }
       if (index === 0) {
         // It fronts a show it used to be the whole of. Its own episodes are
         // season 1 there; a row carrying Kitsu's label for the entry (a 2 or
@@ -248,6 +276,38 @@ export function planAnimeRegroup(
   }
 
   return plan
+}
+
+/**
+ * A show numbered by TMDB whose members all stand alone now: fewer than two
+ * of them are TV entries, as when a one-season show's film or OVA (which
+ * TheTVDB files at season 0, so it sorted first and fronted the show) stops
+ * being a season. Its rows are under the old front at TMDB's season
+ * numbers, and no page reads them there any more.
+ *
+ * A season goes to the one former member shown to be that season on the old
+ * page (placeIsSeason), at its own season 1, and the rating with season 1.
+ * Nothing else can be placed: season 0, a season no member or more than one
+ * is shown to be, and the front's own seasons other than 1 stay where they
+ * are, and the show is reported. Only places up to the member count are
+ * asked: a member TheTVDB numbers past them is among what is reported.
+ */
+function cameApart(
+  group: AnimeGroupRecord,
+  plan: AnimeRegroupPlan,
+  placeIsSeason?: PlaceIsSeason
+): void {
+  const show = group.id
+  for (let season = 1; placeIsSeason && season <= group.members.length; season++) {
+    const owners = group.members.filter((member) => placeIsSeason(show, member, season))
+    if (owners.length !== 1 || owners[0] === show) continue
+    plan.moves.push({ fromId: show, fromSeason: season, toId: owners[0], toSeason: 1 })
+    if (season === 1) plan.ratings.push({ fromId: show, toId: owners[0] })
+  }
+  plan.left.push({
+    id: show,
+    why: 'its show came apart; rows at a season no former member is shown to be stay under it'
+  })
 }
 
 /**

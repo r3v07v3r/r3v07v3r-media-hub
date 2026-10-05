@@ -457,15 +457,17 @@ at its place.
   before this change has no kinds, so the change takes effect with the
   next crawl, within six hours of the update.
 - A show whose real seasons Kitsu lists as ONAs comes apart: each such
-  season is a title of its own. That follows the rule as approved, and is
-  the price of not guessing which web releases are seasons.
+  season is a title of its own. Kitsu's kind is the only signal there is,
+  and telling which web releases are seasons would be a guess.
 
 The change reaches watch history the way any change of grouping does
 ("When the grouping changes", below). On a show numbered by its members,
 the rows kept for a film at its season go back under the film's own id, and
 the seasons after it close the gap. On a show numbered by TMDB, the rows
 were TMDB's seasons and stay at their numbers; where the film fronted the
-show, they move to the id that fronts the series now.
+show, they move to the id that fronts the series now. Where the film
+fronted a show of one season, there is no show left: that season's rows go
+to the season's own entry.
 
 ### A later season under its own id
 
@@ -566,7 +568,21 @@ What moves depends on how the show's page numbers its seasons:
   Only a new id in front is followed, with the season numbers kept, and
   only when both ids map to the same series. That includes a front that is
   in no show any more (a film that used to sort first), when the rest of
-  its show is all fronted by one id of the same series.
+  its show is all fronted by one id of the same series. A front that was in
+  a show numbered by its members goes the same way for its specials and
+  its rating.
+- **A show with a TheTVDB mapping that comes apart**, every member standing
+  alone (one TV season left once a film or an OVA stops being one, or a
+  second season Kitsu calls an ONA): each TMDB season under the old front
+  goes to the one former member whose own TheTVDB season it is, as that
+  entry's own episodes, and the rating goes with season 1. Season 0, and a
+  season no member can be shown to be, stay where they are and the log
+  names the show.
+- **A later season whose place becomes its season** on a show numbered by
+  TMDB (a film before it left, so its place moved down to its TheTVDB
+  season) opened and saved as itself until then, so its rows are under its
+  own id. From now on it opens as the show and the library does not list
+  it, so those rows and its rating move to the show at its season.
 - **Anything else is left where it is**, and named in the log: a show that
   gained or lost its mapping between two runs, or one whose lookup has
   never answered. A wrong move puts rows on another season's, where the
