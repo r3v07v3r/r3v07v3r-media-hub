@@ -40,6 +40,37 @@ export function normalizeUpdateChannel(value: unknown): UpdateChannel {
 }
 
 /**
+ * Whether the browse pages start with Hide Disliked on. On unless the
+ * person turned it off: a title marked Not interested is one they asked
+ * not to be shown, and leaving it in every grid made the dislike visible
+ * only in the recommendation rows. The pages keep their own toggle to
+ * show disliked titles again (categoryFilters.ts).
+ */
+export function hideDislikedDefault(settings: Record<string, unknown>): boolean {
+  return settings.hideDislikedDefault !== false
+}
+
+/**
+ * The one-time upgrade that brings Hide Disliked's new default to installs
+ * that already had false stored: switched off in Settings, or written by an
+ * earlier version's sign-out, which saved the old default of off. The
+ * stored false is turned into true once, and hideDislikedDefaultMigrated
+ * records that it has happened, so a person who turns it off again from
+ * here on keeps their choice. The settings to write, or null when the
+ * upgrade has already run.
+ */
+export function upgradeHideDislikedDefault<T extends Record<string, unknown>>(
+  settings: T
+): (T & { hideDislikedDefaultMigrated: true }) | null {
+  if (settings.hideDislikedDefaultMigrated === true) return null
+  const upgraded = { ...settings, hideDislikedDefaultMigrated: true as const }
+  if (settings.hideDislikedDefault === false) {
+    return { ...upgraded, hideDislikedDefault: true }
+  }
+  return upgraded
+}
+
+/**
  * Projects the raw persisted settings object down to the fields safe to
  * expose to the renderer. `settings` is the raw settings-store record
  * (shape defined by settingsStore.ts), loosely typed here since untrusted/
@@ -85,7 +116,7 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
       Number(settings.connectionSpeedMbps) > 0 ? Number(settings.connectionSpeedMbps) : undefined,
     hideWatchedDefault: settings.hideWatchedDefault === true,
     hideCompletedDefault: settings.hideCompletedDefault === true,
-    hideDislikedDefault: settings.hideDislikedDefault === true,
+    hideDislikedDefault: hideDislikedDefault(settings),
     // Re-normalized on the way out, not just on the way in: what's on disk
     // was written by some earlier version of this app, and the renderer
     // renders this straight into the Settings pane. These two are what was
@@ -105,8 +136,23 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     // Absent means on, for the same reason storeMedia's absence means
     // yes: every install that had the one-way pull is somebody who
     // connected an account to keep things in step.
-    watchlistTwoWay: settings.watchlistTwoWay !== false
+    watchlistTwoWay: settings.watchlistTwoWay !== false,
+    scrobbleEnabled: scrobblingEnabled(settings)
   }
+}
+
+/**
+ * Whether the player's scrobbles go out at all. Absent means no.
+ *
+ * A finished episode already reaches Simkl and Trakt as a history add at
+ * 80%. Scrobbles on top of that are a start, a stop and a pause and resume
+ * pair for every pause, per service, and Simkl counts each one against the
+ * account's 500 requests a day, which a phone linked to this desktop draws
+ * on too. So they are something to ask for, not something every install
+ * does by default.
+ */
+export function scrobblingEnabled(settings: { scrobbleEnabled?: unknown } = {}): boolean {
+  return settings.scrobbleEnabled === true
 }
 
 // Whether the shader files are on disk is anime4kInstall.ts's to answer,
@@ -252,7 +298,9 @@ export function logoutSettings(settings: Record<string, unknown> = {}): Pick<
   // Raw fields again (the public shape folds them into `anime4k`): a device
   // preference like videoScaling beside it — the shader files stay on this
   // machine through a logout, so the choice to use them should too.
-  Partial<{ anime4kEnabled: boolean; anime4kMode: string }> {
+  Partial<{ anime4kEnabled: boolean; anime4kMode: string }> &
+  // Raw-settings field: see upgradeHideDislikedDefault.
+  Partial<{ hideDislikedDefaultMigrated: boolean }> {
   return {
     theme: normalizeTheme(settings.theme),
     updateChannel: normalizeUpdateChannel(settings.updateChannel),
@@ -288,7 +336,7 @@ export function logoutSettings(settings: Record<string, unknown> = {}): Pick<
       Number(settings.connectionSpeedMbps) > 0 ? Number(settings.connectionSpeedMbps) : undefined,
     hideWatchedDefault: settings.hideWatchedDefault === true,
     hideCompletedDefault: settings.hideCompletedDefault === true,
-    hideDislikedDefault: settings.hideDislikedDefault === true,
+    hideDislikedDefault: hideDislikedDefault(settings),
     // Survives logout with the other device preferences: which machine on
     // your own network runs your own models has nothing to do with which
     // TorBox/Simkl account was signed in. Having turned local AI off is the
@@ -333,6 +381,10 @@ export function logoutSettings(settings: Record<string, unknown> = {}): Pick<
     // still gets to make the call exactly once.
     ...(typeof settings.setupComplete === 'boolean'
       ? { setupComplete: settings.setupComplete }
-      : {})
+      : {}),
+    // Kept with the choice it protects. Dropping it would let the next
+    // launch's upgrade turn a Hide Disliked switched off after the upgrade
+    // back on.
+    ...(settings.hideDislikedDefaultMigrated === true ? { hideDislikedDefaultMigrated: true } : {})
   }
 }

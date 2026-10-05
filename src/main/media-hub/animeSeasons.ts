@@ -60,7 +60,7 @@
 // tracks real release order closely enough — as the last resort when
 // neither external source has anything to say.
 
-import type { CatalogItem, Episode } from '../../shared/media-hub/types'
+import type { AnimeTimelineEntry, CatalogItem, Episode } from '../../shared/media-hub/types'
 import { animeSeasonMatchesPage, animeSeasonOf } from '../../shared/media-hub/serviceIds'
 import { fetchJson } from './httpClient'
 import { mapWithLimit, type TaskPriority } from './taskScheduler'
@@ -349,6 +349,17 @@ async function kitsuSequelEdges(kitsuId: string, priority: TaskPriority): Promis
  * their ids live on the canonical item's groupedIds instead, for
  * buildGroupedAnimeVideos to fetch on demand when that title's detail page
  * is actually opened.
+ *
+ * Only TV entries become seasons (isSeasonEntry). Until Kitsu's kind of
+ * entry was read, a film or an OVA linked to a show was merged into it as a
+ * numbered season: it took a season's place, on a show numbered by TMDB
+ * usually showed TMDB's season of that number instead of itself, and
+ * dropped out of the story panel as part of the show. Such an entry now
+ * stays in the returned array as a title of its own, and the show lists it
+ * in groupedExtras. A grouping that changes this way reaches watch history
+ * through the ledger like any other (animeRegroup.ts): on a show numbered by
+ * its members, the rows kept for a film at its season go back under the
+ * film's own id; on one numbered by TMDB they were TMDB's seasons and stay.
  */
 export async function groupAnimeCatalog(
   items: CatalogItem[],
@@ -477,10 +488,14 @@ export async function groupAnimeCatalog(
     }
   }
 
-  const groups = new Map<
-    number,
-    { item: CatalogItem; season: number | null; anilistOrderKey: number | null }[]
-  >()
+  // Every item that the evidence above links together is one franchise; its
+  // TV entries are the show's seasons. A film, an OVA, an ONA, a special or
+  // a music video is not a season: it stays a title of its own, and the show
+  // names it in groupedExtras for its page to list between the seasons. It
+  // still links the seasons on either side of it — a first season whose only
+  // recorded sequel is a film, and the film's own sequel the second season,
+  // are one show — so what changes is who is a member, not what joins them.
+  const groups = new Map<number, GroupMember[]>()
   for (let i = 0; i < items.length; i++) {
     const root = find(i)
     const list = groups.get(root) || []
@@ -492,39 +507,81 @@ export async function groupAnimeCatalog(
     groups.set(root, list)
   }
 
+  // Each franchise's card, by its root, built when its root is first met
+  // below; null for one that is not a merged show.
+  const shows = new Map<number, CatalogItem | null>()
+  const showOf = (root: number): CatalogItem | null => {
+    if (!shows.has(root)) shows.set(root, mergedShow(groups.get(root) || []))
+    return shows.get(root) ?? null
+  }
+  // In the crawl's own order, as before: a show takes the place of the first
+  // of its seasons the crawl met, and every title that is not a season of a
+  // show keeps its own place.
   const result: CatalogItem[] = []
-  for (const group of groups.values()) {
-    if (group.length === 1) {
-      result.push(group[0].item)
+  const placed = new Set<number>()
+  for (let i = 0; i < items.length; i++) {
+    const root = find(i)
+    const show = showOf(root)
+    if (!show || !isSeasonEntry(items[i])) {
+      result.push(items[i])
       continue
     }
-    group.sort((a, b) => {
-      // Tier 1: a real TheTVDB season number, when both sides have one.
-      if (a.season !== null && b.season !== null) return a.season - b.season
-      if (a.season !== null) return -1
-      if (b.season !== null) return 1
-      // Tier 2: AniList's own broadcast season+year — a real chronological
-      // signal, closer to the truth than Kitsu's upload-order id below —
-      // for the members TheTVDB couldn't season-number but AniList could
-      // still place on a timeline.
-      if (a.anilistOrderKey !== null && b.anilistOrderKey !== null) {
-        return a.anilistOrderKey - b.anilistOrderKey
-      }
-      if (a.anilistOrderKey !== null) return -1
-      if (b.anilistOrderKey !== null) return 1
-      // Tier 3: last resort — Kitsu ids are assigned roughly in upload
-      // order, which in practice tracks real release order for sequels
-      // closely enough to use once nothing else is known.
-      return Number(a.item.id.replace(/^kitsu:/, '')) - Number(b.item.id.replace(/^kitsu:/, ''))
-    })
-    const [canonical, ...siblings] = group
-    result.push({
-      ...canonical.item,
-      groupedIds: siblings.map((s) => s.item.id),
-      episodeCounts: combineGroupEpisodeCounts(group.map((g) => g.item))
-    })
+    if (placed.has(root)) continue
+    placed.add(root)
+    result.push(show)
   }
   return result
+}
+
+interface GroupMember {
+  item: CatalogItem
+  season: number | null
+  anilistOrderKey: number | null
+}
+
+/**
+ * Whether an entry can be a season of a merged show: a TV entry, or one
+ * whose kind is not known. Unknown counts as TV because every catalog
+ * cached before the kind was read has none, and grouping those as they
+ * were grouped is better than taking every show apart until the next crawl.
+ */
+export function isSeasonEntry(item: Pick<CatalogItem, 'subtype'>): boolean {
+  return !item.subtype || item.subtype === 'tv'
+}
+
+/** One franchise's card: its TV entries in season order, the first in front
+ *  — or null when fewer than two of its entries are seasons. */
+function mergedShow(group: readonly GroupMember[]): CatalogItem | null {
+  const seasons = group.filter((member) => isSeasonEntry(member.item))
+  if (seasons.length < 2) return null
+  seasons.sort((a, b) => {
+    // Tier 1: a real TheTVDB season number, when both sides have one.
+    if (a.season !== null && b.season !== null) return a.season - b.season
+    if (a.season !== null) return -1
+    if (b.season !== null) return 1
+    // Tier 2: AniList's own broadcast season+year — a real chronological
+    // signal, closer to the truth than Kitsu's upload-order id below —
+    // for the members TheTVDB couldn't season-number but AniList could
+    // still place on a timeline.
+    if (a.anilistOrderKey !== null && b.anilistOrderKey !== null) {
+      return a.anilistOrderKey - b.anilistOrderKey
+    }
+    if (a.anilistOrderKey !== null) return -1
+    if (b.anilistOrderKey !== null) return 1
+    // Tier 3: last resort — Kitsu ids are assigned roughly in upload
+    // order, which in practice tracks real release order for sequels
+    // closely enough to use once nothing else is known.
+    return Number(a.item.id.replace(/^kitsu:/, '')) - Number(b.item.id.replace(/^kitsu:/, ''))
+  })
+  const [canonical, ...siblings] = seasons
+  const extras = group.filter((member) => !isSeasonEntry(member.item))
+  return {
+    ...canonical.item,
+    groupedIds: siblings.map((s) => s.item.id),
+    episodeCounts: combineGroupEpisodeCounts(seasons.map((g) => g.item)),
+    seasonStarts: seasons.map((g) => String(g.item.releaseDate || '')),
+    ...(extras.length ? { groupedExtras: extras.map((g) => g.item.id) } : {})
+  }
 }
 
 /**
@@ -608,6 +665,15 @@ let animeGroupIndex: Map<string, string[]> | null = null
 /** See animeGroupIndex's own doc — built together in one pass since both read the same cached catalog blob. */
 let animeGroupPositionIndex: Map<string, { id: string; season: number }> | null = null
 
+/** Each merged show's combined totals (groupAnimeCatalog's episodeCounts),
+ *  by the id fronting it. Built with the two above, from the same blob. */
+let animeShowTotalsIndex: Map<string, { totalSeasons: number; totalEpisodes: number }> | null = null
+
+/** For each merged show: its seasons' start dates and its groupedExtras'
+ *  own catalog entries. Built with the rest, from the same blob, where the
+ *  extras are titles of their own. */
+let animeShowPartsIndex: Map<string, { starts: string[]; extras: CatalogItem[] }> | null = null
+
 /** How many titles the catalog the two indexes were built from held. Zero
  *  is "no catalog", which is not the same answer as "a catalog with no
  *  merged shows" — see currentAnimeGroups. */
@@ -673,6 +739,8 @@ export function animeGroupingReady(): boolean {
 export function invalidateAnimeGroupIndex(): void {
   animeGroupIndex = null
   animeGroupPositionIndex = null
+  animeShowTotalsIndex = null
+  animeShowPartsIndex = null
   animeLaterSeasonIndex = null
 }
 
@@ -729,8 +797,146 @@ function buildAnimeGroupIndexes(): void {
   const { siblings, positions } = animeGroupIndexesOf(items)
   animeGroupIndex = siblings
   animeGroupPositionIndex = positions
+  animeShowTotalsIndex = new Map()
+  animeShowPartsIndex = new Map()
+  const byId = new Map(items.map((item) => [String(item.id), item] as const))
+  for (const item of items) {
+    if (item.groupedIds?.length && item.episodeCounts) {
+      animeShowTotalsIndex.set(String(item.id), item.episodeCounts)
+    }
+    if (item.groupedIds?.length) {
+      animeShowPartsIndex.set(String(item.id), {
+        starts: item.seasonStarts ?? [],
+        extras: (item.groupedExtras ?? [])
+          .map((id) => byId.get(String(id)))
+          .filter((extra): extra is CatalogItem => Boolean(extra))
+      })
+    }
+  }
   animeGroupIndexSize = items.length
   animeLaterSeasonIndex = null
+}
+
+/**
+ * Index rows given what their show is now: each anime row that fronts a
+ * merged show carries its siblings and the show's totals, as the catalog's
+ * own card for it does. Anything else is returned as it is.
+ *
+ * The index is written from the raw crawl, before grouping, so a show's row
+ * knows only its first season: one season, that season's episodes. The grid,
+ * search and My Stuff cards are drawn from those rows, and a show's season
+ * count is what its card says about it (the "N seasons" chip). `showOf` is
+ * the grouping, handed in so this can be tested without a database.
+ *
+ * `showOf` answers null for a title the grouping knows fronts no show, and
+ * undefined when there is no grouping to ask. A row that fronts no show
+ * keeps its own episodes and is given one season: a former front (a film
+ * that sorted first, until films stopped being seasons) keeps the show's
+ * totals in its index row, written when its merged page was opened, until
+ * the next crawl rewrites it, and its card would say "N seasons" until then.
+ */
+export function withShowTotals(
+  items: readonly CatalogItem[],
+  showOf: (
+    id: string
+  ) =>
+    | { groupedIds: string[]; episodeCounts?: { totalSeasons: number; totalEpisodes: number } }
+    | null
+    | undefined
+): CatalogItem[] {
+  return items.map((item) => {
+    if (item.type !== 'anime') return item
+    const show = showOf(String(item.id))
+    if (show === null || (show && !show.groupedIds.length)) {
+      if (!item.groupedIds?.length && (item.episodeCounts?.totalSeasons ?? 1) <= 1) return item
+      const rest = { ...item }
+      delete rest.groupedIds
+      if (rest.episodeCounts) rest.episodeCounts = { ...rest.episodeCounts, totalSeasons: 1 }
+      return rest
+    }
+    if (!show) return item
+    return {
+      ...item,
+      groupedIds: show.groupedIds,
+      episodeCounts: show.episodeCounts ?? {
+        totalSeasons: show.groupedIds.length + 1,
+        totalEpisodes: item.episodeCounts?.totalEpisodes ?? 0
+      }
+    }
+  })
+}
+
+/**
+ * What a merged show's page lists beside its seasons: each season's start
+ * date (front first, as seasonStarts) and the films, OVAs and specials the
+ * grouping filed with it, as their own catalog entries. Undefined for
+ * anything that is not a merged show.
+ */
+export function animeShowParts(
+  showId: string
+): { starts: string[]; extras: CatalogItem[] } | undefined {
+  if (!animeShowPartsIndex) buildAnimeGroupIndexes()
+  return animeShowPartsIndex!.get(String(showId))
+}
+
+/**
+ * The parts of the show `showId` fronts, as its page lists them: each
+ * season, named by its own index row (every season keeps one) and dated by
+ * the grouping's seasonStarts, then each film, OVA or special filed with it
+ * (animeShowParts). A title that is not a merged show is its one part, with
+ * no season.
+ */
+export function animeShowTimelineParts(showId: string): AnimeTimelineEntry[] {
+  const members = [String(showId), ...(groupedIdsFor(showId) ?? [])]
+  const rows = new Map<string, CatalogItem>()
+  for (const item of getDatabase().indexByIds(members).items) {
+    if (item.type === 'anime') rows.set(String(item.id), item)
+  }
+  const parts = animeShowParts(showId)
+  const seasonItem = (memberId: string, index: number): CatalogItem => {
+    const row = rows.get(memberId)
+    return {
+      ...(row ?? blankAnime(memberId)),
+      // The index row has a year and no date; the grouping kept the date.
+      releaseDate: parts?.starts[index] || row?.year || ''
+    }
+  }
+  if (members.length === 1) return [{ item: seasonItem(members[0], 0) }]
+  return [
+    ...members.map((memberId, index) => ({ item: seasonItem(memberId, index), season: index + 1 })),
+    ...(parts?.extras ?? []).map((item) => ({ item }))
+  ]
+}
+
+function blankAnime(id: string): CatalogItem {
+  return {
+    id,
+    title: '',
+    type: 'anime',
+    poster: '',
+    background: '',
+    logo: '',
+    year: '',
+    description: '',
+    rating: '',
+    runtime: '',
+    genres: [],
+    videos: [],
+    trailers: []
+  }
+}
+
+/** withShowTotals over the catalog's current grouping. A raw catalog, the
+ *  minutes before a new crawl is grouped, says nothing about who fronts
+ *  what (animeGroupingReady), so its answer is undefined, not null. */
+export function withCurrentShowTotals(items: readonly CatalogItem[]): CatalogItem[] {
+  if (!animeGroupIndex) buildAnimeGroupIndexes()
+  const grouped = animeGroupingReady()
+  return withShowTotals(items, (id) => {
+    const groupedIds = animeGroupIndex!.get(id)
+    if (groupedIds) return { groupedIds, episodeCounts: animeShowTotalsIndex?.get(id) }
+    return grouped ? null : undefined
+  })
 }
 
 export function groupedIdsFor(catalogId: string): string[] | undefined {
@@ -846,10 +1052,10 @@ export function laterSeasonOf(catalogId: string): { id: string; season: number }
  * included: a member whose place is not its season on the show's page keeps
  * its own rows, and is not in here.
  *
- * For the caller that cannot ask one id at a time. The library's
- * watch-state filters run inside the index query, which needs the whole
- * mapping to count a later season's viewings where they are kept
- * (database.ts's indexQuery).
+ * For the caller that cannot ask one id at a time. The library grid and
+ * search leave these rows out inside the index query, which needs the whole
+ * mapping (database.ts's LATER_SEASON_SQL), and a card that names one counts
+ * its completion where its viewings are kept (indexByIds).
  *
  * Kept between calls. The gate reads two cache rows a member — 8 ms for the
  * 698 members of a real catalog — and that query is a keystroke-driven
@@ -862,6 +1068,41 @@ export function laterSeasons(): ReadonlyMap<string, { id: string; season: number
     animeLaterSeasonIndex = laterSeasonsOf(animeGroupPositionIndex!, seasonMatchesPage)
   }
   return animeLaterSeasonIndex
+}
+
+/**
+ * A search answer with each later season of a merged show (an id in
+ * `later`) given as its show: the show takes the place of the first such
+ * season, and anything listed twice is listed once.
+ *
+ * The library grid leaves later seasons out (database.ts's
+ * LATER_SEASON_SQL), and a search does too, but a search that only dropped
+ * them would find nothing for a later season's own name, "Shippuuden" say,
+ * when the show it belongs to is in the library. `shows` are the shows those
+ * seasons belong to, as the index has them; a later season whose show is in
+ * neither `items` nor `shows` is left out.
+ */
+export function foldLaterSeasons(
+  items: readonly CatalogItem[],
+  later: ReadonlyMap<string, { id: string; season: number }>,
+  shows: readonly CatalogItem[]
+): CatalogItem[] {
+  const showById = new Map<string, CatalogItem>()
+  for (const show of [...shows, ...items]) {
+    if (show.type === 'anime' && !showById.has(String(show.id))) {
+      showById.set(String(show.id), show)
+    }
+  }
+  const seen = new Set<string>()
+  const out: CatalogItem[] = []
+  for (const item of items) {
+    const place = item.type === 'anime' ? later.get(String(item.id)) : undefined
+    const entry = place ? showById.get(place.id) : item
+    if (!entry || seen.has(String(entry.id))) continue
+    seen.add(String(entry.id))
+    out.push(entry)
+  }
+  return out
 }
 
 /**

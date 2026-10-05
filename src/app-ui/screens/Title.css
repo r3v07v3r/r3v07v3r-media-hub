@@ -184,6 +184,22 @@
   color: var(--accent-green);
 }
 
+/* Not interested, beside My List: the same square button, orange once set. */
+.title-screen__dislike[aria-pressed='true'] {
+  border-color: var(--accent-orange);
+  color: var(--accent-orange);
+}
+
+/* The line after Not interested, with its one-tap Undo. */
+.title-screen__undo {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.title-screen__undo button {
+  padding: 0.25rem 0.75rem;
+}
+
 .title-screen__overview {
   grid-area: overview;
 }

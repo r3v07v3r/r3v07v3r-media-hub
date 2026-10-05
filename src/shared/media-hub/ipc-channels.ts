@@ -67,6 +67,8 @@ export const MEDIA_HUB_CHANNELS = {
   trackingPlannedReport: 'mediahub:tracking:planned-report',
   /** Turn two-way watchlist sync on or off. */
   trackingSetTwoWay: 'mediahub:tracking:set-two-way',
+  /** Turn the player's scrobbles to Simkl and Trakt on or off. */
+  trackingSetScrobble: 'mediahub:tracking:set-scrobble',
   /** Named lists somebody built in Trakt or Simkl, read-only. */
   listsRemote: 'mediahub:lists:remote',
   /** The caller's own cached titles, and the sharing control over them. */
@@ -150,6 +152,10 @@ export const MEDIA_HUB_CHANNELS = {
   recommendationsChanged: 'mediahub:recommendations:changed', // push event
   trackingList: 'mediahub:tracking:list',
   trackingToggle: 'mediahub:tracking:toggle',
+  /** The Undo on the "off your plan" toast: puts back the tracked row the
+   *  toggle just removed, its date, episode baseline and details as they
+   *  were, rather than planning the title afresh. See tracking.ts. */
+  trackingRestorePlan: 'mediahub:tracking:restore-plan',
   /** Bring this device up to date with the tracking services: the watchlist
    *  pull, then Simkl's watched history taken into the local record. Asked
    *  for by the phone and TV app, which has no review panel to settle a
@@ -170,6 +176,11 @@ export const MEDIA_HUB_CHANNELS = {
   trackingListPositions: 'mediahub:tracking:list-positions',
   trackingReconcileCheck: 'mediahub:tracking:reconcile-check',
   trackingReconcileResolve: 'mediahub:tracking:reconcile-resolve',
+  /** The review panel's shows section: what was merged show by show (see
+   *  main/media-hub/episodeSync.ts), and one choice on one show. */
+  trackingEpisodeReview: 'mediahub:tracking:episode-review',
+  trackingEpisodeDecide: 'mediahub:tracking:episode-decide',
+  trackingEpisodeReviewChanged: 'mediahub:tracking:episode-review-changed', // push event — a pass after launch changed the shows section
   trackingReconcileSync: 'mediahub:tracking:reconcile-sync', // push event — a queued "keep local" batch went out (or didn't)
   /** Pushed when MAIN wrote library rows of its own accord — a background
    *  watchlist pull, a MAL reconcile, an id repair, the household title

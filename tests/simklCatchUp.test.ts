@@ -9,7 +9,8 @@
 // second pass over the same library changes nothing — is a property of the
 // rules and importWatched together. Then the pass that carries them out
 // (simklCatchUp.ts), with the services faked: what it asks Simkl for, and
-// what it refuses to write when something moves underneath it.
+// what it refuses to write when something moves underneath it. Last, the
+// activities answer the desktop's launch check borrows from the catch-up.
 //
 // Run with: npx tsx tests/simklCatchUp.test.ts
 
@@ -23,6 +24,8 @@ import { continueWatchingList } from '../src/main/media-hub/core'
 import {
   fillTrackedArtwork,
   newCatchUpMemory,
+  noteSimklActivities,
+  recentSimklActivities,
   runCatchUp,
   type CatchUpDeps,
   type CatchUpMemory
@@ -1077,7 +1080,7 @@ function harness(): Harness {
 /** The calls one pass made, with the log cleared for the next. */
 async function passOf(
   h: Harness,
-  options: { force?: boolean } = {}
+  options: { force?: boolean; leaveListsToJob?: boolean } = {}
 ): Promise<{ report: CatchUpReport; calls: string[] }> {
   h.calls.length = 0
   const report = await runCatchUp(h.deps, h.memory, options)
@@ -1123,6 +1126,81 @@ async function passes(): Promise<void> {
       ])
     }
   )
+
+  await checkAsync(
+    'what each kind wrote is handed on for the record of what was merged',
+    async () => {
+      // episodeSync.ts's noteArrivals keeps it per show for the desktop's
+      // review panel; the phone, which has no panel, keeps it all the same.
+      const h = harness()
+      const merged: string[] = []
+      h.deps.merged = (rows) => {
+        for (const row of rows) merged.push(`${row.id}:${row.season ?? '-'}:${row.episode ?? '-'}`)
+      }
+      await passOf(h)
+      assert.deepEqual(merged.sort(), [
+        'kitsu:46474:1:1',
+        'tt0000001:1:1',
+        'tt0000001:1:2',
+        'tt0000002:-:-'
+      ])
+      // Nothing new next time, nothing handed on.
+      merged.length = 0
+      h.clock += 3 * MINUTE
+      await passOf(h)
+      assert.deepEqual(merged, [])
+    }
+  )
+
+  await checkAsync(
+    'a viewing whose removal is still owed to Simkl is not taken back in',
+    async () => {
+      // Episode 2 was un-marked here and the removal failed, so Simkl still
+      // lists it. The retry is owed (historyRetry.ts); until it lands, the
+      // catch-up must not undo the un-mark.
+      const h = harness()
+      h.deps.removalsOwed = () => new Set(['tt0000001:1:2'])
+      await passOf(h)
+      const keys = h.db
+        .history()
+        .filter((row) => row.id === 'tt0000001')
+        .map((row) => `${row.season}:${row.episode}`)
+      assert.deepEqual(keys, ['1:1'])
+    }
+  )
+
+  await checkAsync(
+    'a film queued for removal by "Use Local" in the review panel is not imported',
+    async () => {
+      // tt0000002 is watched at Simkl and not here; the person ruled for
+      // this side, and the removal has not reached Simkl yet. Imported, the
+      // next flush would find both sides agreeing and tell Trakt "watched".
+      const h = harness()
+      h.deps.removalsOwed = () => new Set(['tt0000002:movie:movie'])
+      const { report } = await passOf(h)
+      assert.equal(
+        h.db.history().some((row) => row.id === 'tt0000002'),
+        false
+      )
+      assert.equal(report.plays, 3, 'the episodes still land')
+    }
+  )
+
+  await checkAsync('with Trakt connected, its history comes last and counts', async () => {
+    const h = harness()
+    h.deps.traktHistory = async () => {
+      h.calls.push('trakt-history')
+      return 3
+    }
+    const without = await passOf(h)
+    assert.equal(without.calls.includes('trakt-history'), false, 'not connected, not asked')
+    h.trakt = 'trakt-1'
+    h.clock += 3 * MINUTE
+    const { report, calls } = await passOf(h)
+    assert.equal(calls.at(-2), 'trakt-history')
+    assert.equal(calls.at(-1), 'announce')
+    assert.equal(report.plays, 3)
+  })
 
   await checkAsync('nothing moved at Simkl: exactly one request, and nothing written', async () => {
     const h = harness()
@@ -1640,6 +1718,26 @@ async function passes(): Promise<void> {
     assert.deepEqual((await passOf(h, { force: true })).calls, ['planned'], 'and when forced')
   })
 
+  await checkAsync(
+    'on the desktop the Trakt and MyAnimeList lists are left to the job unless Simkl moved',
+    async () => {
+      // Focus brings a pass far more often than a phone resumes, and those
+      // two lists have no gate: the half-hourly job reads them.
+      const h = harness()
+      h.trakt = 'trakt-1'
+      const first = await passOf(h, { leaveListsToJob: true })
+      assert.equal(first.calls.includes('planned'), true, 'Simkl moved: read with it')
+      h.clock += 11 * MINUTE
+      const quiet = await passOf(h, { leaveListsToJob: true })
+      assert.deepEqual(quiet.calls, ['activities'], 'nothing moved at Simkl: no list read')
+      // Without Simkl, the desktop never reads them here at all.
+      const alone = harness()
+      alone.account = ''
+      alone.trakt = 'trakt-1'
+      assert.deepEqual((await passOf(alone, { leaveListsToJob: true })).calls, [])
+    }
+  )
+
   await checkAsync('the floor and a running pass are per profile', async () => {
     const h = harness()
     const first = await passOf(h)
@@ -1796,6 +1894,23 @@ async function passes(): Promise<void> {
     assert.equal(await fillTrackedArtwork(PASS_PROFILE, deps), 1)
     assert.deepEqual(asked, ['tt0000001'])
     assert.equal(db.tracked()[0]?.poster, 'https://p/x.jpg')
+  })
+
+  console.log('recentSimklActivities')
+
+  await checkAsync('the launch check reuses the activities the catch-up just read', async () => {
+    // The desktop's launch check runs right after the catch-up and asks
+    // Simkl the same question; a minute-old answer for the same account is
+    // the same answer, and saves a request of the 500 a day.
+    const at = Date.parse('2026-10-05T12:00:00Z')
+    assert.equal(recentSimklActivities('simkl-1', 60_000, at), undefined, 'nothing read yet')
+    noteSimklActivities('simkl-1', { movies: { all: 'm1' } }, at)
+    assert.deepEqual(recentSimklActivities('simkl-1', 60_000, at + 30_000), {
+      movies: { all: 'm1' }
+    })
+    assert.equal(recentSimklActivities('simkl-1', 60_000, at + 61_000), undefined, 'too old')
+    assert.equal(recentSimklActivities('simkl-2', 60_000, at + 1), undefined, 'another account')
+    assert.equal(recentSimklActivities('', 60_000, at + 1), undefined, 'not connected')
   })
 }
 

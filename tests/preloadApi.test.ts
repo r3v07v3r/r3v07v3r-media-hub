@@ -107,6 +107,55 @@ check('a request is one invoke carrying exactly the payload the handler reads', 
     args: [{ kind: 'movie', query: 'in time' }]
   })
 
+  // The reporting form is the same channel with one more field, so a caller
+  // that never asks for the report keeps getting the bare list.
+  void api.mediaHub.catalog.searchWithStatus('anime', 'frieren')
+  assert.deepEqual(calls.at(-1), {
+    kind: 'invoke',
+    channel: MEDIA_HUB_CHANNELS.catalogSearch,
+    args: [{ kind: 'anime', query: 'frieren', report: true }]
+  })
+
+  // The scrobble switch carries the same { enabled } shape as the two-way
+  // one beside it, which is what its handler reads.
+  void api.mediaHub.tracking.setScrobble(true)
+  assert.deepEqual(calls.at(-1), {
+    kind: 'invoke',
+    channel: MEDIA_HUB_CHANNELS.trackingSetScrobble,
+    args: [{ enabled: true }]
+  })
+
+  // The desktop's catch-up says to leave the ungated lists to the job; the
+  // handler reads exactly this field.
+  void api.mediaHub.tracking.catchUp({ leaveListsToJob: true })
+  assert.deepEqual(calls.at(-1), {
+    kind: 'invoke',
+    channel: MEDIA_HUB_CHANNELS.trackingCatchUp,
+    args: [{ leaveListsToJob: true }]
+  })
+
+  // A choice on a show row in the review panel: the handler reads id, action
+  // and service from this one object.
+  void api.mediaHub.tracking.episodeDecide({
+    id: 'tt0000001',
+    action: 'here-match-service',
+    service: 'trakt'
+  })
+  assert.deepEqual(calls.at(-1), {
+    kind: 'invoke',
+    channel: MEDIA_HUB_CHANNELS.trackingEpisodeDecide,
+    args: [{ id: 'tt0000001', action: 'here-match-service', service: 'trakt' }]
+  })
+
+  // The Undo of Remove from plan: the card's item, as toggle sends it, on
+  // the restore channel, which puts back the row the toggle removed.
+  void api.mediaHub.tracking.restorePlan({ id: 'tt0000002', type: 'movie', title: 'Dune' })
+  assert.deepEqual(calls.at(-1), {
+    kind: 'invoke',
+    channel: MEDIA_HUB_CHANNELS.trackingRestorePlan,
+    args: [{ id: 'tt0000002', type: 'movie', title: 'Dune' }]
+  })
+
   // No payload means NO argument, not an explicit undefined: a handler that
   // counts its arguments must see the same call it always has.
   void api.mediaHub.bootstrap()
@@ -129,6 +178,15 @@ check('a subscription listens on its channel and its unsubscribe stops it', () =
     channel: MEDIA_HUB_CHANNELS.libraryChanged,
     args: []
   })
+})
+
+check('the shows section of the review panel is pushed on its own channel', () => {
+  const { transport, calls } = recordingTransport()
+  const stop = createApi(transport).mediaHub.tracking.onEpisodeReview(() => {})
+  assert.deepEqual(calls, [
+    { kind: 'on', channel: MEDIA_HUB_CHANNELS.trackingEpisodeReviewChanged, args: [] }
+  ])
+  stop()
 })
 
 check('a pushed payload reaches the subscriber as-is', () => {

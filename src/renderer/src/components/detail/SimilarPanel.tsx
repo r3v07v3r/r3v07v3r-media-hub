@@ -6,6 +6,7 @@ import type { DetailAdapterConfig } from '@renderer/lib/mediaHub/detailAdapters'
 import { resolveArtwork } from '@renderer/lib/artwork'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { Icon } from '@renderer/components/icons/Icon'
+import { useAppState } from '@renderer/context/AppStateContext'
 import styles from './SimilarPanel.module.css'
 
 interface SimilarPanelProps {
@@ -32,6 +33,9 @@ export function SimilarPanel({ status, items, config, onSelect }: SimilarPanelPr
   const scrollerRef = useRef<HTMLUListElement>(null)
   const [canScrollBack, setCanScrollBack] = useState(false)
   const [canScrollForward, setCanScrollForward] = useState(false)
+  // This row is not filtered by Hide Disliked, so a title marked Not
+  // interested is dimmed and named here, the same as on the other cards.
+  const { dislikedIds } = useAppState()
 
   // The global stylesheet hides this rail's scrollbar (see .thin-scroll),
   // and it's overflow-x only — a plain vertical-wheel mouse (no trackpad,
@@ -119,13 +123,17 @@ export function SimilarPanel({ status, items, config, onSelect }: SimilarPanelPr
         <ul className={`${styles.scroller} thin-scroll`} ref={scrollerRef}>
           {items.map((item) => {
             const artwork = resolveArtwork(item)
+            const disliked = dislikedIds.has(item.id)
             return (
-              <li key={item.id} className={styles.cardItem}>
+              <li
+                key={item.id}
+                className={`${styles.cardItem} ${disliked ? styles.cardItemDisliked : ''}`}
+              >
                 <button
                   type="button"
                   className={styles.card}
                   data-media-id={item.id}
-                  aria-label={item.title}
+                  aria-label={disliked ? `${item.title}, not interested` : item.title}
                   onClick={() => onSelect(item)}
                 >
                   <ArtworkImage
@@ -136,6 +144,12 @@ export function SimilarPanel({ status, items, config, onSelect }: SimilarPanelPr
                     className={styles.poster}
                   />
                 </button>
+                {disliked && (
+                  <span className={styles.dislikedNote} aria-hidden="true">
+                    <Icon name="thumbs-down" size={10} />
+                    Not interested
+                  </span>
+                )}
                 <span className={styles.title}>{item.title}</span>
                 <span className={styles.meta}>
                   {item.releaseYear}

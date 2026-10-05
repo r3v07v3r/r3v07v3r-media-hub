@@ -1,7 +1,9 @@
 // Unit tests for the "keep local" push path of the out-of-sync review:
 // the persisted decision queue (src/shared/media-hub/reconcileQueue.ts)
 // and the two Simkl helpers it pushes through
-// (src/main/media-hub/simkl.ts's batchHistoryPayload/unmatchedCatalogIds).
+// (src/main/media-hub/simkl.ts's batchHistoryPayload/unmatchedCatalogIds),
+// and which decisions a flush passes on to Trakt: every one Simkl confirmed
+// or that had already settled, which is how "Use Simkl" reaches Trakt.
 // Run with: npx tsx tests/reconcileSync.test.ts   (or npm.cmd test)
 //
 // Both modules are imported directly because both are deliberately
@@ -13,6 +15,9 @@ import type { PendingWatchStatusPush } from '../src/shared/media-hub/types'
 import {
   applyPushOutcome,
   queuePendingPush,
+  reviewRemovalsOwed,
+  splitForFlush,
+  traktFollowUps,
   withPushedRemoteState
 } from '../src/shared/media-hub/reconcileQueue'
 import {
@@ -132,6 +137,72 @@ check('leaves entries nothing was pushed for exactly as they are', () => {
 })
 
 // --- batched payloads ------------------------------------------------------
+
+// --- what a flush sends, and who else hears of it --------------------------
+//
+// Trakt is told the value a decision settled on, whether Simkl needed a
+// request for it or not. "Use Simkl" rewrites the local record and queues
+// the decision; the flush then finds local and Simkl agreeing and passes the
+// value to Trakt without asking Simkl anything.
+
+check('an entry local disagrees with is sent; one it agrees with has settled', () => {
+  const { sendable, settled } = splitForFlush(
+    [entry({ id: 'tt1', remoteWatched: false }), entry({ id: 'tt2', remoteWatched: true })],
+    new Set(['tt1', 'tt2']),
+    new Set()
+  )
+  assert.deepEqual(
+    sendable.map((e) => e.id),
+    ['tt1']
+  )
+  assert.deepEqual([...settled], ['tt2'])
+})
+
+check('agreement against a record known to be stale is not settled', () => {
+  const { sendable, settled } = splitForFlush(
+    [entry({ id: 'tt2', remoteWatched: true })],
+    new Set(['tt2']),
+    new Set(['tt2'])
+  )
+  assert.equal(sendable.length, 1)
+  assert.equal(settled.size, 0)
+})
+
+check('a "Use Simkl" decision settles and still reaches Trakt', () => {
+  // Simkl says watched, local said not; the person picked Simkl, so the
+  // local row now exists and the decision is queued with Simkl's value.
+  const queue = queuePendingPush([], entry({ id: 'tt9', remoteWatched: true }))
+  const { sendable, settled } = splitForFlush(queue, new Set(['tt9']), new Set())
+  assert.equal(sendable.length, 0)
+  assert.deepEqual(
+    traktFollowUps(queue, new Set(), settled).map((e) => e.id),
+    ['tt9']
+  )
+  // And it leaves the queue: settled is done with.
+  assert.equal(applyPushOutcome(queue, [...settled], []).queue.length, 0)
+})
+
+check('Trakt hears of confirmed and settled entries, never of failed ones', () => {
+  const queue = [entry({ id: 'tt1' }), entry({ id: 'tt2' }), entry({ id: 'tt3' })]
+  assert.deepEqual(
+    traktFollowUps(queue, new Set(['tt1']), new Set(['tt3'])).map((e) => e.id),
+    ['tt1', 'tt3']
+  )
+})
+
+check('a queued "Use Local" removal is held back from the catch-up', () => {
+  // Unwatched here, watched at Simkl, and the person picked local: until
+  // Simkl takes the removal, the catch-up must not import the film, or the
+  // next flush finds both sides agreeing and tells Trakt "watched".
+  const queue = [
+    entry({ id: 'tt1', remoteWatched: true }),
+    entry({ id: 'tt2', remoteWatched: false }),
+    entry({ id: 'tt3', type: 'series', remoteWatched: true })
+  ]
+  assert.deepEqual([...reviewRemovalsOwed(queue, [])], ['tt1:movie:movie'])
+  // A title the flush gave up on keeps only its id, and is held as well.
+  assert.deepEqual([...reviewRemovalsOwed([], ['tt4'])], ['tt4:movie:movie'])
+})
 
 check('batches many movies into one request body', () => {
   const payload = batchHistoryPayload([

@@ -1,12 +1,14 @@
-// Bringing the phone and TV app up to date with what was watched elsewhere.
+// Bringing a device up to date with what was watched elsewhere.
 //
-// The desktop app learns of a disagreement with Simkl through its review
-// panel, and somebody decides. The phone and TV app have no such panel and
-// nobody to ask: they open, and Continue Watching should already know about
-// the episode watched on the laptop last night. So this pass runs unattended
-// whenever the lite UI asks — on launch, on resume — and it only ever adds:
-// the watchlist pull, then Simkl's watched history taken into the local
-// record, then the shows Simkl says are being watched followed here.
+// The phone and TV app open, and Continue Watching should already know about
+// the episode watched on the laptop last night; the desktop should know
+// about the one watched on the phone. So this pass runs unattended whenever
+// an interface asks — the lite UI on launch and on resume, the desktop on
+// launch and on window focus — and it only ever adds: the watchlist pull,
+// then Simkl's watched history taken into the local record, then the shows
+// Simkl says are being watched followed here. What it cannot settle by
+// adding (Simkl saying a film here is not watched) is left to the desktop's
+// review panel, which runs after it.
 //
 // What it decides to write is simklCatchUpRules.ts, which is pure and tested
 // directly. This is the fetching, the ordering and the writing, and its
@@ -31,7 +33,12 @@
 //    failure costs that kind a retry, never the others their progress, and
 //    never a stamp that would make the next pass skip what was missed.
 
-import type { CatalogItem, CatchUpReport, MediaKind } from '../../shared/media-hub/types'
+import type {
+  CatalogItem,
+  CatchUpReport,
+  ImportedPlay,
+  MediaKind
+} from '../../shared/media-hub/types'
 import type { MediaHubDatabase } from './database'
 import type { HttpError } from './httpClient'
 import { getDatabase } from './dbState'
@@ -84,6 +91,13 @@ export interface CatchUpDeps {
   syncPlanned(gate: SimklGate): Promise<{ added: number; removed: number }>
   /** Ids whose un-plan is still owed to a service (watchlists.idsAwaitingRemoval). */
   awaitingRemoval(): ReadonlySet<string>
+  /** History keys (`id:season:episode`) whose removal Simkl has not taken
+   *  yet: owed after a failed push, still on its way, or a film the review
+   *  panel ruled not watched (tracking.ts's removalsHeldBack). Treated as
+   *  already held, so a viewing un-marked here is not taken back in from
+   *  Simkl before the removal lands. Optional so a test that is not about it
+   *  can leave it out. */
+  removalsOwed?(): ReadonlySet<string>
   /** idBridge.kitsuIdLookup — `answered` is false when nobody could be asked. */
   lookupKitsu(
     service: 'mal' | 'anidb',
@@ -99,6 +113,14 @@ export interface CatchUpDeps {
   announce(): void
   /** Detached artwork fill for tracked rows that have none — see fillTrackedArtwork. */
   artwork(profile: string): void
+  /** Trakt's history since the last pull (traktHistoryPull.ts), behind its
+   *  own gate. Resolves to the viewings it wrote. Run only with Trakt
+   *  connected; optional so a test that is not about it can leave it out. */
+  traktHistory?(): Promise<number>
+  /** The viewings a kind just wrote, for the record of what each pass
+   *  merged (episodeSync.ts's noteArrivals). Optional so a test that is not
+   *  about it can leave it out. */
+  merged?(rows: ImportedPlay[]): void
   /** True while something is playing: nothing may compete with it. */
   busy(): boolean
   now(): number
@@ -226,6 +248,17 @@ function emptyReport(at: number, connected: boolean): CatchUpReport {
   }
 }
 
+export interface CatchUpOptions {
+  /** Skip the two-minute floor: somebody has just linked this device. */
+  force?: boolean
+  /** The desktop's: leave the Trakt and MyAnimeList watchlists, which have
+   *  no gate to ask first, to the half-hourly watch-sync job, and read them
+   *  here only along with Simkl's when Simkl's moved. A desktop window
+   *  gains focus far more often than a phone resumes, and each pass would
+   *  otherwise read both lists again on top of the job's own reads. */
+  leaveListsToJob?: boolean
+}
+
 /**
  * One catch-up pass, or the answer of one that already ran or is running.
  *
@@ -237,7 +270,7 @@ function emptyReport(at: number, connected: boolean): CatchUpReport {
 export function runCatchUp(
   deps: CatchUpDeps,
   memory: CatchUpMemory,
-  options: { force?: boolean } = {}
+  options: CatchUpOptions = {}
 ): Promise<CatchUpReport> {
   const profile = deps.db.activeProfile()
   if (memory.inFlight) {
@@ -262,7 +295,7 @@ export function runCatchUp(
   // name: the pauses that exist to space out idle passes do not apply.
   const fresh = Boolean(options.force) || accounts !== memory.lastAccounts
   if (!fresh && last && deps.now() - memory.lastAt < FLOOR_MS) return Promise.resolve(last)
-  const run = catchUpPass(deps, memory, marks, fresh)
+  const run = catchUpPass(deps, memory, marks, fresh, options.leaveListsToJob === true)
     .catch((error) => {
       // Never thrown to the caller: the screen that asked would only turn
       // it into an error over a row it can draw perfectly well without.
@@ -287,7 +320,9 @@ async function catchUpPass(
   memory: CatchUpMemory,
   marks: ConnectedAccounts,
   /** A forced pass, or the first since the connected accounts changed. */
-  fresh: boolean
+  fresh: boolean,
+  /** CatchUpOptions.leaveListsToJob. */
+  leaveListsToJob: boolean
 ): Promise<CatchUpReport> {
   const { db } = deps
   // Who this pass is FOR, captured before the first wait. Every write below
@@ -417,10 +452,13 @@ async function catchUpPass(
   // The interval paces Trakt and MyAnimeList, which have no gate to ask
   // first. It does not apply to a fresh pass: an account linked a minute
   // after the last pull has a list nobody has read yet, and waiting out the
-  // rest of ten minutes would leave Plan to Watch empty for it.
+  // rest of ten minutes would leave Plan to Watch empty for it. On the
+  // desktop (leaveListsToJob) the half-hourly job reads them instead, and
+  // this pass reads them only when Simkl's moved.
   const pullDue = fresh || startedAt - memory.lastPlannedAt >= PULL_INTERVAL_MS
   const simklMoved = kinds.length > 0 || (report.deferred && pullDue)
-  if (simklMoved || ((marks.trakt || marks.mal) && pullDue)) {
+  const ungatedDue = !leaveListsToJob && Boolean(marks.trakt || marks.mal) && pullDue
+  if (simklMoved || ungatedDue) {
     memory.lastPlannedAt = startedAt
     try {
       const pulled = await deps.syncPlanned({
@@ -525,9 +563,12 @@ async function catchUpPass(
     // underneath the plan between reading the local rows and writing.
     if (moved()) return finish()
     const local = {
-      watchedKeys: new Set(
-        db.history().map((row) => `${row.id}:${row.season ?? 'movie'}:${row.episode ?? 'movie'}`)
-      ),
+      watchedKeys: new Set([
+        ...db
+          .history()
+          .map((row) => `${row.id}:${row.season ?? 'movie'}:${row.episode ?? 'movie'}`),
+        ...(deps.removalsOwed?.() ?? [])
+      ]),
       trackedIds: new Set(db.tracked().map((item) => String(item.id))),
       awaitingRemoval: deps.awaitingRemoval()
     }
@@ -554,6 +595,7 @@ async function catchUpPass(
       report.followed += plan.follow.length
       unplanned += applied.unplanned.length
       unplan = plan.unplan.filter((item) => applied.unplanned.includes(item.id))
+      if (plan.plays.length) deps.merged?.(plan.plays)
     } catch (error) {
       // Nothing landed and nothing is recorded — a title marked seen whose
       // rows never landed would be skipped by every later pass — so the
@@ -600,6 +642,19 @@ async function catchUpPass(
       }
     }
     if (moved()) return finish()
+  }
+
+  // --- Trakt's history, after Simkl's -------------------------------------
+  //
+  // Same place in the order and the same reason: the watchlist pull above
+  // has settled the plan. Trakt asks /sync/last_activities first, so on a
+  // pass where nothing changed there this is one small request.
+  if (marks.trakt && deps.traktHistory) {
+    try {
+      report.plays += await deps.traktHistory()
+    } catch (error) {
+      deps.log('catch-up:trakt', error)
+    }
   }
 
   return finish()
@@ -717,6 +772,30 @@ export async function fillTrackedArtwork(profile: string, deps: ArtworkDeps): Pr
 // The real thing.
 
 const memory = newCatchUpMemory()
+
+/** The last /sync/activities answer a real pass read, and for whom. */
+let lastActivities: { account: string; at: number; payload: unknown } | null = null
+
+/**
+ * The /sync/activities answer the catch-up read for `account` within the
+ * last `maxAgeMs`, if there is one. The desktop's launch check runs right
+ * after the catch-up and asks the same question; reusing the answer saves
+ * one of the 500 requests a day a linked phone shares.
+ */
+export function recentSimklActivities(
+  account: string,
+  maxAgeMs: number,
+  now: number = Date.now()
+): unknown {
+  if (!lastActivities || !account || lastActivities.account !== account) return undefined
+  return now - lastActivities.at <= maxAgeMs ? lastActivities.payload : undefined
+}
+
+/** Records an answer for recentSimklActivities. */
+export function noteSimklActivities(account: string, payload: unknown, at: number): void {
+  lastActivities = { account, at, payload }
+}
+
 const artworkTried = new Set<string>()
 const artworkFailures = new Map<string, number>()
 
@@ -724,22 +803,33 @@ const artworkFailures = new Map<string, number>()
  * The catch-up against the real services and database, with this process's
  * memory. What the lite UI's tracking.catchUp reaches.
  */
-export async function catchUpFromServices(
-  options: { force?: boolean } = {}
-): Promise<CatchUpReport> {
+export async function catchUpFromServices(options: CatchUpOptions = {}): Promise<CatchUpReport> {
   // Lazily, for the reason in this file's header.
-  const [simkl, watchlists, idBridge, seasons, settings, recommendations, bridge, queue, catalog] =
-    await Promise.all([
-      import('./simklClient'),
-      import('./watchlists'),
-      import('./idBridge'),
-      import('./animeSeasons'),
-      import('./settingsStore'),
-      import('./recommendations'),
-      import('./rendererBridge'),
-      import('./titlePushQueue'),
-      import('./catalog')
-    ])
+  const [
+    simkl,
+    watchlists,
+    idBridge,
+    seasons,
+    settings,
+    recommendations,
+    bridge,
+    queue,
+    catalog,
+    trakt,
+    tracking
+  ] = await Promise.all([
+    import('./simklClient'),
+    import('./watchlists'),
+    import('./idBridge'),
+    import('./animeSeasons'),
+    import('./settingsStore'),
+    import('./recommendations'),
+    import('./rendererBridge'),
+    import('./titlePushQueue'),
+    import('./catalog'),
+    import('./traktClient'),
+    import('./tracking')
+  ])
   const deps: CatchUpDeps = {
     db: getDatabase(),
     account: settings.simklAccountMark,
@@ -751,7 +841,12 @@ export async function catchUpFromServices(
     // first catalog crawl, a minute or more of it, so a phone that had just
     // been linked sat on "Updating…" until the crawl was done. They are a
     // handful of requests, and nothing runs at all while something plays.
-    activities: () => simkl.simklActivities('visible'),
+    activities: async () => {
+      const account = settings.simklAccountMark()
+      const payload = await simkl.simklActivities('visible')
+      noteSimklActivities(account, payload, Date.now())
+      return payload
+    },
     library: (kind, since) => simkl.simklLibrary(kind, 'visible', since),
     // Through the same record the half-hourly job keeps, so the two of
     // them read Simkl's lists once per change, not once each.
@@ -766,6 +861,7 @@ export async function catchUpFromServices(
         gate
       ),
     awaitingRemoval: watchlists.idsAwaitingRemoval,
+    removalsOwed: () => tracking.removalsHeldBack('simkl'),
     lookupKitsu: (service, value) => idBridge.kitsuIdLookup(service, value, 'visible'),
     animeTarget: (kitsuId) => seasons.resolveAnimeGroupTarget(`kitsu:${kitsuId}`),
     animeReady: seasons.animeGroupingReady,
@@ -788,6 +884,15 @@ export async function catchUpFromServices(
         failures: artworkFailures
       }).catch((error) => logError('catch-up:artwork', error))
     },
+    traktHistory: async () =>
+      (
+        await trakt.pullTraktHistoryNow(
+          'visible',
+          () => tracking.removalsHeldBack('trakt'),
+          (rows) => tracking.noteEpisodeArrivals('trakt', rows)
+        )
+      ).plays,
+    merged: (rows) => tracking.noteEpisodeArrivals('simkl', rows),
     busy: () => currentPressure() === 'critical',
     now: () => Date.now(),
     log: logError

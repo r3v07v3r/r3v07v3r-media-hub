@@ -372,3 +372,30 @@ export function parseTraktRatings(
   }
   return { rows, skipped }
 }
+
+/** When Trakt last saw a film or an episode watched, or un-watched, on the
+ *  account: the two stamps from /sync/last_activities the history pull is
+ *  gated on. Null for a stamp Trakt did not give. */
+export interface TraktWatchedStamps {
+  movies: string | null
+  episodes: string | null
+}
+
+/**
+ * Reads /sync/last_activities. Trakt asks a client that keeps in step to
+ * read this one small answer and fetch history only when `watched_at` has
+ * moved, which is what traktHistoryPull.ts does. Throws when the payload is
+ * not an object at all: that is a response this app no longer understands,
+ * and reading it as "nothing changed" would stop the pull for good.
+ */
+export function parseTraktActivities(payload: unknown): TraktWatchedStamps {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error('Trakt did not say when the account last changed.')
+  }
+  const stamp = (section: unknown): string | null => {
+    const value = (section as { watched_at?: unknown } | null)?.watched_at
+    return typeof value === 'string' && value.trim() ? value : null
+  }
+  const body = payload as { movies?: unknown; episodes?: unknown }
+  return { movies: stamp(body.movies), episodes: stamp(body.episodes) }
+}

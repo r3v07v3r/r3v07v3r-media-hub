@@ -3,7 +3,8 @@
 // hold it down — the same split watchlistRules and roomRules use, for
 // the same reason.
 
-import type { CatalogItem } from '../../shared/media-hub/types'
+import type { CatalogItem, MediaKind } from '../../shared/media-hub/types'
+import { isIndexableTitleId } from '../../shared/lancache/titleSync'
 
 /**
  * Which freshly scanned rows may be written to the index.
@@ -33,4 +34,91 @@ export function planDeepScanBatch(
     add.push(item)
   }
   return { add, skipped }
+}
+
+/** The index methods indexTitleIfMissing uses: a slice of the database, so
+ *  this module still has none of its own in reach. */
+export interface IndexWriter {
+  indexHasRow(kind: MediaKind, id: string): boolean | null
+  indexExistingIds(kind: MediaKind, ids: readonly string[]): Set<string> | null
+  indexMaxRank(kind: MediaKind): number
+  indexUpsert(
+    kind: MediaKind,
+    items: readonly CatalogItem[],
+    opts?: { source?: string; rankBase?: number }
+  ): boolean
+}
+
+/**
+ * Writes one title into the index when the index has no row for it: a title
+ * found only by a remote search, then opened or tracked.
+ *
+ * Without this such a title opened and played, but every surface that reads
+ * the index missed it: the browse grids, and My Stuff's tabs and the Planned
+ * row, which match tracked ids through catalog:byIds and have nothing to show
+ * for an id the index does not hold. A title somebody tracked could vanish
+ * from their own list.
+ *
+ * The deep scan's rule, through the same function: a row that exists (an
+ * anime season grouped under its show counts, see indexExistingIds) is never
+ * touched, so nothing the crawl curated is overwritten. The row is ranked
+ * below everything already indexed and tagged source 'search'; a later crawl
+ * that lists the title rewrites both. True when a row was written.
+ *
+ * The id must belong to the kind's catalog: Kitsu ids for anime, IMDb ids for
+ * movies and series. A caller that defaulted a missing type (the status
+ * handler reads a typeless payload as a movie) would otherwise put a Kitsu
+ * title in the movie grid, or an IMDb one in the Kitsu-keyed anime grid.
+ *
+ * This runs on every open and every watched mark, so the common answer, a
+ * row under this id already, is one primary-key lookup; the grouped-sibling
+ * pass inside indexExistingIds parses every grouped row of the kind and runs
+ * only when there is no direct row.
+ */
+export function indexTitleIfMissing(db: IndexWriter, kind: MediaKind, item: CatalogItem): boolean {
+  if (!admissible(kind, item)) return false
+  const id = String(item.id)
+  const hasRow = db.indexHasRow(kind, id)
+  // Null is membership unknown, which the check below also refuses.
+  if (hasRow !== false) return false
+  const existing = db.indexExistingIds(kind, [id])
+  // Membership unknown: writing could duplicate a grouped season.
+  if (existing === null) return false
+  const { add } = planDeepScanBatch([{ ...item, id }], existing)
+  if (!add.length) return false
+  return db.indexUpsert(kind, add, { source: 'search', rankBase: db.indexMaxRank(kind) + 1 })
+}
+
+/** Whether a title outside the crawl may have an index row of this kind: an
+ *  id in the index's alphabet that belongs to the kind's catalog, and a
+ *  name. See indexTitleIfMissing. */
+function admissible(kind: MediaKind, item: CatalogItem): boolean {
+  const id = String(item?.id ?? '')
+  if (!isIndexableTitleId(id) || !String(item.title ?? '').trim()) return false
+  return id.startsWith('kitsu:') === (kind === 'anime')
+}
+
+/**
+ * indexTitleIfMissing for many titles of one kind, for the one-time backfill
+ * (indexBackfill.ts): the same admission rule and the same skip of an id the
+ * index holds directly or as a grouped season, with one membership read for
+ * the whole batch instead of one per title. How many rows were written, or
+ * null when membership could not be read.
+ */
+export function indexTitlesIfMissing(
+  db: Omit<IndexWriter, 'indexHasRow'>,
+  kind: MediaKind,
+  items: readonly CatalogItem[]
+): number | null {
+  const admitted = items.filter((item) => admissible(kind, item))
+  if (!admitted.length) return 0
+  const existing = db.indexExistingIds(
+    kind,
+    admitted.map((item) => String(item.id))
+  )
+  if (existing === null) return null
+  const { add } = planDeepScanBatch(admitted, existing)
+  if (!add.length) return 0
+  const wrote = db.indexUpsert(kind, add, { source: 'search', rankBase: db.indexMaxRank(kind) + 1 })
+  return wrote ? add.length : 0
 }

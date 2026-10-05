@@ -20,6 +20,9 @@ export default function Search() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [searched, setSearched] = useState(false)
+  // The online catalog for this kind failed or did not answer in time, so
+  // `results` holds only what the library already had.
+  const [providerUnreachable, setProviderUnreachable] = useState(false)
   // Bumped on every search kicked off; a response is only applied if it's
   // still the most recent one by the time it lands — discards a stale
   // answer from a query the person has already typed past.
@@ -31,6 +34,7 @@ export default function Search() {
       requestRef.current += 1
       setResults([])
       setSearched(false)
+      setProviderUnreachable(false)
       setError(null)
       setLoading(false)
       return
@@ -45,10 +49,11 @@ export default function Search() {
     setLoading(true)
     setError(null)
     mediaHub.catalog
-      .search(searchKind, trimmed)
-      .then((items) => {
+      .searchWithStatus(searchKind, trimmed)
+      .then((answer) => {
         if (requestRef.current !== requestId) return
-        setResults(items)
+        setResults(answer.items)
+        setProviderUnreachable(answer.providerUnreachable)
         setSearched(true)
         setLoading(false)
       })
@@ -62,14 +67,20 @@ export default function Search() {
   // Debounced re-search: fires 400ms after the query or the active tab
   // settles. onSubmit below runs the same search immediately for anyone
   // who presses Enter/Search rather than waiting.
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => {
     const timer = setTimeout(() => runSearch(query, kind), DEBOUNCE_MS)
+    debounceRef.current = timer
     return () => clearTimeout(timer)
   }, [query, kind, runSearch])
 
   const onSubmit = useCallback(
     (event: FormEvent) => {
       event.preventDefault()
+      // The pending debounced run is for this same query. Left armed, an
+      // Enter within 400ms of the last keystroke sent the search twice: two
+      // provider requests for one answer, the first one's reply discarded.
+      clearTimeout(debounceRef.current)
       runSearch(query, kind)
     },
     [query, kind, runSearch]
@@ -110,7 +121,16 @@ export default function Search() {
       )}
       <LoadingNote loading={loading} />
       {error && <StatusNote tone="error">{error}</StatusNote>}
-      {!loading && !error && searched && !results.length && (
+      {/* With the online catalog out of reach, an empty or short list is
+          "not in the library yet", not "does not exist", and says so. */}
+      {!loading && !error && searched && providerUnreachable && (
+        <StatusNote>
+          {results.length
+            ? `The online ${kindLabel(kind).toLowerCase()} catalog could not be reached, so only titles already in the library are shown.`
+            : `The online ${kindLabel(kind).toLowerCase()} catalog could not be reached, and nothing already in the library matched "${query.trim()}".`}
+        </StatusNote>
+      )}
+      {!loading && !error && searched && !providerUnreachable && !results.length && (
         <StatusNote>{`No results for "${query.trim()}".`}</StatusNote>
       )}
       <div className="poster-grid">

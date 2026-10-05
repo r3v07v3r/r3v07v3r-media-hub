@@ -74,6 +74,11 @@ application is secure. Run the checks against both pull-request source and packa
 | Artifact malware scan      | Scan installers and bundled FFmpeg in the release job                      | Tampered or unexpected packaged binaries                                            |
 | Fuzz/property tests        | `fast-check` tests for URL/path/payload validators                         | Encoding, boundary, and parser inconsistencies                                      |
 
+The App checks job installs with `npm ci --ignore-scripts` and runs the unit tests without
+downloading the Electron binary either: from Electron 42 the package fetches it on the first
+`require('electron')`, and `src/main/media-hub/electronModule.ts` keeps the service modules from
+making that call outside Electron (pinned by `tests/electronUpgrade.test.ts`).
+
 Pin CI actions and security tools to reviewed versions or immutable commit digests. Upload reports as
 artifacts, fail only on an agreed severity threshold, and create a documented exception with owner and
 expiry for every suppressed result.

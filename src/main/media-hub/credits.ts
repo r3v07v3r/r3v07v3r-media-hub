@@ -92,12 +92,22 @@ function cachedCredits(id: string): TitleCredits | null {
   }
 }
 
+/** Bumped on every credits write. searchPool.ts keeps the credits of the
+ *  catalogued titles in memory between searches and rebuilds them when this
+ *  moves; storeCredits is the only writer of credits rows. */
+let creditsVersion = 0
+
+export function currentCreditsVersion(): number {
+  return creditsVersion
+}
+
 function storeCredits(id: string, credits: TitleCredits): void {
   try {
     getDatabase().putCache(cacheKey(id), credits, CREDITS_TTL_MS)
   } catch (error) {
     logError('credits:store', error)
   }
+  creditsVersion += 1
 }
 
 /**
@@ -108,8 +118,9 @@ function storeCredits(id: string, credits: TitleCredits): void {
  * a title at a time and would otherwise have to rewrite a growing index on
  * every one of four thousand titles. Reading a couple of thousand small
  * rows measures in the low hundreds of milliseconds, which is fine where
- * this is called from — the background rebuild — and is why it is not
- * called from anywhere on the launch path.
+ * this is called from — the background rebuild, and searchPool.ts once per
+ * change to the credits or the catalog blob rather than once per search —
+ * and is why it is not called from anywhere on the launch path.
  */
 export function creditsFor(ids: Iterable<string>): Map<string, TitleCredits> {
   const found = new Map<string, TitleCredits>()
@@ -178,6 +189,15 @@ export function searchCredits(
   ids: Iterable<string>,
   query: string
 ): { people: string[]; labels: string[] } {
+  return matchCredits(creditsFor(ids), query)
+}
+
+/** searchCredits over credits already read — for searchPool.ts, which holds
+ *  them in memory between searches instead of reading them per search. */
+export function matchCredits(
+  credits: Iterable<[string, TitleCredits]>,
+  query: string
+): { people: string[]; labels: string[] } {
   const needle = String(query).trim().toLowerCase()
   const people: string[] = []
   const labels: string[] = []
@@ -186,9 +206,9 @@ export function searchCredits(
   const hit = (values: string[] | undefined): boolean =>
     (values ?? []).some((value) => String(value).toLowerCase().includes(needle))
 
-  for (const [id, credits] of creditsFor(ids)) {
-    if (hit(credits.cast) || hit(credits.creators)) people.push(id)
-    else if (hit(credits.keywords)) labels.push(id)
+  for (const [id, entry] of credits) {
+    if (hit(entry.cast) || hit(entry.creators)) people.push(id)
+    else if (hit(entry.keywords)) labels.push(id)
   }
   return { people, labels }
 }

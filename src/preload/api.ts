@@ -14,6 +14,7 @@ import type {
 } from '../shared/lancache/protocol'
 import type {
   ActivitySnapshot,
+  AnimeStoryOrder,
   AnimeStoryResult,
   BlockedDownload,
   BootstrapResult,
@@ -25,6 +26,7 @@ import type {
   DeepScanEvent,
   DeepScanReport,
   CatalogByIdsResult,
+  CatalogSearchResult,
   CatalogItem,
   CatalogListing,
   CatalogQuery,
@@ -80,6 +82,9 @@ import type {
   ReconcileSyncReport,
   ReleaseNotesResult,
   SavedFilter,
+  ShowSyncDecision,
+  ShowSyncDecisionResult,
+  ShowSyncRow,
   SimklPinStart,
   SimklPollResult,
   SimklStatus,
@@ -552,10 +557,20 @@ export function createApi(transport: ApiTransport) {
           transport.invoke(MEDIA_HUB_CHANNELS.catalogMeta, { type, id }),
         search: (kind: MediaKind, query: string): Promise<CatalogItem[]> =>
           transport.invoke(MEDIA_HUB_CHANNELS.catalogSearch, { kind, query }),
+        /** The same search, answered with whether the online provider could
+         *  be reached, so a screen can say "only local results" rather than
+         *  "no matches" when it could not. */
+        searchWithStatus: (kind: MediaKind, query: string): Promise<CatalogSearchResult> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.catalogSearch, { kind, query, report: true }),
         related: (type: MediaKind, id: string): Promise<CatalogItem[]> =>
           transport.invoke(MEDIA_HUB_CHANNELS.catalogRelated, { type, id }),
-        story: (type: MediaKind, id: string): Promise<AnimeStoryResult> =>
-          transport.invoke(MEDIA_HUB_CHANNELS.catalogStory, { type, id }),
+        /** `order` decides the timeline that comes back (AnimeStoryResult). */
+        story: (
+          type: MediaKind,
+          id: string,
+          order: AnimeStoryOrder = 'release'
+        ): Promise<AnimeStoryResult> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.catalogStory, { type, id, order }),
         person: (person: string): Promise<PersonCreditsResult> =>
           transport.invoke(MEDIA_HUB_CHANNELS.catalogPerson, { person }),
         collection: (id: string): Promise<TitleCollectionResult> =>
@@ -593,19 +608,33 @@ export function createApi(transport: ApiTransport) {
          *  docs/WATCHLIST-SYNC.md for what each direction does. */
         setWatchlistTwoWay: (enabled: boolean): Promise<{ watchlistTwoWay: boolean }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.trackingSetTwoWay, { enabled }),
+        /** Turn the player's scrobbles to Simkl and Trakt on or off. Off by
+         *  default; the watched mark at 80% is sent either way. */
+        setScrobble: (enabled: boolean): Promise<{ scrobbleEnabled: boolean }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.trackingSetScrobble, { enabled }),
         /** Bring this device up to date with the tracking services — the
-         *  watchlist pull, then what Simkl says was watched. For the phone
-         *  and TV app; the desktop settles disagreements in its review panel
-         *  instead. Cheap to call often: a pass that ran moments ago, or is
-         *  still running, answers for this call too. */
-        catchUp: (options?: { force?: boolean }): Promise<CatchUpReport> =>
-          transport.invoke(MEDIA_HUB_CHANNELS.trackingCatchUp, options),
+         *  watchlist pull, then what Simkl says was watched, then Trakt's
+         *  history. Add-only. The phone and TV app ask on open and resume,
+         *  the desktop on open and focus; the desktop's review panel handles
+         *  what it cannot settle. Cheap to call often: a pass that ran
+         *  moments ago, or is still running, answers for this call too.
+         *  `leaveListsToJob` is the desktop's: the Trakt and MyAnimeList
+         *  watchlists are left to the half-hourly job unless Simkl moved. */
+        catchUp: (options?: {
+          force?: boolean
+          leaveListsToJob?: boolean
+        }): Promise<CatchUpReport> => transport.invoke(MEDIA_HUB_CHANNELS.trackingCatchUp, options),
         /** Whether one title is on the list, and which of it is watched —
          *  the database only, so it answers at once. */
         titleState: (id: string): Promise<TitleWatchState> =>
           transport.invoke(MEDIA_HUB_CHANNELS.trackingTitleState, { id }),
         toggle: (item: TrackableItem): Promise<{ tracked: boolean }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.trackingToggle, item),
+        /** Undo of a Remove from plan made through toggle: the removed row
+         *  comes back as it was, or the title is planned afresh when that
+         *  row is no longer held. Pushed to the services as an add. */
+        restorePlan: (item: TrackableItem): Promise<{ tracked: boolean }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.trackingRestorePlan, item),
         markWatched: (payload: MarkWatchedPayload): Promise<MarkWatchedResult> =>
           transport.invoke(MEDIA_HUB_CHANNELS.trackingMarkWatched, payload),
         unmarkWatched: (payload: MarkWatchedPayload): Promise<MarkWatchedResult> =>
@@ -627,6 +656,22 @@ export function createApi(transport: ApiTransport) {
           transport.invoke(MEDIA_HUB_CHANNELS.trackingReconcileCheck),
         reconcileResolve: (payload: ReconcileResolvePayload): Promise<ReconcileResolveResult> =>
           transport.invoke(MEDIA_HUB_CHANNELS.trackingReconcileResolve, payload),
+        /** The shows section of the review panel: per show, what arrived
+         *  from each service and what was sent where, not reviewed yet. */
+        episodeReview: (): Promise<{ shows: ShowSyncRow[] }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.trackingEpisodeReview),
+        /** One choice on one show row: keep, undo, or make one side match
+         *  the other. The changes for the services are queued and sent a
+         *  few seconds after the last choice. */
+        episodeDecide: (payload: ShowSyncDecision): Promise<ShowSyncDecisionResult> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.trackingEpisodeDecide, payload),
+        /** Fires when a pass after launch (a focus catch-up, the half-hourly
+         *  job) changed the shows section, with the section as it now is. */
+        onEpisodeReview: (onEvent: (event: { shows: ShowSyncRow[] }) => void): (() => void) =>
+          subscribe<{ shows: ShowSyncRow[] }>(
+            MEDIA_HUB_CHANNELS.trackingEpisodeReviewChanged,
+            onEvent
+          ),
         /** Fires when a batch of "keep local" decisions has been pushed out
          *  to the tracking services — or has failed to be. The resolve call
          *  itself only queues the decision (see tracking.ts), so this is

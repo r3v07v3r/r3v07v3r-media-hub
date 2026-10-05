@@ -46,6 +46,7 @@ import {
   normalizeTheme,
   publicSettings,
   logoutSettings,
+  hideDislikedDefault,
   THEMES
 } from './preferences'
 import { isMediaServerConnected } from './mediaSources'
@@ -745,7 +746,7 @@ export function registerAppIpc(): void {
     return {
       hideWatchedDefault: settings.hideWatchedDefault === true,
       hideCompletedDefault: settings.hideCompletedDefault === true,
-      hideDislikedDefault: settings.hideDislikedDefault === true
+      hideDislikedDefault: hideDislikedDefault(settings)
     }
   })
 
@@ -758,8 +759,13 @@ export function registerAppIpc(): void {
     return { ok: true }
   })
 
-  handle<unknown, { ok: true }>(MEDIA_HUB_CHANNELS.clipboardWrite, (_event, value) => {
-    clipboard.writeText(String(value || ''))
+  handle<unknown, { ok: true }>(MEDIA_HUB_CHANNELS.clipboardWrite, async (_event, value) => {
+    // Awaited because from Electron 44 writeText returns a promise: answering
+    // ok before it settles would report a copy that may not have happened,
+    // and a failed write would be an unhandled rejection rather than an
+    // error the caller sees. On earlier versions it returns undefined and
+    // the await changes nothing.
+    await clipboard.writeText(String(value || ''))
     return { ok: true }
   })
 

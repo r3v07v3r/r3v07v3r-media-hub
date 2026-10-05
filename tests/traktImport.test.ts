@@ -6,6 +6,17 @@
 // run twice — because the honest response to a partial import is to run it
 // again. So the three things pinned here are: real dates survive, nothing
 // already here is overwritten, and running it twice changes nothing.
+//
+// Then the incremental pull that follows an import (traktHistoryPull.ts):
+// gated on Trakt's /sync/last_activities, reading /sync/history only from
+// the last pull on, filing rows where the import files them, never
+// writing this device's own pushes back as second plays, and never filing
+// back a viewing un-marked here whose removal Trakt has not taken yet. With
+// nothing on record for the profile and account, its first pass runs the
+// import button's own path once, with those same viewings left out, and
+// records nothing when that fails.
+//
+// Run with: npx tsx tests/traktImport.test.ts
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -13,7 +24,21 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { createDatabase } from '../src/main/media-hub/database'
-import { parseTraktHistory, parseTraktRatings } from '../src/main/media-hub/trakt'
+import {
+  parseTraktActivities,
+  parseTraktHistory,
+  parseTraktRatings
+} from '../src/main/media-hub/trakt'
+import {
+  OVERLAP_MS,
+  markTraktHistoryPulled,
+  playsNotHeld,
+  pullTraktHistory,
+  traktPullKey,
+  type TraktPullDeps,
+  type TraktPullState
+} from '../src/main/media-hub/traktHistoryPull'
+import type { ImportedPlay } from '../src/shared/media-hub/types'
 
 // ---------------------------------------------------------------------
 // What Trakt's rows mean.
@@ -135,4 +160,356 @@ db.setActiveProfile('profile-b')
 assert.equal(db.history().length, 0, 'an import belongs to the profile that ran it')
 assert.equal(db.ratings().size, 0)
 
-console.log('trakt import tests passed')
+// ---------------------------------------------------------------------
+// The pull that follows: what it asks Trakt for, and what it writes.
+// ---------------------------------------------------------------------
+assert.deepEqual(
+  parseTraktActivities({
+    all: '2026-10-05T10:00:00.000Z',
+    movies: { watched_at: '2026-10-01T00:00:00.000Z', rated_at: 'x' },
+    episodes: { watched_at: '2026-10-05T09:00:00.000Z' }
+  }),
+  { movies: '2026-10-01T00:00:00.000Z', episodes: '2026-10-05T09:00:00.000Z' }
+)
+assert.deepEqual(parseTraktActivities({}), { movies: null, episodes: null })
+// Not an answer at all is a failure, never "nothing changed".
+assert.throws(() => parseTraktActivities('busy'))
+
+interface PullHarness {
+  db: ReturnType<typeof createDatabase>
+  deps: TraktPullDeps
+  calls: string[]
+  stamps: { movies: string | null; episodes: string | null }
+  rows: unknown[]
+  account: string
+  clock: number
+  /** Runs inside history(), before it answers — a profile switch, say. */
+  during: (() => void) | null
+  fileError: Error | null
+  /** What the import button's path (faked) finds at Trakt, already filed. */
+  importRows: ImportedPlay[]
+  /** The ratings the faked import finds at Trakt. */
+  importRatings: { id: string; score: number }[]
+  importError: Error | null
+  /** The held set the pull handed the import, as the import read it. */
+  importHeld: ReadonlySet<string> | null
+  state(): TraktPullState | null
+}
+
+function pullHarness(): PullHarness {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-trakt-pull-'))
+  const pullDb = createDatabase(path.join(dir, 'db.sqlite'), 'profile-a')
+  const h: PullHarness = {
+    db: pullDb,
+    calls: [],
+    stamps: { movies: 'm1', episodes: 'e1' },
+    rows: [],
+    account: 'trakt-1',
+    clock: Date.parse('2026-10-05T12:00:00.000Z'),
+    during: null,
+    fileError: null,
+    importRows: [],
+    importRatings: [],
+    importError: null,
+    importHeld: null,
+    state: () =>
+      pullDb.getCache<TraktPullState>(traktPullKey(pullDb.activeProfile()), {
+        allowExpired: true
+      }),
+    deps: undefined as unknown as TraktPullDeps
+  }
+  h.deps = {
+    db: pullDb,
+    account: () => h.account,
+    lastActivities: async () => {
+      h.calls.push('last_activities')
+      return {
+        movies: { watched_at: h.stamps.movies },
+        episodes: { watched_at: h.stamps.episodes }
+      }
+    },
+    history: async (startAt) => {
+      h.calls.push(`history since ${startAt}`)
+      h.during?.()
+      return { rows: h.rows, truncated: false }
+    },
+    // The import button's path, faked: it reads the held set when it is
+    // about to write and leaves those viewings out, as importTraktLibrary
+    // does with skipHeld.
+    fullImport: async (held) => {
+      h.calls.push('import')
+      if (h.importError) throw h.importError
+      h.importHeld = held()
+      return {
+        plays: pullDb.importWatched(playsNotHeld(h.importRows, h.importHeld)),
+        ratings: pullDb.importRatings(h.importRatings)
+      }
+    },
+    // The import's filing, faked: an anime series moves under its show.
+    file: async (rows: ImportedPlay[]) => {
+      h.calls.push('file')
+      if (h.fileError) throw h.fileError
+      return rows.map((row) =>
+        row.id === 'tt0388629' ? { ...row, id: 'kitsu:12', type: 'anime' as const, season: 1 } : row
+      )
+    },
+    backup: () => {
+      h.calls.push('backup')
+    },
+    announce: (scopes) => {
+      h.calls.push(`announce ${scopes.join(' ')}`)
+    },
+    now: () => h.clock,
+    log: () => {}
+  }
+  return h
+}
+
+const episodeRow = (show: string, season: number, number: number, at: string) => ({
+  watched_at: at,
+  type: 'episode',
+  episode: { season, number },
+  show: { title: show, ids: { imdb: show === 'One Piece' ? 'tt0388629' : 'tt11280740' } }
+})
+
+async function pulls(): Promise<void> {
+  {
+    // Nothing on record: the account's past, once, by the import button's
+    // path, leaving out what is held here (a film watched here, and an
+    // episode whose removal Trakt has not taken); then Trakt's stamps.
+    const h = pullHarness()
+    h.db.markWatched({ id: 'tt1160419', type: 'movie', title: 'Dune' })
+    h.deps.removalsOwed = () => new Set(['tt0000077:1:1'])
+    h.importRows = [
+      { id: 'tt1160419', type: 'movie', title: 'Dune', watchedAt: '2019-04-02T21:15:00.000Z' },
+      { id: 'tt0000066', type: 'movie', title: 'Past', watchedAt: '2020-01-01T00:00:00.000Z' },
+      {
+        id: 'tt0000077',
+        type: 'series',
+        title: 'Owed',
+        season: 1,
+        episode: 1,
+        watchedAt: '2020-01-02T00:00:00.000Z'
+      }
+    ] as ImportedPlay[]
+    const report = await pullTraktHistory(h.deps)
+    assert.deepEqual(h.calls, ['last_activities', 'import', 'announce history'])
+    assert.deepEqual(report, { plays: 1, read: true })
+    assert.ok(h.importHeld?.has('tt1160419:movie:movie'), 'the film watched here is held')
+    assert.ok(h.importHeld?.has('tt0000077:1:1'), 'the removal still owed is held')
+    assert.equal(
+      h.db.plays(50).filter((play) => play.contentId === 'tt1160419').length,
+      1,
+      'the film watched here is not a second play'
+    )
+    assert.ok(h.db.history().some((row) => row.id === 'tt0000066'))
+    assert.ok(!h.db.history().some((row) => row.id === 'tt0000077'))
+    delete h.deps.removalsOwed
+    assert.deepEqual(h.state(), {
+      account: 'trakt-1',
+      stamps: { movies: 'm1', episodes: 'e1' },
+      since: '2026-10-05T12:00:00.000Z'
+    })
+
+    // Nothing moved at Trakt: one small request, and that is all. The
+    // import is not run again.
+    h.clock += 30 * 60 * 1000
+    h.calls.length = 0
+    await pullTraktHistory(h.deps)
+    assert.deepEqual(h.calls, ['last_activities'])
+
+    // Something was watched elsewhere: history from the last pull, reaching
+    // back a few days for a viewing that reached Trakt late.
+    h.stamps.episodes = 'e2'
+    // Played here earlier and pushed: Trakt hands it back with its own time.
+    h.db.markWatched(
+      { id: 'tt11280740', type: 'series', title: 'Severance' },
+      { season: 1, episode: 1 }
+    )
+    h.rows = [
+      episodeRow('Severance', 1, 1, '2026-10-05T12:10:00.000Z'),
+      episodeRow('Severance', 1, 2, '2026-10-05T12:20:00.000Z'),
+      episodeRow('One Piece', 1, 5, '2026-10-05T12:25:00.000Z')
+    ]
+    h.calls.length = 0
+    // What it wrote is handed on for the record of what each pass merged
+    // (episodeSync.ts's noteArrivals): the new viewings, not the echo.
+    const merged: string[] = []
+    h.deps.merged = (rows) => {
+      for (const row of rows) merged.push(`${row.id}:${row.season}:${row.episode}`)
+    }
+    const pulled = await pullTraktHistory(h.deps)
+    assert.deepEqual(merged.sort(), ['kitsu:12:1:5', 'tt11280740:1:2'])
+    const since = new Date(Date.parse('2026-10-05T12:00:00.000Z') - OVERLAP_MS).toISOString()
+    assert.deepEqual(h.calls, [
+      'last_activities',
+      `history since ${since}`,
+      'file',
+      'backup',
+      'announce history'
+    ])
+    assert.equal(pulled.plays, 2, 'the echo of the episode played here is not a second play')
+    const keys = h.db
+      .history()
+      .filter((row) => row.type !== 'movie')
+      .map((row) => `${row.id}:${row.season}:${row.episode}`)
+      .sort()
+    assert.deepEqual(keys, ['kitsu:12:1:5', 'tt11280740:1:1', 'tt11280740:1:2'])
+    assert.equal(
+      h.db.plays(50).filter((play) => play.contentId === 'tt11280740' && play.episode === 1).length,
+      1
+    )
+    assert.deepEqual(h.state()?.stamps, { movies: 'm1', episodes: 'e2' })
+    assert.equal(h.state()?.since, new Date(h.clock).toISOString())
+
+    // The same rows again under a moved stamp write nothing, and take no
+    // backup: there is nothing to back up before.
+    h.stamps.movies = 'm2'
+    h.calls.length = 0
+    assert.equal((await pullTraktHistory(h.deps)).plays, 0)
+    assert.equal(h.calls.includes('backup'), false)
+  }
+
+  {
+    // An episode un-marked here whose removal Trakt has not taken (failed
+    // and owed, or still on its way) is not filed back in from Trakt.
+    const h = pullHarness()
+    markTraktHistoryPulled(h.db, 'profile-a', 'trakt-1', Date.parse('2026-10-05T11:00:00.000Z'))
+    h.rows = [
+      episodeRow('Severance', 1, 1, '2026-10-05T10:00:00.000Z'),
+      episodeRow('Severance', 1, 2, '2026-10-05T10:30:00.000Z')
+    ]
+    h.deps.removalsOwed = () => new Set(['tt11280740:1:1'])
+    const pulled = await pullTraktHistory(h.deps)
+    assert.equal(pulled.plays, 1)
+    assert.deepEqual(
+      h.db.history().map((row) => `${row.id}:${row.season}:${row.episode}`),
+      ['tt11280740:1:2']
+    )
+  }
+
+  {
+    // The first pass brings in ratings and no new viewings (every one is
+    // already held here): the screens are still told, about the ratings.
+    const h = pullHarness()
+    h.db.markWatched({ id: 'tt1160419', type: 'movie', title: 'Dune' })
+    h.importRows = [
+      { id: 'tt1160419', type: 'movie', title: 'Dune', watchedAt: '2019-04-02T21:15:00.000Z' }
+    ] as ImportedPlay[]
+    h.importRatings = [{ id: 'tt1160419', score: 8 }]
+    const report = await pullTraktHistory(h.deps)
+    assert.deepEqual(report, { plays: 0, read: true })
+    assert.deepEqual(h.calls, ['last_activities', 'import', 'announce ratings'])
+
+    // Nothing at all written: nothing announced.
+    const quiet = pullHarness()
+    await pullTraktHistory(quiet.deps)
+    assert.deepEqual(quiet.calls, ['last_activities', 'import'])
+  }
+
+  {
+    // An import that finished says where the pull carries on from, and
+    // read no stamps, so the next pass reads.
+    const h = pullHarness()
+    markTraktHistoryPulled(h.db, 'profile-a', 'trakt-1', Date.parse('2026-10-04T00:00:00.000Z'))
+    await pullTraktHistory(h.deps)
+    const since = new Date(Date.parse('2026-10-04T00:00:00.000Z') - OVERLAP_MS).toISOString()
+    assert.deepEqual(h.calls.slice(0, 2), ['last_activities', `history since ${since}`])
+  }
+
+  {
+    // Another account's record is no record: that account's past is read
+    // once too.
+    const h = pullHarness()
+    markTraktHistoryPulled(h.db, 'profile-a', 'trakt-0', Date.parse('2026-10-04T00:00:00.000Z'))
+    await pullTraktHistory(h.deps)
+    assert.deepEqual(h.calls, ['last_activities', 'import'])
+    assert.equal(h.state()?.account, 'trakt-1')
+  }
+
+  {
+    // The first pass's import refused (the anime catalog still being
+    // organised): nothing recorded, so the next pass runs it again.
+    const h = pullHarness()
+    h.importError = new Error('still being organised')
+    const report = await pullTraktHistory(h.deps)
+    assert.equal(report.error, 'still being organised')
+    assert.equal(h.state(), null)
+    h.importError = null
+    h.calls.length = 0
+    await pullTraktHistory(h.deps)
+    assert.deepEqual(h.calls, ['last_activities', 'import'])
+    assert.equal(h.state()?.account, 'trakt-1')
+  }
+
+  {
+    // The real wiring: the first pass runs the Import button's function,
+    // which leaves out the held viewings before its backup and its write.
+    const client = fs.readFileSync(
+      path.join(__dirname, '..', 'src', 'main', 'media-hub', 'traktClient.ts'),
+      'utf8'
+    )
+    assert.match(client, /fullImport: \(held\) => importTraktLibrary\(\{ skipHeld: held \}\)/)
+    // What moved is what the screens are told: ratings as well as history.
+    assert.match(client, /notifyLibraryChanged\('trakt-pull', \.\.\.scopes\)/)
+    const body = client.slice(client.indexOf('export async function importTraktLibrary('))
+    const filter = body.indexOf('playsNotHeld(filedPlays, options.skipHeld())')
+    assert.ok(filter > 0, 'the import filters held viewings when asked')
+    assert.ok(filter < body.indexOf("backupBeforeRewrite('trakt-import')"))
+    assert.ok(filter < body.indexOf('db.importWatched(remappedPlays)'))
+    assert.match(client, /MEDIA_HUB_CHANNELS\.traktImport, \(\) => importTraktLibrary\(\)\)/)
+  }
+
+  {
+    // The rule both share.
+    const rows = [
+      { id: 'tt1', type: 'movie', title: 'A', watchedAt: '2020-01-01T00:00:00.000Z' },
+      { id: 'tt2', type: 'series', title: 'B', season: 0, episode: 3, watchedAt: '2020-01-01' }
+    ] as ImportedPlay[]
+    assert.deepEqual(
+      playsNotHeld(rows, new Set(['tt1:movie:movie'])).map((row) => row.id),
+      ['tt2']
+    )
+    assert.deepEqual(
+      playsNotHeld(rows, new Set(['tt2:0:3'])).map((row) => row.id),
+      ['tt1']
+    )
+  }
+
+  {
+    // A profile switch while history loads: nothing written, nothing moved on.
+    const h = pullHarness()
+    markTraktHistoryPulled(h.db, 'profile-a', 'trakt-1', h.clock - 1000)
+    const before = h.state()
+    h.rows = [episodeRow('Severance', 1, 3, '2026-10-05T12:20:00.000Z')]
+    h.during = () => h.db.setActiveProfile('profile-b')
+    await pullTraktHistory(h.deps)
+    h.db.setActiveProfile('profile-a')
+    assert.equal(h.db.history().length, 0)
+    assert.deepEqual(h.state(), before)
+  }
+
+  {
+    // Filing refused (the anime catalog is still being organised): the
+    // record stays where it was, so the next pass reads the same rows again.
+    const h = pullHarness()
+    markTraktHistoryPulled(h.db, 'profile-a', 'trakt-1', h.clock - 1000)
+    const before = h.state()
+    h.rows = [episodeRow('One Piece', 1, 6, '2026-10-05T12:20:00.000Z')]
+    h.fileError = new Error('still being organised')
+    const report = await pullTraktHistory(h.deps)
+    assert.equal(report.error, 'still being organised')
+    assert.equal(h.db.history().length, 0)
+    assert.deepEqual(h.state(), before)
+  }
+
+  {
+    // Not connected: nothing asked.
+    const h = pullHarness()
+    h.account = ''
+    await pullTraktHistory(h.deps)
+    assert.deepEqual(h.calls, [])
+  }
+}
+
+void pulls().then(() => console.log('trakt import tests passed'))

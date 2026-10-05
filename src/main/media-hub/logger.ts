@@ -5,6 +5,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { electronModule } from './electronModule'
 
 /**
  * Where the log lives. Electron is resolved lazily, on the first line
@@ -25,10 +26,13 @@ import path from 'node:path'
  * to break the feature it's observing"). Nothing changes for the packaged
  * app, where the binary is always there and this resolves on the first
  * error logged.
+ *
+ * electronModule() is that require with a check in front: outside Electron
+ * it throws without loading the package, because from Electron 42 loading it
+ * with no binary present starts a download. See electronModule.ts.
  */
 function logPath(): string {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { app } = require('electron') as typeof import('electron')
+  const { app } = electronModule()
   return path.join(app.getPath('userData'), 'logs', 'media-hub.log')
 }
 
