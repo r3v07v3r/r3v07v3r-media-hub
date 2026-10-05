@@ -59,7 +59,9 @@ const ALONE = 'kitsu:900'
 // A second merged show, which nobody has watched any of.
 const OTHER = 'kitsu:500'
 const OTHER_SECOND = 'kitsu:600'
-const siblingsOf = (id: string): string[] | undefined => (id === SHOW ? [SECOND, THIRD] : undefined)
+// The member that is each season of the show: the first is season 1.
+const membersOf = (id: string): string[] | undefined =>
+  id === SHOW ? [SHOW, SECOND, THIRD] : undefined
 // What the index is handed: every later season, by its own id, from the
 // construction the app itself runs on. Every member here is the season its
 // place says (the gate has its own checks in simklAnime.test.ts).
@@ -116,7 +118,7 @@ function contextFor(history: HistoryEntry[], tracked: string[] = []) {
     trackedIds: new Set(tracked),
     watchedIds: new Set(history.map((row) => row.id)),
     historyById: indexHistoryById(history),
-    seasonEpisodesById: indexSeasonEpisodes(history, watchedLaterSeasons(history, siblingsOf))
+    seasonEpisodesById: indexSeasonEpisodes(history, watchedLaterSeasons(history, membersOf))
   }
 }
 
@@ -131,7 +133,7 @@ check('a later season with viewings is found under its show, by its own id', () 
     watched(SHOW, 2, 2),
     watched(SHOW, 3, 5)
   ]
-  assert.deepEqual(watchedLaterSeasons(history, siblingsOf), {
+  assert.deepEqual(watchedLaterSeasons(history, membersOf), {
     [SECOND]: { id: SHOW, season: 2 },
     [THIRD]: { id: SHOW, season: 3 }
   })
@@ -139,22 +141,22 @@ check('a later season with viewings is found under its show, by its own id', () 
 
 check('a first season, a special and a season nobody started are not listed', () => {
   assert.deepEqual(
-    watchedLaterSeasons([watched(SHOW, 1, 1), watched(SHOW, 0, 1)], siblingsOf),
+    watchedLaterSeasons([watched(SHOW, 1, 1), watched(SHOW, 0, 1)], membersOf),
     {},
     'season 1 is the show itself, and a special belongs to no member'
   )
   assert.deepEqual(
-    watchedLaterSeasons([watched(SHOW, 2, 1)], siblingsOf),
+    watchedLaterSeasons([watched(SHOW, 2, 1)], membersOf),
     { [SECOND]: { id: SHOW, season: 2 } },
     'the third season has no rows, so it is not in the answer'
   )
 })
 
 check('a season the show has no member for, and a title that fronts no group', () => {
-  assert.deepEqual(watchedLaterSeasons([watched(SHOW, 4, 1)], siblingsOf), {})
+  assert.deepEqual(watchedLaterSeasons([watched(SHOW, 4, 1)], membersOf), {})
   // Kitsu's own season label on a title that stands alone is not a member.
-  assert.deepEqual(watchedLaterSeasons([watched(ALONE, 2, 1)], siblingsOf), {})
-  assert.deepEqual(watchedLaterSeasons([watched('tt0903747', 2, 1)], siblingsOf), {})
+  assert.deepEqual(watchedLaterSeasons([watched(ALONE, 2, 1)], membersOf), {})
+  assert.deepEqual(watchedLaterSeasons([watched('tt0903747', 2, 1)], membersOf), {})
 })
 
 check('nothing is listed while the catalog is not grouped', () => {
@@ -163,7 +165,7 @@ check('nothing is listed while the catalog is not grouped', () => {
 
 check('a row with no episode is not a viewing of a season', () => {
   const row: HistoryEntry = { id: SHOW, type: 'anime', season: 2, episode: null, watchedAt: PAST }
-  assert.deepEqual(watchedLaterSeasons([row], siblingsOf), {})
+  assert.deepEqual(watchedLaterSeasons([row], membersOf), {})
 })
 
 // ---------------------------------------------------------------------

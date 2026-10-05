@@ -144,10 +144,11 @@ function successorOf(group: AnimeGroupRecord, now: Map<string, Place>): Place | 
 
 /**
  * Whether a member's place in its show is also its season on the show's
- * page — animeSeasons.ts's seasonMatchesPage. It is what decides whether a
- * later season's rows are the show's at all: where the answer is no, such a
- * season still opens and saves as itself (laterSeasonOf), and its rows have
- * to stay with it.
+ * page — animeSeasons.ts's regroupPlaceIsSeason. It is what decides whether
+ * a later season's rows are the show's at all: where the answer is no, such
+ * a season still opens and saves as itself (laterSeasonOf), and its rows
+ * have to stay with it. Asked of a grouping that is gone as well (a show
+ * that came apart), where the members' TheTVDB seasons are all it has.
  */
 export type PlaceIsSeason = (showId: string, memberId: string, season: number) => boolean
 

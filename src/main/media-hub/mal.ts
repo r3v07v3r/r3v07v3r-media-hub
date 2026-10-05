@@ -85,6 +85,49 @@ export function localWatchedEpisodeCounts(history: HistoryEntry[]): Record<strin
 }
 
 /**
+ * For each MAL entry (keyed by the raw kitsuId MAL itself matched to), how
+ * many distinct episodes local history holds where that entry is kept
+ * (`target`, animeSeasons.ts's placeAnimeEntry).
+ *
+ * A season of a merged show is counted over that season of the show — not
+ * localWatchedEpisodeCounts' bare per-id total, which for a grouped
+ * franchise would be every merged season's episodes summed together and
+ * would never agree with MAL's own per-entry (per-season) count.
+ *
+ * `whole` marks an entry that is a title of its own: never merged, or a
+ * member that cannot be shown to be a season of its show. That is one entry
+ * over every row under its id, whatever season its own page labels them —
+ * the count planMalPushes sends for it, so a push and the next preview
+ * agree. Counted over season 1 alone, a title whose rows sit under other
+ * season labels read as behind MAL and was pulled down a second time.
+ */
+export function localEntryProgress(
+  entries: readonly {
+    kitsuId?: string
+    target: { id: string; season: number } | null
+    whole?: boolean
+  }[],
+  history: HistoryEntry[]
+): Record<string, number> {
+  const bySeason = new Map<string, Set<number>>()
+  for (const entry of history || []) {
+    if (!Number.isFinite(entry.season) || !Number.isFinite(entry.episode)) continue
+    const key = `${entry.id}:${entry.season}`
+    if (!bySeason.has(key)) bySeason.set(key, new Set())
+    bySeason.get(key)!.add(entry.episode as number)
+  }
+  const byId = localWatchedEpisodeCounts(history)
+  const counts: Record<string, number> = {}
+  for (const entry of entries) {
+    if (!entry.kitsuId || !entry.target) continue
+    counts[entry.kitsuId] = entry.whole
+      ? byId[entry.target.id] || 0
+      : bySeason.get(`${entry.target.id}:${entry.target.season}`)?.size || 0
+  }
+  return counts
+}
+
+/**
  * MAL treats an episode count and list status as separate fields. Keep them
  * aligned whenever this app knows the title's total: reaching that total
  * moves it out of the Watching list, while unmarking an episode moves it
@@ -185,10 +228,12 @@ export function localSeasonEpisodeCounts(history: HistoryEntry[], id: string): M
  *
  * A title with `members` is a grouped anime: one show here, several
  * entries there, one per season. Its history rows are keyed on the
- * canonical id with the member's season number — member k of the group
- * is season k+1 (see animeSeasons.ts's buildAnimeGroupIndexes) — so the
- * change goes to the members owning the seasons it touched, each with
- * that season's count and, when the caller knows it, that season's total.
+ * canonical id with the season of the show's page, and `members` names the
+ * entry for each season, the first being season 1 — blank where no member
+ * can be shown to be that season (animeSeasonMembers in serviceIds.ts), and
+ * such a season is not sent. So the change goes to the members that are the
+ * seasons it touched, each with that season's count and, when the caller
+ * knows it, that season's total.
  * Never the group's sum on the first season's entry, which is what one
  * push for the canonical id amounted to, and never the group's total in
  * place of a member's own: a member whose total is unknown gets its count
@@ -202,7 +247,7 @@ export function localSeasonEpisodeCounts(history: HistoryEntry[], id: string): M
  */
 export function planMalPushes(
   history: HistoryEntry[],
-  title: { id: string; members?: readonly string[]; totalEpisodes?: number },
+  title: { id: string; members?: readonly (string | null)[]; totalEpisodes?: number },
   change: {
     seasons: Iterable<number>
     seasonTotals?: ReadonlyMap<number, number>

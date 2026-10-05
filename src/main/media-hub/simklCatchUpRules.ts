@@ -430,10 +430,13 @@ export function librarySince(
 
 export interface ResolvedTitle {
   title: SimklLibraryTitle
-  /** This app's id: IMDb tt id for a film or series; the CANONICAL `kitsu:<id>` for anime. */
+  /** This app's id: IMDb tt id for a film or series. For anime, the id the
+   *  entry's viewings are kept under (animeEntryTarget in serviceIds.ts):
+   *  its show's `kitsu:<id>`, or its own when it cannot be shown to be a
+   *  season of that show. */
   id: string
   type: MediaKind
-  /** Anime: which season of that show this Simkl entry is (resolveAnimeGroupTarget's season). Null otherwise. */
+  /** Anime: the season the entry is filed at under that id. Null otherwise. */
   animeSeason: number | null
 }
 

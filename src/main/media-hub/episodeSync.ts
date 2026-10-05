@@ -626,7 +626,7 @@ const NOT_EPISODIC = new Set(['movie', 'music video'])
 
 /**
  * Simkl's anime list, as a read. Each entry is one season at Simkl and is
- * placed by `place` (the wiring asks animeSeasons.ts's laterSeasonOf, never
+ * placed by `place` (the wiring asks animeSeasons.ts's placeAnimeEntry, never
  * a position). An entry that cannot be placed because nobody answered makes
  * the read incomplete, and it throws: rule 5.
  */

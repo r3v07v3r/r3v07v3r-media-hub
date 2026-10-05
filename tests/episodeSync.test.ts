@@ -87,7 +87,11 @@ import {
 } from '../src/main/media-hub/trakt'
 import { bySeason } from '../src/main/media-hub/titleStatusRules'
 import { markTraktHistoryPulled, pullTraktHistory } from '../src/main/media-hub/traktHistoryPull'
-import { hasExpressibleSimklId, toSimklAnimeEpisode } from '../src/shared/media-hub/serviceIds'
+import {
+  hasExpressibleSimklId,
+  toSimklAnimeEpisode,
+  type AnimeSeasonMembers
+} from '../src/shared/media-hub/serviceIds'
 
 let pass = 0
 async function check(name: string, fn: () => void | Promise<void>): Promise<void> {
@@ -110,10 +114,11 @@ const SHOW: SyncShow = { id: 'tt0000001', type: 'series', title: 'Severance', ye
 const OTHER: SyncShow = { id: 'tt0000002', type: 'series', title: 'Andor', year: '2022' }
 const ANIME: SyncShow = { id: 'kitsu:100', type: 'anime', title: 'Frieren' }
 
-/** kitsu:100 fronts a merged show: season 2 is kitsu:200, and season 3 has
- *  no member the placing rules can show (animeSiblingsWhenGrouped blanks it). */
-const SIBLINGS = (id: string): readonly (string | null)[] | undefined =>
-  id === 'kitsu:100' ? ['kitsu:200', null] : undefined
+/** kitsu:100 fronts a merged show: it is season 1, season 2 is kitsu:200,
+ *  and season 3 has no member the placing rules can show
+ *  (animeSeasonMembersWhenGrouped blanks it). */
+const SEASON_MEMBERS: AnimeSeasonMembers = (id) =>
+  id === 'kitsu:100' ? ['kitsu:100', 'kitsu:200', null] : undefined
 
 function canSend(service: EpisodeService, show: { id: string; type: string }, ep: Ep): boolean {
   if (service === 'trakt') {
@@ -121,7 +126,7 @@ function canSend(service: EpisodeService, show: { id: string; type: string }, ep
   }
   if (!hasExpressibleSimklId(show.id)) return false
   if (show.type !== 'anime') return true
-  return toSimklAnimeEpisode({ id: show.id, ...ep }, SIBLINGS) !== null
+  return toSimklAnimeEpisode({ id: show.id, ...ep }, SEASON_MEMBERS) !== null
 }
 
 function eps(season: number, ...episodes: number[]): Ep[] {
@@ -249,7 +254,7 @@ function bodies(
       out.push({
         service: 'simkl',
         action: batch.action,
-        body: simklTitleHistoryPayload(item, seasons, SIBLINGS)
+        body: simklTitleHistoryPayload(item, seasons, SEASON_MEMBERS)
       })
     } else if (batch.service === 'trakt') {
       out.push({
@@ -524,7 +529,7 @@ async function main(): Promise<void> {
       assert.deepEqual(row.parts.simkl!.unsendable, range(3, 1, 1))
       // And the request that goes out names season 2's own entry, by episode.
       assert.deepEqual(
-        simklTitleHistoryPayload({ ...ANIME, year: '' }, bySeason(range(2, 1, 2)), SIBLINGS),
+        simklTitleHistoryPayload({ ...ANIME, year: '' }, bySeason(range(2, 1, 2)), SEASON_MEMBERS),
         { anime: [{ ids: { kitsu: 200 }, episodes: [{ number: 1 }, { number: 2 }] }] }
       )
       db.close()
@@ -950,7 +955,11 @@ async function main(): Promise<void> {
       }
     )
     // An anime body's numbers are the entry's at Simkl: left undated.
-    const anime = simklTitleHistoryPayload({ ...ANIME, year: '' }, bySeason(eps(2, 1)), SIBLINGS)
+    const anime = simklTitleHistoryPayload(
+      { ...ANIME, year: '' },
+      bySeason(eps(2, 1)),
+      SEASON_MEMBERS
+    )
     assert.deepEqual(withWatchedAt(anime, new Map([['2:1', OLD]])), anime)
   })
 

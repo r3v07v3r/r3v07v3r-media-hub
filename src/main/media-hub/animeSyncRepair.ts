@@ -56,6 +56,7 @@ import {
   cachedTvdbSeries,
   currentAnimeGroups,
   groupedIdsFor,
+  regroupPlaceIsSeason,
   resolveAnimeGroupTarget,
   seasonMatchesPage
 } from './animeSeasons'
@@ -124,7 +125,7 @@ export function keepAnimeHistoryWithShows(): number {
         }
       },
       animeGroupRecordsOf(groups, cachedTvdbSeries),
-      seasonMatchesPage
+      regroupPlaceIsSeason
     )
     for (const miss of result.left) {
       logError('anime:regroup', `${miss.id} left where it is: ${miss.why}`)

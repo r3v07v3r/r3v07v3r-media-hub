@@ -32,7 +32,7 @@ import {
   invalidateAnimeGroupIndex,
   laterSeasons,
   resolveAnimeGroupTarget,
-  seasonMatchesPage
+  regroupPlaceIsSeason
 } from '../src/main/media-hub/animeSeasons'
 import { createDatabase } from '../src/main/media-hub/database'
 import { setDatabase } from '../src/main/media-hub/dbState'
@@ -176,7 +176,7 @@ check('a new order moves nothing: season N on the page is still TMDB season N', 
 check('an id that joins a TMDB-numbered show moves only where its place is its season', () => {
   const before = [byTmdb('305074', 's1', 's2')]
   const after = [byTmdb('305074', 's1', 's2', 's3', 'ova')]
-  // What animeSeasons.ts's seasonMatchesPage answers: s3 maps to TheTVDB
+  // What animeSeasons.ts's regroupPlaceIsSeason answers: s3 maps to TheTVDB
   // season 3 and sits at place 3; the OVA at place 4 maps to nothing.
   const placeIsSeason = (show: string, member: string, season: number): boolean =>
     show === 's1' && member === 's3' && season === 3
@@ -195,7 +195,7 @@ check('an id that joins a TMDB-numbered show moves only where its place is its s
 })
 
 check('the rule is asked of a show numbered by its members too, and can say no', () => {
-  // seasonMatchesPage answers yes for every member of such a show; this
+  // regroupPlaceIsSeason answers yes for every member of such a show; this
   // only pins that the answer given is the one obeyed.
   const plan = planAnimeRegroup([byMember('a', 'c')], [byMember('a', 'b', 'c')], () => false)
   assert.deepEqual(plan.moves, [move('a', 2, 'a', 3)])
@@ -235,7 +235,7 @@ check('a front that left every show hands its rows to the one the rest went to',
   )
 })
 
-// What seasonMatchesPage answers for the shows below: TheTVDB's season of
+// What regroupPlaceIsSeason answers for the shows below: TheTVDB's season of
 // each id in series 305074. The film and the OVA are at season 0.
 const tvdbSeason: Record<string, number> = { film: 0, ova: 0, s1: 1, s2: 2, s3: 3 }
 const tvdbGate = (show: string, member: string, season: number): boolean =>
@@ -1009,13 +1009,13 @@ async function groupingChecks(): Promise<void> {
       const seriesOf = (id: string): string | null => (tvdb[id] ? tvdb[id].seriesId : '')
       const before = animeGroupRecordsOf(await groupAnimeCatalog(withoutKind(crawl)), seriesOf)
       assert.deepEqual(before, [{ id: FRONT_FILM, members: [FRONT_FILM, ONLY], series: '88888' }])
-      followAnimeRegroup(db, before, seasonMatchesPage)
+      followAnimeRegroup(db, before, regroupPlaceIsSeason)
       mark(db, FRONT_FILM, 1, [1, 2])
       mark(db, FRONT_FILM, 0, [1])
 
       const after = animeGroupRecordsOf(await groupAnimeCatalog(crawl), seriesOf)
       assert.deepEqual(after, [])
-      const result = followAnimeRegroup(db, after, seasonMatchesPage)
+      const result = followAnimeRegroup(db, after, regroupPlaceIsSeason)
       assert.deepEqual(keys(db, ONLY), ['1:1', '1:2'])
       // TMDB's season 0 is not the film's own episode: it stays, and is named.
       assert.deepEqual(keys(db, FRONT_FILM), ['0:1'])

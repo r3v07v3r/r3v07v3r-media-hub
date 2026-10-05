@@ -11,7 +11,7 @@ import {
   hasExpressibleSimklId,
   idsForCatalogId,
   toSimklAnimeEpisode,
-  type AnimeSiblings,
+  type AnimeSeasonMembers,
   type SimklMediaIds
 } from '../../shared/media-hub/serviceIds'
 
@@ -151,11 +151,11 @@ function animeRef(item: SimklPushItem, entryId: string): SimklMediaRef | null {
 function animeEntries(
   item: SimklPushItem,
   episodes: readonly { season?: number | null; episode?: number | null }[],
-  siblingsOf: AnimeSiblings | undefined
+  membersOf: AnimeSeasonMembers | undefined
 ): SimklAnimeRef[] {
   const byEntry = new Map<string, Set<number>>()
   for (const { season, episode } of episodes) {
-    const at = toSimklAnimeEpisode({ id: String(item.id), season, episode }, siblingsOf)
+    const at = toSimklAnimeEpisode({ id: String(item.id), season, episode }, membersOf)
     if (!at) continue
     const numbers = byEntry.get(at.id) ?? new Set<number>()
     numbers.add(at.episode)
@@ -176,9 +176,9 @@ function animeEntries(
 function animePayload(
   item: SimklPushItem,
   episodes: readonly { season?: number | null; episode?: number | null }[],
-  siblingsOf: AnimeSiblings | undefined
+  membersOf: AnimeSeasonMembers | undefined
 ): SimklHistoryPayload {
-  const entries = animeEntries(item, episodes, siblingsOf)
+  const entries = animeEntries(item, episodes, membersOf)
   return entries.length ? { anime: entries } : {}
 }
 
@@ -186,7 +186,7 @@ function animePayload(
  * Body for a single "mark as watched" call. Movies push a bare ref; shows
  * nest a single episode under a season (defaulting to season 1 when
  * playback doesn't specify one). Anime names the episode in the Simkl entry
- * it belongs to (see animeEntries), which `siblingsOf` is needed to find
+ * it belongs to (see animeEntries), which `membersOf` is needed to find
  * for anything past a first season.
  *
  * EMPTY for a title whose id resolves to no Simkl id at all. Simkl treats
@@ -202,10 +202,10 @@ function animePayload(
 export function historyPayload(
   item: SimklPushItem,
   playback: PlaybackPosition = {},
-  siblingsOf?: AnimeSiblings
+  membersOf?: AnimeSeasonMembers
 ): SimklHistoryPayload {
   if (!hasExpressibleSimklId(String(item?.id ?? ''))) return {}
-  if (item.type === 'anime') return animePayload(item, [playback], siblingsOf)
+  if (item.type === 'anime') return animePayload(item, [playback], membersOf)
   const ref = mediaRef(item)
   if (item.type === 'movie') return { movies: [ref] }
   const entry: SimklShowRef = {
@@ -232,13 +232,13 @@ interface SimklHistoryEntry {
  */
 export function batchHistoryPayload(
   entries: SimklHistoryEntry[],
-  siblingsOf?: AnimeSiblings
+  membersOf?: AnimeSeasonMembers
 ): SimklHistoryPayload {
   const movies: SimklMediaRef[] = []
   const shows: SimklShowRef[] = []
   const anime: SimklAnimeRef[] = []
   for (const { item, playback } of entries) {
-    const single = historyPayload(item, playback, siblingsOf)
+    const single = historyPayload(item, playback, membersOf)
     if (single.movies) movies.push(...single.movies)
     if (single.shows) shows.push(...single.shows)
     if (single.anime) anime.push(...single.anime)
@@ -315,14 +315,14 @@ export function seasonHistoryPayload(
   item: SimklPushItem,
   season: number | undefined,
   episodeNumbers: number[],
-  siblingsOf?: AnimeSiblings
+  membersOf?: AnimeSeasonMembers
 ): SimklHistoryPayload {
   if (!hasExpressibleSimklId(String(item?.id ?? ''))) return {}
   if (item.type === 'anime') {
     return animePayload(
       item,
       episodeNumbers.map((episode) => ({ season, episode })),
-      siblingsOf
+      membersOf
     )
   }
   const ref = mediaRef(item)
@@ -351,14 +351,14 @@ export function seasonHistoryPayload(
 export function titleHistoryPayload(
   item: SimklPushItem,
   seasons: readonly { season: number; episodes: readonly number[] }[],
-  siblingsOf?: AnimeSiblings
+  membersOf?: AnimeSeasonMembers
 ): SimklHistoryPayload {
   if (!hasExpressibleSimklId(String(item?.id ?? ''))) return {}
   if (item.type === 'anime') {
     return animePayload(
       item,
       seasons.flatMap(({ season, episodes }) => episodes.map((episode) => ({ season, episode }))),
-      siblingsOf
+      membersOf
     )
   }
   const ref = mediaRef(item)
@@ -383,13 +383,13 @@ export function scrobblePayload(
   item: SimklPushItem,
   playback: PlaybackPosition = {},
   progress = 0,
-  siblingsOf?: AnimeSiblings
+  membersOf?: AnimeSeasonMembers
 ): SimklScrobblePayload | null {
   if (!hasExpressibleSimklId(String(item?.id ?? ''))) return null
   if (item.type === 'anime') {
     const at = toSimklAnimeEpisode(
       { id: String(item.id), season: playback.season, episode: playback.episode ?? 1 },
-      siblingsOf
+      membersOf
     )
     const anime = at && animeRef(item, at.id)
     return at && anime ? { progress, anime, episode: { number: at.episode } } : null

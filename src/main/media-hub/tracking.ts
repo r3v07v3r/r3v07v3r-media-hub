@@ -87,9 +87,11 @@ import {
 import { catalogData, indexTrackedTitle, metadata } from './catalog'
 import {
   animeGroupingReady,
+  animeSeasonMembersWhenGrouped,
   animeSiblingIds,
-  animeSiblingsWhenGrouped,
   laterSeasonOf,
+  laterSeasons,
+  placeAnimeEntry,
   resolveAnimeGroupTarget
 } from './animeSeasons'
 import { catchUpFromServices, noteSimklActivities, recentSimklActivities } from './simklCatchUp'
@@ -428,7 +430,7 @@ async function sendHistoryRetry(
       const path = batch.action === 'add' ? '/sync/history' : '/sync/history/remove'
       const body = film
         ? historyPayload(item, {})
-        : titleHistoryPayload(item, seasons, animeSiblingsWhenGrouped())
+        : titleHistoryPayload(item, seasons, animeSeasonMembersWhenGrouped())
       const result = await syncSimklHistory(path, body, priority)
       if (result.simklSynced) return { error: undefined }
       return { error: result.simklError ?? null, status: result.simklStatus }
@@ -633,7 +635,7 @@ function pushTitleHistory(
     () => [
       keptSimkl(
         at,
-        syncSimklHistory(path, titleHistoryPayload(item, seasons, animeSiblingsWhenGrouped()))
+        syncSimklHistory(path, titleHistoryPayload(item, seasons, animeSeasonMembersWhenGrouped()))
       ),
       keptTrakt(at, pushTraktTitleHistory(item, seasons, action)),
       keptMal(
@@ -1815,7 +1817,7 @@ function canSendEpisode(service: EpisodeService, show: SyncShow, ep: Ep): boolea
   }
   if (!hasExpressibleSimklId(show.id)) return false
   if (show.type !== 'anime') return true
-  return toSimklAnimeEpisode({ id: show.id, ...ep }, animeSiblingsWhenGrouped()) !== null
+  return toSimklAnimeEpisode({ id: show.id, ...ep }, animeSeasonMembersWhenGrouped()) !== null
 }
 
 /**
@@ -1852,7 +1854,10 @@ function sendEpisodesTo(service: EpisodeService, show: SyncShow, eps: Ep[]): voi
             at,
             syncSimklHistory(
               '/sync/history',
-              withWatchedAt(titleHistoryPayload(item, seasons, animeSiblingsWhenGrouped()), dates),
+              withWatchedAt(
+                titleHistoryPayload(item, seasons, animeSeasonMembersWhenGrouped()),
+                dates
+              ),
               'background'
             )
           )
@@ -1873,9 +1878,11 @@ function episodeKeysOwed(service: EpisodeService): Set<string> {
   return keys
 }
 
-/** Where a Simkl anime entry is kept here, by the placing rules: a later
- *  season only where laterSeasonOf can show it is that season of the page,
- *  never by its position in the group. */
+/** Where a Simkl anime entry is kept here, by the placing rules
+ *  (placeAnimeEntry): a later season only where it can be shown to be that
+ *  season of the page, and the show's own id only where it can be shown to
+ *  be the first — never by its position in the group. One that cannot be
+ *  shown is left out of the comparison, with the show it would land on. */
 async function placeSimklAnime(title: SimklLibraryTitle): Promise<AnimePlace> {
   let kitsu = title.kitsu ?? null
   if (!kitsu) {
@@ -1895,11 +1902,10 @@ async function placeSimklAnime(title: SimklLibraryTitle): Promise<AnimePlace> {
     if (!kitsu) return answered ? { kind: 'none' } : { kind: 'unanswered' }
   }
   const id = `kitsu:${kitsu}`
-  const later = laterSeasonOf(id)
-  if (later) return { kind: 'placed', id: later.id, season: later.season }
-  const target = resolveAnimeGroupTarget(id)
-  if (target.id === id) return { kind: 'placed', id, season: 1 }
-  return { kind: 'mismatched', ids: [id, target.id] }
+  const showId = resolveAnimeGroupTarget(id).id
+  const place = placeAnimeEntry(id)
+  if (place && place.id === showId) return { kind: 'placed', id: place.id, season: place.season }
+  return { kind: 'mismatched', ids: showId === id ? [id] : [id, showId] }
 }
 
 async function readEpisodeSource(source: EpisodeSource): Promise<RemoteRead> {
@@ -2127,7 +2133,7 @@ export function registerTrackingIpc(): void {
       history,
       plannedSources: plannedSources(),
       // Where a later season's card finds its episodes: under the show.
-      laterSeasons: watchedLaterSeasons(history, animeSiblingsWhenGrouped())
+      laterSeasons: watchedLaterSeasons(history, animeSeasonMembersWhenGrouped())
     }
   })
 
@@ -2347,7 +2353,7 @@ export function registerTrackingIpc(): void {
           at,
           syncSimklHistory(
             '/sync/history',
-            historyPayload(item, playback, animeSiblingsWhenGrouped())
+            historyPayload(item, playback, animeSeasonMembersWhenGrouped())
           )
         ),
         keptTrakt(at, pushTraktHistory(item, playback, 'add')),
@@ -2380,7 +2386,7 @@ export function registerTrackingIpc(): void {
             at,
             syncSimklHistory(
               '/sync/history/remove',
-              historyPayload(item, p, animeSiblingsWhenGrouped())
+              historyPayload(item, p, animeSeasonMembersWhenGrouped())
             )
           ),
           keptTrakt(at, pushTraktHistory(item, p, 'remove')),
@@ -2430,7 +2436,7 @@ export function registerTrackingIpc(): void {
           at,
           syncSimklHistory(
             '/sync/history',
-            seasonHistoryPayload(item, season, episodeNumbers, animeSiblingsWhenGrouped())
+            seasonHistoryPayload(item, season, episodeNumbers, animeSeasonMembersWhenGrouped())
           )
         ),
         keptTrakt(at, pushTraktSeasonHistory(item, season, episodeNumbers)),
@@ -3193,14 +3199,14 @@ export function registerTrackingIpc(): void {
 
     // The id a tracked title's viewings are kept under. A merged anime's
     // later season is planned under its own Kitsu id and watched under the
-    // show it belongs to — but only once the catalog has been grouped;
-    // before then every id resolves to itself anyway (see
-    // animeGroupingReady), so asking would only build an empty index.
-    const groupingReady = animeGroupingReady()
-    const historyIdOf = (item: TrackedItem): string => {
-      const id = String(item.id)
-      return groupingReady && id.startsWith('kitsu:') ? resolveAnimeGroupTarget(id).id : id
-    }
+    // show it belongs to — where it can be shown to be a season of that
+    // show's page, and only once the catalog has been grouped. Any other
+    // later season keeps its viewings under its own id (laterSeasonOf), and
+    // counted at its place in the group it would read another season's.
+    const later = laterSeasons()
+    const showOf = (item: TrackedItem): { id: string; season: number } | null =>
+      later?.get(String(item.id)) ?? null
+    const historyIdOf = (item: TrackedItem): string => showOf(item)?.id ?? String(item.id)
     const startedIds = new Set(history.map((entry) => String(entry.id)))
 
     // Metadata only for the shows somebody has started — see
@@ -3213,7 +3219,7 @@ export function registerTrackingIpc(): void {
       tracked,
       history,
       historyIdOf,
-      seasonOf: (item) => resolveAnimeGroupTarget(String(item.id)).season
+      seasonOf: (item) => showOf(item)?.season ?? 1
     })
     const fetched = await mapWithLimit(wanted, (x) => metadata(x.type, x.id, 'visible'))
     const details = fetched.filter((x): x is CatalogItem => Boolean(x))
@@ -3386,7 +3392,7 @@ export function registerTrackingIpc(): void {
         // Null for a title Simkl has no id for — the same refusal to guess
         // by title/year that syncSimklHistory makes above — and for an anime
         // episode with no entry of its own there (see scrobblePayload).
-        const scrobble = scrobblePayload(subject, at, progress, animeSiblingsWhenGrouped())
+        const scrobble = scrobblePayload(subject, at, progress, animeSeasonMembersWhenGrouped())
         if (simklConnected && scrobble) {
           try {
             await simklRequest(`/scrobble/${action}`, {

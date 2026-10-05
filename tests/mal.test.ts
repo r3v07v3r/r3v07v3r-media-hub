@@ -1,6 +1,7 @@
 import assert from 'node:assert'
 import {
   computeReconciliation,
+  localEntryProgress,
   localSeasonEpisodeCounts,
   malStatusForProgress,
   planMalPushes
@@ -167,6 +168,28 @@ check('a season the change did not touch is not written, and one with no member 
   assert.deepEqual(pushes, [{ id: 'kitsu:2', watchedEpisodes: 3 }])
 })
 
+check('a season no member can be shown to be is not sent, whoever sits at that place', () => {
+  // What malTitleOf hands over for a show numbered by TMDB: the member at
+  // place 2 is an OVA, so season 2 of the page is blank; so is a first
+  // season the show's own id cannot be shown to be.
+  assert.deepEqual(
+    planMalPushes(
+      history,
+      { id: canonical, members: ['kitsu:1', null, 'kitsu:3'] },
+      { seasons: [1, 2] }
+    ),
+    [{ id: 'kitsu:1', watchedEpisodes: 2 }]
+  )
+  assert.deepEqual(
+    planMalPushes(
+      history,
+      { id: canonical, members: [null, 'kitsu:2'] },
+      { seasons: [1, 2], status: 'plan_to_watch' }
+    ),
+    [{ id: 'kitsu:2', watchedEpisodes: 3 }]
+  )
+})
+
 check("the group's total never judges a member; without its own, a member gets no status", () => {
   const pushes = planMalPushes(
     history,
@@ -193,6 +216,39 @@ check(
     ])
   }
 )
+
+check('the import counts an entry where it is kept, never at its place in the group', () => {
+  // The show's rows at seasons 1 and 2, and a member kept under its own id
+  // whose own page labels its episodes over three seasons.
+  const own = (season: number, episode: number): ReturnType<typeof row> => ({
+    ...row(season, episode),
+    id: 'kitsu:7'
+  })
+  const local = [...history, own(1, 1), own(1, 2), own(2, 3), own(3, 4)]
+  assert.deepEqual(
+    localEntryProgress(
+      [
+        // A season of the show: that season's episodes only.
+        { kitsuId: 'kitsu:1', target: { id: canonical, season: 1 } },
+        { kitsuId: 'kitsu:2', target: { id: canonical, season: 2 } },
+        // A title of its own: every row under its id, whatever the season.
+        { kitsuId: 'kitsu:7', target: { id: 'kitsu:7', season: 1 }, whole: true },
+        // Nothing held, no place, and no Kitsu id at all.
+        { kitsuId: 'kitsu:3', target: { id: canonical, season: 3 } },
+        { kitsuId: 'kitsu:8', target: null },
+        { kitsuId: '', target: null }
+      ],
+      local
+    ),
+    { 'kitsu:1': 2, 'kitsu:2': 3, 'kitsu:7': 4, 'kitsu:3': 0 }
+  )
+  // Counted over season 1 alone, that title read as two episodes in and
+  // the other two were pulled down from MAL a second time.
+  assert.deepEqual(
+    localEntryProgress([{ kitsuId: 'kitsu:7', target: { id: 'kitsu:7', season: 1 } }], local),
+    { 'kitsu:7': 2 }
+  )
+})
 
 check('an ungrouped title is one entry over every row, judged against its own total', () => {
   const pushes = planMalPushes(history, { id: canonical, totalEpisodes: 5 }, { seasons: [2] })
