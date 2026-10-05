@@ -65,6 +65,8 @@ trending feed (either one alone fills the grid), anime from Kitsu. No key is req
   a film or anime, the next part of its series is offered first, and a rewatch counts. Your own
   ratings steer it: a genre you watch often but enjoy little stops leading. An anime whose
   seasons are merged into one show is suggested as that show, never as one of its later seasons.
+  A suggestion you plan, mark watched or mark Not interested from Home's row, a For You shelf or
+  the hero stays where it is, with its new badge, until you leave the page.
 - **Cast and crew are clickable** once a TMDB key is connected: names open what else of theirs
   the catalog holds, and typing a director's name in search finds their films rather than films
   with their name in the title.

@@ -19,6 +19,13 @@
 // show them with its own toggle, and a disliked card is marked wherever it
 // is shown.
 //
+// A card acted on from Home's Recommended row, a For You rail or the hero
+// keeps its slot, with its new state, until the route changes
+// (heldFeed.ts): the fresh feed has the title back at its old index, the
+// other entries keep their order, and the snapshot remembered for the next
+// launch is the fresh answer. The library side panel keeps the title it
+// was showing when that title leaves every shelf (librarySelection.ts).
+//
 // Run with: npx tsx tests/statusActions.test.ts
 
 import assert from 'node:assert/strict'
@@ -32,6 +39,9 @@ import {
 } from '../src/renderer/src/lib/mediaHub/statusToasts'
 import { notificationTtlMs } from '../src/renderer/src/context/OverlayContext'
 import { hideDislikedDefault, logoutSettings } from '../src/main/media-hub/preferences'
+import { holdEntries, holdTouchedEntries } from '../src/renderer/src/lib/mediaHub/heldFeed'
+import { resolveLibrarySelection } from '../src/renderer/src/lib/mediaHub/librarySelection'
+import type { HomeRail, MediaItem, Recommendation } from '../src/renderer/src/types'
 import {
   applyWatchStateFilters,
   filterStateFromSearchParams
@@ -202,6 +212,146 @@ check('a disliked card is marked on MediaCard and on a library tile', () => {
   assert.match(tile, /const disliked = dislikedIds\.has\(media\.id\)/)
   assert.match(tile, /disliked \? styles\.tileDisliked/)
   assert.match(tile, /\{disliked && \([\s\S]*?Not interested/)
+})
+
+// --- a card acted on keeps its slot -----------------------------------------
+
+const ids = (list: readonly { id: string }[]): string[] => list.map((entry) => entry.id)
+const same = (entry: { id: string }) => entry
+
+check('a held title goes back to the index it had, the rest keep their order', () => {
+  const previous = ['a', 'b', 'c', 'd'].map((id) => ({ id }))
+  const next = ['a', 'c', 'd', 'e'].map((id) => ({ id }))
+  const held = new Set(['b'])
+  assert.deepEqual(ids(holdEntries(previous, next, held, (x) => x.id, same)), [
+    'a',
+    'b',
+    'c',
+    'd',
+    'e'
+  ])
+})
+
+check('several held titles, the first one included, each land at their old index', () => {
+  const previous = ['a', 'b', 'c', 'd', 'e'].map((id) => ({ id }))
+  const next = ['c', 'e', 'f'].map((id) => ({ id }))
+  const held = new Set(['a', 'b', 'd'])
+  assert.deepEqual(ids(holdEntries(previous, next, held, (x) => x.id, same)), [
+    'a',
+    'b',
+    'c',
+    'd',
+    'e',
+    'f'
+  ])
+})
+
+check('a held title still in the fresh feed takes its old slot with the fresh copy', () => {
+  const previous = [
+    { id: 'a', v: 1 },
+    { id: 'b', v: 1 }
+  ]
+  const next = [
+    { id: 'b', v: 2 },
+    { id: 'a', v: 2 }
+  ]
+  const result = holdEntries(previous, next, new Set(['a']), (x) => x.id, same)
+  assert.deepEqual(result, [
+    { id: 'a', v: 2 },
+    { id: 'b', v: 2 }
+  ])
+})
+
+check('a held id that was not on screen is left where the fresh feed put it', () => {
+  const previous = [{ id: 'a' }]
+  const next = [{ id: 'b' }, { id: 'z' }]
+  assert.deepEqual(ids(holdEntries(previous, next, new Set(['z']), (x) => x.id, same)), ['b', 'z'])
+})
+
+function media(id: string, extra: Partial<MediaItem> = {}): MediaItem {
+  return { id, title: id, mediaType: 'movie', ...extra } as MediaItem
+}
+function rec(id: string, extra: Partial<MediaItem> = {}): Recommendation {
+  return { media: media(id, extra), reasons: [] } as unknown as Recommendation
+}
+
+check('the recommendations, the hero pool and the rails all hold the title', () => {
+  const previous = {
+    recommendations: [rec('a'), rec('b'), rec('c')],
+    featured: [media('a'), media('b'), media('c')],
+    rails: [{ id: 'genre:x', title: 'X', items: [media('b'), media('c')] }] as HomeRail[]
+  }
+  const next = {
+    recommendations: [rec('a'), rec('c')],
+    featured: [media('a'), media('c')],
+    rails: [{ id: 'genre:x', title: 'X', items: [media('c')] }] as HomeRail[],
+    preferredGenres: []
+  }
+  const held = new Map([['b', { watched: true, completed: true }]])
+  const result = holdTouchedEntries(previous, next, held, new Set(['b']))
+  assert.deepEqual(
+    result.recommendations.map((r) => r.media.id),
+    ['a', 'b', 'c']
+  )
+  assert.deepEqual(ids(result.featured), ['a', 'b', 'c'])
+  assert.deepEqual(ids(result.rails[0].items), ['b', 'c'])
+  // The held copy carries the change and the fresh plan state.
+  const held0 = result.recommendations[1].media
+  assert.equal(held0.completed, true)
+  assert.equal(held0.watched, true)
+  assert.equal(held0.inMyList, true)
+  assert.equal(result.featured[1].completed, true)
+  // Other fields of the fresh feed come through untouched.
+  assert.deepEqual(result.preferredGenres, [])
+})
+
+check('with nothing held the fresh feed is returned as it is', () => {
+  const next = { recommendations: [rec('a')], featured: [media('a')], rails: [] as HomeRail[] }
+  const previous = {
+    recommendations: [rec('b')],
+    featured: [media('b')],
+    rails: [] as HomeRail[]
+  }
+  assert.equal(holdTouchedEntries(previous, next, new Map(), new Set()), next)
+})
+
+const hooksSource = fs.readFileSync(
+  path.resolve(__dirname, '../src/renderer/src/lib/mediaHub/hooks.ts'),
+  'utf8'
+)
+const contextSource = fs.readFileSync(
+  path.resolve(__dirname, '../src/renderer/src/context/AppStateContext.tsx'),
+  'utf8'
+)
+
+check('the home feed holds only within one library, and remembers the fresh answer', () => {
+  assert.match(hooksSource, /previous && sameLibrary && heldNow\.size > 0/)
+  assert.match(hooksSource, /holdTouchedEntries\(previous, next, heldNow, trackedIds\)/)
+  assert.match(hooksSource, /rememberHomeFeed\(\{\s*featured: next\.featured,/)
+})
+
+check('the status actions hold the title, and a route change lets it go and refetches', () => {
+  for (const name of ['toggleMyList', 'toggleDisliked', 'setTitleStatus']) {
+    const start = contextSource.indexOf(`const ${name} = useCallback(`)
+    assert.ok(start >= 0, `${name} not found`)
+    const body = contextSource.slice(start, contextSource.indexOf('\n  )\n', start))
+    assert.match(body, /holdInFeed\(/, `${name} does not hold the title`)
+  }
+  assert.match(
+    contextSource,
+    /heldFeedRef\.current\.clear\(\)\s*refreshHomeFeedForHeld\(\)\s*\}, \[location\.pathname,/
+  )
+})
+
+// --- the library side panel keeps its title ----------------------------------
+
+check('the side panel keeps the selected title after it leaves every shelf', () => {
+  const hero = media('hero')
+  const picked = media('picked', { inMyList: false })
+  const fresh = media('picked', { inMyList: true })
+  assert.equal(resolveLibrarySelection([[hero, fresh]], picked, hero), fresh)
+  assert.equal(resolveLibrarySelection([[hero]], picked, hero), picked)
+  assert.equal(resolveLibrarySelection([[hero]], null, hero), hero)
 })
 
 console.log(`\n${pass} passed`)

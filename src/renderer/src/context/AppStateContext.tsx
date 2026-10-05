@@ -54,6 +54,7 @@ import {
   rememberTrackedId
 } from '@renderer/lib/mediaHub/startupSnapshot'
 import { plannedToast } from '@renderer/lib/mediaHub/statusToasts'
+import type { HeldChange } from '@renderer/lib/mediaHub/heldFeed'
 import {
   startupContinueWatchingFallback,
   startupTrackedIdsFallback,
@@ -558,7 +559,32 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [watchStatusVersion, setWatchStatusVersion] = useState(0)
   const reloadLibrary = useCallback(() => setLibraryEpoch((n) => n + 1), [])
 
-  const homeFeed = useMediaHubHomeFeed(libraryKey)
+  // Titles whose status was changed on the page now on screen, with what
+  // the change did to them. The home feed keeps them at their place until
+  // the route changes, so a card acted on from Home's Recommended row, a
+  // For You rail or the hero does not vanish under the click. Filled by
+  // holdInFeed below; see lib/mediaHub/heldFeed.ts.
+  const heldFeedRef = useRef<Map<string, HeldChange>>(new Map())
+  const holdInFeed = useCallback((id: string, change: HeldChange = {}) => {
+    const held = heldFeedRef.current
+    held.set(id, { ...held.get(id), ...change })
+  }, [])
+  const homeFeed = useMediaHubHomeFeed(libraryKey, heldFeedRef)
+  // Leaving the page lets them go: the set is cleared and the feed
+  // refetched, so the next page shows the ranking as it stands. Keyed on
+  // the path alone, so a library page's filter changes, which only touch
+  // the query string, keep them.
+  const refreshHomeFeedForHeld = homeFeed.refresh
+  useEffect(() => {
+    if (heldFeedRef.current.size === 0) return
+    heldFeedRef.current.clear()
+    refreshHomeFeedForHeld()
+  }, [location.pathname, refreshHomeFeedForHeld])
+  // Another profile's library is not this page's: drop them without the
+  // refetch, which the new library key brings anyway.
+  useEffect(() => {
+    heldFeedRef.current.clear()
+  }, [libraryKey])
   const watchedIdsResult = useMediaHubWatchedIds(libraryKey)
   const dislikedIdsResult = useMediaHubDislikedIds(libraryKey)
   // Ratings have no refresh() of their own (the hook adopts what the backend
@@ -912,6 +938,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const toggleMyList = useCallback(
     (media: MediaItem, to?: boolean) => {
       if (to !== undefined && myListRef.current.has(media.id) === to) return
+      holdInFeed(media.id)
       // This used to refuse the click outright when `media.id` was not
       // expressible to a tracking service, on the grounds that such an id
       // could only have come from mockData's demo pool (the source of the
@@ -978,7 +1005,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // refresh, not a broken UI in the moment.
         })
     },
-    [homeFeed, pushNotification, activeProfileId]
+    [homeFeed, pushNotification, activeProfileId, holdInFeed]
   )
   useEffect(() => {
     toggleMyListRef.current = toggleMyList
@@ -994,6 +1021,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       const settle = (write: Promise<unknown> | undefined): void => {
         void write?.then(() => dislikedIdsResult.refresh()).catch(() => {})
       }
+      holdInFeed(media.id)
       setDislikedIds((prev) => {
         if (to !== undefined && prev.has(media.id) === to) return prev
         const next = new Set(prev)
@@ -1012,7 +1040,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // out of the rail instead of lingering until some unrelated refetch.
       homeFeed.refresh()
     },
-    [homeFeed, dislikedIdsResult]
+    [homeFeed, dislikedIdsResult, holdInFeed]
   )
 
   const markContinueWatching = useCallback(
@@ -1957,6 +1985,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       }
       const id = media.id
       const wasPlanned = myList.has(id)
+      // What the change does to the title's own flags, for its held copy
+      // in the home feed: watched is every aired episode, not watched is
+      // none, and a plan leaves them as they are.
+      holdInFeed(
+        id,
+        status === 'watched'
+          ? { watched: true, completed: true }
+          : status === 'unwatched'
+            ? { watched: false, completed: false }
+            : {}
+      )
       // Shown as where the write lands: clearing a planned title leaves
       // its plan (titleStatusRules.ts), so what comes back is Planned.
       setTitleStatusPending((prev) => ({
@@ -2083,6 +2122,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         })
         .catch((error: unknown) => {
           clearPending()
+          // Nothing changed, so the held copy keeps its own flags.
+          heldFeedRef.current.set(id, {})
           // Put the plan set back exactly; the watched sets never moved.
           if (status === 'planned' || (status === 'watched' && wasPlanned)) {
             setMyList((prev) => {
@@ -2099,7 +2140,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           })
         })
     },
-    [homeFeed, watchedIdsResult, pushNotification, myList, toggleMyList]
+    [homeFeed, watchedIdsResult, pushNotification, myList, toggleMyList, holdInFeed]
   )
 
   const partyPanelReportedOpen = useRef<boolean | null>(null)

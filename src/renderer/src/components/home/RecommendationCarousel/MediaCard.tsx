@@ -82,7 +82,11 @@ export function MediaCard({
   // On the Planned tab every card is planned, so the corner badge would
   // say the same thing forty times; the provenance chip is the fact worth
   // reading there. Everywhere else the badge is how a planned title shows.
-  const status = getWatchStatus(media, continueWatching)
+  // The plan from the live set, not the flag the item was built with: a
+  // recommendation planned from its own menu stays in its row until the
+  // page is left (lib/mediaHub/heldFeed.ts), and should say Planned at
+  // once rather than when the next feed arrives.
+  const status = getWatchStatus({ ...media, inMyList: myList.has(media.id) }, continueWatching)
   const watchStatus =
     status.state === 'planned' && plannedTag ? { state: 'unwatched' as const } : status
 

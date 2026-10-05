@@ -31,6 +31,7 @@ import { formatReleaseDate, isFutureRelease } from '@renderer/lib/mediaHub/relea
 import { CategoryFilterBar } from './CategoryFilterBar'
 import { TitleStatusButton } from '@renderer/components/media/TitleStatusButton'
 import { titleStatusOf } from '@renderer/lib/mediaHub/titleStatus'
+import { resolveLibrarySelection } from '@renderer/lib/mediaHub/librarySelection'
 import styles from './AnimeLibraryPage.module.css'
 import { RatingBadge } from '@renderer/components/detail/RatingBadge'
 import { ratingSourceFor } from '@renderer/components/detail/ratingSource'
@@ -850,7 +851,9 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
   const [heroIndex, setHeroIndex] = useState(0)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  // The item itself, not only its id, so the panel can keep showing it once
+  // it has left every shelf — see librarySelection.ts.
+  const [selection, setSelection] = useState<MediaItem | null>(null)
 
   const paramsString = searchParams.toString()
   const hideDefaults: HideStateDefaults = useMemo(
@@ -1158,10 +1161,12 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
   }, [restorePendingHere, browseLoading, pendingRestore, ensureItem])
   const selected = useMemo(
     () =>
-      [...browseItems, ...continuing, ...recommended, ...heroItems].find(
-        (item) => item.id === selectedId
-      ) ?? activeHero,
-    [activeHero, browseItems, continuing, heroItems, recommended, selectedId]
+      resolveLibrarySelection(
+        [browseItems, continuing, recommended, heroItems],
+        selection,
+        activeHero
+      ),
+    [activeHero, browseItems, continuing, heroItems, recommended, selection]
   )
   const heroArt = activeHero ? resolveArtwork(activeHero) : null
 
@@ -1294,7 +1299,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
                   onClick={(event) => {
                     event.stopPropagation()
                     setHeroIndex(index)
-                    setSelectedId(item.id)
+                    setSelection(item)
                   }}
                   aria-label={`Show ${item.title}`}
                   aria-pressed={index === heroIndex}
@@ -1338,7 +1343,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
             icon="search"
             items={searchResults}
             selectedId={selected?.id ?? null}
-            onSelect={(media) => setSelectedId(media.id)}
+            onSelect={setSelection}
             onOpen={openDetail}
             emptyMessage={
               categorySearch.loading
@@ -1355,7 +1360,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
               icon="clock"
               items={continuing}
               selectedId={selected?.id ?? null}
-              onSelect={(media) => setSelectedId(media.id)}
+              onSelect={setSelection}
               onOpen={openDetail}
               emptyMessage="Nothing in progress here yet"
               collapseWhenEmpty
@@ -1365,7 +1370,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
               icon="sparkle"
               items={recommended}
               selectedId={selected?.id ?? null}
-              onSelect={(media) => setSelectedId(media.id)}
+              onSelect={setSelection}
               onOpen={openDetail}
               emptyMessage="Watch a few titles and personalised recommendations will appear here."
             />
@@ -1374,7 +1379,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
               icon="sparkle"
               items={popular}
               selectedId={selected?.id ?? null}
-              onSelect={(media) => setSelectedId(media.id)}
+              onSelect={setSelection}
               onOpen={openDetail}
               emptyMessage={
                 kindState === 'loading'
@@ -1392,7 +1397,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
           icon="grid"
           items={browseItems}
           selectedId={selected?.id ?? null}
-          onSelect={(media) => setSelectedId(media.id)}
+          onSelect={setSelection}
           onOpen={openDetail}
           initialVisibleCount={restoreVisibleCount}
           viewKey={viewKey}
