@@ -11,12 +11,16 @@
 //
 // AppStateContext records the ids toggleMyList, setTitleStatus and
 // toggleDisliked touch, with what the change did to the title's own flags,
-// and clears them when the route changes. useMediaHubHomeFeed passes each
-// fresh feed through holdTouchedEntries, which puts those titles back at
-// the index they had in the feed on screen. The route change also
-// refetches, so the next visit shows the ranking as it stands.
+// and clears them when the route moves to a different top-level page
+// (heldPageAfterRoute). A title's or a person's page opened on top of the
+// page keeps them, so going back to Home finds the cards where they were.
+// useMediaHubHomeFeed passes each fresh feed through holdTouchedEntries,
+// which puts those titles back at the index they had in the feed on
+// screen. The release also refetches, so the next visit shows the ranking
+// as it stands.
 
 import type { HomeRail, MediaItem, Recommendation } from '@renderer/types'
+import { isDetailRoute } from './browsingContext'
 
 /** What a change is known to have done to a title's own flags, applied to
  *  the held copy: the copy was built before the change, and a title that
@@ -97,4 +101,25 @@ export function holdTouchedEntries<F extends HoldableFeed>(
         : { ...rail, items }
     })
   }
+}
+
+/** A page opened on top of another rather than a top-level page of its own:
+ *  a title's page, or a person's page opened from one. */
+function isPushedPage(pathname: string): boolean {
+  return isDetailRoute(pathname) || /^\/people\/[^/]+$/.test(pathname)
+}
+
+/**
+ * The top-level page the held titles belong to after a move to `pathname`,
+ * and whether the move left it. A pushed page (a title's or a person's)
+ * keeps both the page and the holds; any other path is a top-level page,
+ * and moving to a different one than `page` releases them. `page` is null
+ * before any top-level page has been seen (the app opened on a title).
+ */
+export function heldPageAfterRoute(
+  page: string | null,
+  pathname: string
+): { page: string | null; release: boolean } {
+  if (isPushedPage(pathname)) return { page, release: false }
+  return { page: pathname, release: page !== null && page !== pathname }
 }

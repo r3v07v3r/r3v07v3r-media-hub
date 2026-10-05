@@ -29,7 +29,8 @@
 // marked.
 //
 // A card acted on from Home's Recommended row, a For You rail or the hero
-// keeps its slot, with its new state, until the route changes
+// keeps its slot, with its new state, until the route moves to a different
+// top-level page; a title's page opened on top and the way back keep it
 // (heldFeed.ts): the fresh feed has the title back at its old index, the
 // other entries keep their order, and the snapshot remembered for the next
 // launch is the fresh answer. The library side panel keeps the title it
@@ -60,7 +61,11 @@ import {
   logoutSettings,
   upgradeHideDislikedDefault
 } from '../src/main/media-hub/preferences'
-import { holdEntries, holdTouchedEntries } from '../src/renderer/src/lib/mediaHub/heldFeed'
+import {
+  heldPageAfterRoute,
+  holdEntries,
+  holdTouchedEntries
+} from '../src/renderer/src/lib/mediaHub/heldFeed'
 import { resolveLibrarySelection } from '../src/renderer/src/lib/mediaHub/librarySelection'
 import type { HomeRail, MediaItem, Recommendation } from '../src/renderer/src/types'
 import { createApi, type ApiTransport } from '../src/preload/api'
@@ -530,7 +535,31 @@ check('the home feed holds only within one library, and remembers the fresh answ
   assert.match(hooksSource, /rememberHomeFeed\(\{\s*featured: next\.featured,/)
 })
 
-check('the status actions hold the title, and a route change lets it go and refetches', () => {
+check('a title page opened on top keeps the holds; another top-level page lets them go', () => {
+  // Home, a title's page, a person's page from it, and back.
+  let state = heldPageAfterRoute(null, '/')
+  assert.deepEqual(state, { page: '/', release: false })
+  for (const pathname of ['/movies/tt0111161', '/people/Frank%20Darabont', '/series/tt1']) {
+    state = heldPageAfterRoute(state.page, pathname)
+    assert.deepEqual(state, { page: '/', release: false }, pathname)
+  }
+  state = heldPageAfterRoute(state.page, '/')
+  assert.deepEqual(state, { page: '/', release: false })
+  // A different top-level page, straight or by way of a title's page.
+  assert.deepEqual(heldPageAfterRoute('/', '/movies'), { page: '/movies', release: true })
+  state = heldPageAfterRoute('/', '/anime/kitsu:1')
+  assert.deepEqual(heldPageAfterRoute(state.page, '/settings'), {
+    page: '/settings',
+    release: true
+  })
+  assert.deepEqual(heldPageAfterRoute('/', '/my-stuff'), { page: '/my-stuff', release: true })
+  // Opened on a title, then to Home: nothing on screen before to leave.
+  state = heldPageAfterRoute(null, '/movies/tt1')
+  assert.deepEqual(state, { page: null, release: false })
+  assert.deepEqual(heldPageAfterRoute(state.page, '/'), { page: '/', release: false })
+})
+
+check('the status actions hold the title, and leaving the page lets it go and refetches', () => {
   for (const name of ['toggleMyList', 'toggleDisliked', 'setTitleStatus']) {
     const start = contextSource.indexOf(`const ${name} = useCallback(`)
     assert.ok(start >= 0, `${name} not found`)
@@ -539,7 +568,7 @@ check('the status actions hold the title, and a route change lets it go and refe
   }
   assert.match(
     contextSource,
-    /heldFeedRef\.current\.clear\(\)\s*refreshHomeFeedForHeld\(\)\s*\}, \[location\.pathname,/
+    /heldPageAfterRoute\(heldPageRef\.current, location\.pathname\)[\s\S]*?if \(!release \|\| heldFeedRef\.current\.size === 0\) return\s*heldFeedRef\.current\.clear\(\)\s*refreshHomeFeedForHeld\(\)\s*\}, \[location\.pathname,/
   )
 })
 

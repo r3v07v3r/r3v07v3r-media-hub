@@ -60,7 +60,7 @@ import {
   toggleApplies,
   unplannedToast
 } from '@renderer/lib/mediaHub/statusToasts'
-import type { HeldChange } from '@renderer/lib/mediaHub/heldFeed'
+import { heldPageAfterRoute, type HeldChange } from '@renderer/lib/mediaHub/heldFeed'
 import {
   startupContinueWatchingFallback,
   startupTrackedIdsFallback,
@@ -586,13 +586,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     held.set(id, { ...held.get(id), ...change })
   }, [])
   const homeFeed = useMediaHubHomeFeed(libraryKey, heldFeedRef)
-  // Leaving the page lets them go: the set is cleared and the feed
-  // refetched, so the next page shows the ranking as it stands. Keyed on
-  // the path alone, so a library page's filter changes, which only touch
-  // the query string, keep them.
+  // Leaving the page for another top-level page lets them go: the set is
+  // cleared and the feed refetched, so the next page shows the ranking as
+  // it stands. A title's page opened on top of it, and the way back, keep
+  // them (heldPageAfterRoute). Keyed on the path alone, so a library page's
+  // filter changes, which only touch the query string, keep them too.
+  const heldPageRef = useRef<string | null>(null)
   const refreshHomeFeedForHeld = homeFeed.refresh
   useEffect(() => {
-    if (heldFeedRef.current.size === 0) return
+    const { page, release } = heldPageAfterRoute(heldPageRef.current, location.pathname)
+    heldPageRef.current = page
+    if (!release || heldFeedRef.current.size === 0) return
     heldFeedRef.current.clear()
     refreshHomeFeedForHeld()
   }, [location.pathname, refreshHomeFeedForHeld])
