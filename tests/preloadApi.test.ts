@@ -107,6 +107,15 @@ check('a request is one invoke carrying exactly the payload the handler reads', 
     args: [{ kind: 'movie', query: 'in time' }]
   })
 
+  // The scrobble switch carries the same { enabled } shape as the two-way
+  // one beside it, which is what its handler reads.
+  void api.mediaHub.tracking.setScrobble(true)
+  assert.deepEqual(calls.at(-1), {
+    kind: 'invoke',
+    channel: MEDIA_HUB_CHANNELS.trackingSetScrobble,
+    args: [{ enabled: true }]
+  })
+
   // No payload means NO argument, not an explicit undefined: a handler that
   // counts its arguments must see the same call it always has.
   void api.mediaHub.bootstrap()

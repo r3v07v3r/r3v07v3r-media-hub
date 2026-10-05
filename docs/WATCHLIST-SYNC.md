@@ -269,6 +269,12 @@ answers a history push with one, the request waits the time the service's
 more; a second 429, or a wait longer than a minute, is an ordinary failure
 (`retryOnceOn429` in `httpClient.ts`).
 
+**Scrobbles are off unless turned on.** The player's start, pause and stop
+messages to Simkl and Trakt are sent only when "Scrobble while playing" is
+on (Accounts → Tracking). Each is a request against Simkl's daily
+allowance, and a finished episode or film is sent as a history add at 80%
+whatever the setting says. The phone and TV player sends none either way.
+
 ## What this deliberately does not do
 
 - **No merging of what a "list" means.** Trakt's watchlist, Simkl's

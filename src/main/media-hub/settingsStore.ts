@@ -37,6 +37,14 @@ export interface MediaHubRawSettings {
    * see docs/WATCHLIST-SYNC.md, which is the agreement this implements.
    */
   watchlistTwoWay?: boolean
+  /**
+   * Whether the player tells Simkl and Trakt what is playing as it plays
+   * (scrobble start, pause and stop). Absent means OFF: the history add at
+   * 80% is the record either way, and every scrobble is a request against
+   * Simkl's daily allowance, which a linked phone shares. See
+   * preferences.ts's scrobblingEnabled.
+   */
+  scrobbleEnabled?: boolean
   onboardingVersion?: number
   /** Whether the first-run welcome flow (name, playback source, storage,
    *  cache tuning) has been completed or skipped. Absent only before the

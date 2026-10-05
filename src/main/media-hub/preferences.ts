@@ -105,8 +105,23 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     // Absent means on, for the same reason storeMedia's absence means
     // yes: every install that had the one-way pull is somebody who
     // connected an account to keep things in step.
-    watchlistTwoWay: settings.watchlistTwoWay !== false
+    watchlistTwoWay: settings.watchlistTwoWay !== false,
+    scrobbleEnabled: scrobblingEnabled(settings)
   }
+}
+
+/**
+ * Whether the player's scrobbles go out at all. Absent means no.
+ *
+ * A finished episode already reaches Simkl and Trakt as a history add at
+ * 80%. Scrobbles on top of that are a start, a stop and a pause and resume
+ * pair for every pause, per service, and Simkl counts each one against the
+ * account's 500 requests a day, which a phone linked to this desktop draws
+ * on too. So they are something to ask for, not something every install
+ * does by default.
+ */
+export function scrobblingEnabled(settings: { scrobbleEnabled?: unknown } = {}): boolean {
+  return settings.scrobbleEnabled === true
 }
 
 // Whether the shader files are on disk is anime4kInstall.ts's to answer,

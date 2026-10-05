@@ -63,10 +63,18 @@ export function WatchlistSyncSection() {
   const [report, setReport] = useState<PlannedSyncReport | null>(null)
   const [busy, setBusy] = useState(false)
   const twoWay = mediaHubSettings?.watchlistTwoWay !== false
+  const scrobble = mediaHubSettings?.scrobbleEnabled === true
 
   const setTwoWay = (enabled: boolean): void => {
     void window.api?.mediaHub?.tracking
       ?.setWatchlistTwoWay?.(enabled)
+      .then(() => refreshMediaHubSettings())
+      .catch(() => {})
+  }
+
+  const setScrobble = (enabled: boolean): void => {
+    void window.api?.mediaHub?.tracking
+      ?.setScrobble?.(enabled)
       .then(() => refreshMediaHubSettings())
       .catch(() => {})
   }
@@ -143,6 +151,32 @@ export function WatchlistSyncSection() {
           onClick={() => setTwoWay(!twoWay)}
         >
           {twoWay ? 'On' : 'Off'}
+        </button>
+      </div>
+
+      {/* Off by default. The watched mark at 80% reaches the services
+          whatever this says; scrobbles are the extra live updates, and they
+          are what spends Simkl's daily allowance fastest. */}
+      <div className={styles.row}>
+        <div className={styles.rowIcon} aria-hidden="true">
+          <Icon name="play" size={17} />
+        </div>
+        <div className={styles.rowText}>
+          <span className={styles.rowTitle}>Scrobble while playing</span>
+          <span className={styles.rowDescription}>
+            Tells Simkl and Trakt what is playing as you play, pause and stop it; a finished episode
+            or film is recorded either way. Simkl allows 500 requests a day per account, shared with
+            a phone linked to this computer, and every scrobble counts against it.
+          </span>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={scrobble}
+          className={styles.testButton}
+          onClick={() => setScrobble(!scrobble)}
+        >
+          {scrobble ? 'On' : 'Off'}
         </button>
       </div>
 

@@ -172,15 +172,19 @@ Each tracking service needs its own API application: create one on the service's
 enter the Client ID (and, for Trakt, the client secret; MyAnimeList's is optional) under
 **Control centre → Accounts**.
 
-| Service         | What it does                                                                                                                                                                                                                                     |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Simkl**       | Pushes watch history and live scrobbles; syncs the plan-to-watch list both ways; shows your Simkl lists. When a movie's watched state differs between this app and Simkl, an **Out of sync with Simkl** panel lets you pick which side is right. |
-| **Trakt**       | Pushes watch history, ratings and live scrobbles for movies and series (anime is not sent); reads your watchlist and lists; imports an existing account's history and ratings once, safely repeatable.                                           |
-| **MyAnimeList** | Pushes anime progress and syncs the plan-to-watch list; **Preview sync with MAL** shows what would change before you apply it.                                                                                                                   |
+| Service         | What it does                                                                                                                                                                                                                                                     |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Simkl**       | Pushes watch history (and live scrobbles, if turned on); syncs the plan-to-watch list both ways; shows your Simkl lists. When a movie's watched state differs between this app and Simkl, an **Out of sync with Simkl** panel lets you pick which side is right. |
+| **Trakt**       | Pushes watch history, ratings and (if turned on) live scrobbles for movies and series (anime is not sent); reads your watchlist and lists; imports an existing account's history and ratings once, safely repeatable.                                            |
+| **MyAnimeList** | Pushes anime progress and syncs the plan-to-watch list; **Preview sync with MAL** shows what would change before you apply it.                                                                                                                                   |
 
 **Keep watchlists in sync** (under Accounts → Tracking) is the two-way rule: planning or un-planning
 here pushes out, and a title a service drops is removed here too, but only if this app pulled it in
 from that service originally. The rules are written down in [docs/WATCHLIST-SYNC.md](docs/WATCHLIST-SYNC.md).
+
+**Scrobble while playing** (same place) is off by default. A finished episode or film is sent to
+Simkl and Trakt either way; scrobbles add a request for every start, pause and stop, and Simkl
+allows an account 500 requests a day, shared with a linked phone.
 
 > Known limitation: a mark made while a service is unreachable is logged and dropped, not retried.
 > Only the Simkl movie comparison above catches the difference later.
@@ -337,8 +341,8 @@ the control centre; API credentials are entered in the app, never in the source 
 | **Bazarr**          | No                              | Connection status only.                                                                                                                    | Media servers                      |
 | **TMDB**            | No (Letterboxd import needs it) | Age certificates, cast and crew, collections, better similar titles, grouped-anime episodes.                                               | Accounts → Artwork & metadata      |
 | **OMDb**            | No                              | Rotten Tomatoes scores.                                                                                                                    | Accounts → Artwork & metadata      |
-| **Simkl**           | No                              | History and scrobble push, two-way watchlist, your Simkl lists, the movie discrepancy review.                                              | Accounts → Tracking                |
-| **Trakt**           | No                              | History, ratings and scrobble push; watchlist and lists pull; one-off import.                                                              | Accounts → Tracking                |
+| **Simkl**           | No                              | History push (scrobbles if turned on), two-way watchlist, your Simkl lists, the movie discrepancy review.                                  | Accounts → Tracking                |
+| **Trakt**           | No                              | History, ratings and (if turned on) scrobble push; watchlist and lists pull; one-off import.                                               | Accounts → Tracking                |
 | **MyAnimeList**     | No                              | Anime progress push, two-way watchlist, preview-then-apply sync.                                                                           | Accounts → Tracking                |
 | **SubDL**           | No                              | Subtitle search with no daily limit.                                                                                                       | Accounts → Subtitles               |
 | **OpenSubtitles**   | No                              | A second subtitle catalogue with hash matching (a free account allows 5 downloads a day).                                                  | Accounts → Subtitles               |

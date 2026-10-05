@@ -126,6 +126,7 @@ import {
   traktCredentials,
   malCredentials
 } from './settingsStore'
+import { scrobblingEnabled } from './preferences'
 import { sendToRenderer, notifyLibraryChanged } from './rendererBridge'
 import { cachedRemoteLists, fetchRemoteLists } from './remoteLists'
 import type { RemoteList } from '../../shared/media-hub/types'
@@ -1511,6 +1512,16 @@ export function registerTrackingIpc(): void {
     }
   )
 
+  handle<{ enabled?: boolean }, { scrobbleEnabled: boolean }>(
+    MEDIA_HUB_CHANNELS.trackingSetScrobble,
+    (_e, payload) => {
+      const settings = readSettings()
+      settings.scrobbleEnabled = payload?.enabled === true
+      writeSettings(settings)
+      return { scrobbleEnabled: settings.scrobbleEnabled }
+    }
+  )
+
   handle<TrackableItem, { tracked: boolean }>(MEDIA_HUB_CHANNELS.trackingToggle, (_e, item) => {
     const db = getDatabase()
     // Same canonical id as every other write, so Add to My List from a
@@ -2430,6 +2441,9 @@ export function registerTrackingIpc(): void {
       if (action !== 'start' && action !== 'pause' && action !== 'stop') {
         return { connected: simklConnected }
       }
+      // Off unless asked for — see scrobblingEnabled. Nothing goes to either
+      // service; the history add at 80% is what records the viewing.
+      if (!scrobblingEnabled(readSettings())) return { connected: simklConnected }
       const progress = Math.min(100, Math.max(0, Number(payload?.progress) || 0))
       // Both services hear the same transitions, independently of each
       // other. This used to sit behind the Simkl-connected check above, so a
