@@ -14,7 +14,8 @@ import { registerHttpProxyIpc } from './ipc/httpProxy'
 import { registerMediaHubIpc } from './ipc/mediaHub'
 import { createDatabase } from './media-hub/database'
 import { activeProfileId } from './media-hub/profiles'
-import { ensureSetupCompleteDecided } from './media-hub/settingsStore'
+import { ensureSetupCompleteDecided, readSettings, writeSettings } from './media-hub/settingsStore'
+import { upgradeHideDislikedDefault } from './media-hub/preferences'
 import { getDatabase, setDatabase } from './media-hub/dbState'
 import { closeParty } from './media-hub/watchParty'
 import { stopPlayback } from './media-hub/playbackSession'
@@ -45,6 +46,11 @@ export function startBackend(): void {
   // evidence of a pre-existing install — decided any later, every fresh
   // install would look pre-existing and the welcome flow would never show.
   ensureSetupCompleteDecided()
+  // Once per install, before anything reads the setting: a stored false
+  // from before Hide Disliked defaulted to on becomes true. See
+  // preferences.ts's upgradeHideDislikedDefault.
+  const upgraded = upgradeHideDislikedDefault(readSettings())
+  if (upgraded) writeSettings(upgraded)
   setDatabase(createDatabase(join(app.getPath('userData'), 'media-hub.sqlite'), activeProfileId()))
   registerMediaHubIpc()
 }

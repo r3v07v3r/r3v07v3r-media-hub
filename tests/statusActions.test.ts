@@ -18,7 +18,9 @@
 // build to render, and what matters is which handler each event reaches.
 //
 // Disliked titles are hidden from browsing unless the person switched Hide
-// Disliked off (preferences.ts's hideDislikedDefault), a page can still
+// Disliked off (preferences.ts's hideDislikedDefault; a false stored before
+// that default is turned on once, by upgradeHideDislikedDefault at startup,
+// and a choice made after it sticks), a page can still
 // show them with its own toggle, and a disliked card is marked wherever it
 // is shown: MediaCard, a library tile, the detail page's More like this
 // cards, the hero and the assistant's title tiles. My Stuff's Planned and
@@ -51,7 +53,11 @@ import {
   toggleApplies
 } from '../src/renderer/src/lib/mediaHub/statusToasts'
 import { notificationTtlMs } from '../src/renderer/src/lib/notificationTtl'
-import { hideDislikedDefault, logoutSettings } from '../src/main/media-hub/preferences'
+import {
+  hideDislikedDefault,
+  logoutSettings,
+  upgradeHideDislikedDefault
+} from '../src/main/media-hub/preferences'
 import { holdEntries, holdTouchedEntries } from '../src/renderer/src/lib/mediaHub/heldFeed'
 import { resolveLibrarySelection } from '../src/renderer/src/lib/mediaHub/librarySelection'
 import type { HomeRail, MediaItem, Recommendation } from '../src/renderer/src/types'
@@ -249,6 +255,48 @@ check('Hide Disliked is on unless the person turned it off', () => {
   // Signing out keeps the choice, and keeps an unset one unset-and-on.
   assert.equal(logoutSettings({}).hideDislikedDefault, true)
   assert.equal(logoutSettings({ hideDislikedDefault: false }).hideDislikedDefault, false)
+})
+
+check('a stored false from before the default is turned on once, then the choice sticks', () => {
+  // Switched off in Settings, or written by an earlier version's sign-out.
+  const upgraded = upgradeHideDislikedDefault({ theme: 'neon', hideDislikedDefault: false })
+  assert.deepEqual(upgraded, {
+    theme: 'neon',
+    hideDislikedDefault: true,
+    hideDislikedDefaultMigrated: true
+  })
+  assert.equal(hideDislikedDefault(upgraded ?? {}), true)
+  // Never stored: nothing to turn on, only the record.
+  assert.deepEqual(upgradeHideDislikedDefault({}), { hideDislikedDefaultMigrated: true })
+  // Switched off after the upgrade: left alone on every later launch.
+  assert.equal(
+    upgradeHideDislikedDefault({ hideDislikedDefault: false, hideDislikedDefaultMigrated: true }),
+    null
+  )
+  // A sign-out keeps the record with the choice, or the next launch would
+  // turn it on again.
+  const signedOut = logoutSettings({
+    hideDislikedDefault: false,
+    hideDislikedDefaultMigrated: true
+  })
+  assert.equal(signedOut.hideDislikedDefault, false)
+  assert.equal(signedOut.hideDislikedDefaultMigrated, true)
+  assert.equal(upgradeHideDislikedDefault(signedOut), null)
+  assert.equal('hideDislikedDefaultMigrated' in logoutSettings({}), false)
+  // The desktop and the headless backend both start through startBackend,
+  // which runs the upgrade before anything reads the setting.
+  const backend = fs.readFileSync(path.resolve(__dirname, '../src/main/backend.ts'), 'utf8')
+  const start = backend.slice(
+    backend.indexOf('export function startBackend('),
+    backend.indexOf('export function stopBackend(')
+  )
+  assert.match(
+    start,
+    /upgradeHideDislikedDefault\(readSettings\(\)\)[\s\S]*writeSettings\(upgraded\)/
+  )
+  assert.ok(
+    start.indexOf('upgradeHideDislikedDefault(') < start.lastIndexOf('registerMediaHubIpc()')
+  )
 })
 
 check('a browse page starts from the default and its own toggle can show disliked titles', () => {
