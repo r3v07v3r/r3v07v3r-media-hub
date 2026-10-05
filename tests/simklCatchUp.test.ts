@@ -993,6 +993,8 @@ interface Harness {
   failing: Set<SimklLibraryKind>
   libraries: Record<SimklLibraryKind, unknown>
   lookup: { kitsuId: number | null; answered: boolean }
+  /** Where a Kitsu id is kept: by default itself, at season 1. */
+  place: (kitsuId: number) => { id: string; season: number } | null
   /** Runs inside library(kind), before it answers — a profile switch, say. */
   during: Partial<Record<SimklLibraryKind, () => void>>
   /** The `since` each library call was made with, newest last. */
@@ -1021,6 +1023,7 @@ function harness(): Harness {
     failing: new Set(),
     libraries: libraryPayloads(),
     lookup: { kitsuId: 46474, answered: true },
+    place: (kitsuId) => ({ id: `kitsu:${kitsuId}`, season: 1 }),
     during: {},
     since: [],
     trakt: '',
@@ -1058,7 +1061,7 @@ function harness(): Harness {
       h.calls.push(`lookup:${service}:${value}`)
       return h.lookup
     },
-    animeTarget: (kitsuId) => ({ id: `kitsu:${kitsuId}`, season: 1 }),
+    animeTarget: (kitsuId) => h.place(kitsuId),
     animeReady: () => h.ready,
     unplanWatched: async (item) => {
       h.calls.push(`unplan:${item.id}`)
@@ -1278,6 +1281,36 @@ async function passes(): Promise<void> {
     const { report } = await passOf(h)
     assert.equal(report.skipped, 1)
     assert.equal(h.state()?.stamps.anime, 'a1')
+  })
+
+  await checkAsync('an entry that is a season of a merged show lands on that season', async () => {
+    const h = harness()
+    h.place = () => ({ id: 'kitsu:100', season: 3 })
+    await passOf(h)
+    const rows = h.db.history().filter((row) => row.type === 'anime')
+    assert.deepEqual(
+      rows.map((row) => [row.id, row.season, row.episode]),
+      [['kitsu:100', 3, 1]]
+    )
+    assert.equal(h.db.isTracked('kitsu:100'), true, 'and the show is followed')
+  })
+
+  await checkAsync('an entry with no place is skipped and counted, never guessed', async () => {
+    // The show's own id, where it cannot be shown to be the first season:
+    // its id opens the show's page, and season 1 there is TMDB's.
+    const h = harness()
+    h.place = () => null
+    const { report } = await passOf(h)
+    assert.equal(report.skipped, 1)
+    assert.deepEqual(
+      h.db.history().filter((row) => row.type === 'anime'),
+      []
+    )
+    assert.equal(h.db.isTracked('kitsu:46474'), false)
+    // Not held against the kind, and not remembered as taken: it is looked
+    // at again whenever the entry next turns up in a fetch.
+    assert.equal(h.state()?.stamps.anime, 'a1')
+    assert.equal(h.state()?.seen['simkl:50'], undefined)
   })
 
   await checkAsync('anime is deferred until the catalog is grouped', async () => {

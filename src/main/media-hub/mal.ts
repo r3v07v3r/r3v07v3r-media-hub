@@ -185,10 +185,12 @@ export function localSeasonEpisodeCounts(history: HistoryEntry[], id: string): M
  *
  * A title with `members` is a grouped anime: one show here, several
  * entries there, one per season. Its history rows are keyed on the
- * canonical id with the member's season number — member k of the group
- * is season k+1 (see animeSeasons.ts's buildAnimeGroupIndexes) — so the
- * change goes to the members owning the seasons it touched, each with
- * that season's count and, when the caller knows it, that season's total.
+ * canonical id with the season of the show's page, and `members` names the
+ * entry for each season, the first being season 1 — blank where no member
+ * can be shown to be that season (animeSeasonMembers in serviceIds.ts), and
+ * such a season is not sent. So the change goes to the members that are the
+ * seasons it touched, each with that season's count and, when the caller
+ * knows it, that season's total.
  * Never the group's sum on the first season's entry, which is what one
  * push for the canonical id amounted to, and never the group's total in
  * place of a member's own: a member whose total is unknown gets its count
@@ -202,7 +204,7 @@ export function localSeasonEpisodeCounts(history: HistoryEntry[], id: string): M
  */
 export function planMalPushes(
   history: HistoryEntry[],
-  title: { id: string; members?: readonly string[]; totalEpisodes?: number },
+  title: { id: string; members?: readonly (string | null)[]; totalEpisodes?: number },
   change: {
     seasons: Iterable<number>
     seasonTotals?: ReadonlyMap<number, number>

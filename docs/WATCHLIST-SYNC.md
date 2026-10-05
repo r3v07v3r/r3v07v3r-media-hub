@@ -356,8 +356,10 @@ with viewings recorded here, the unscoped Simkl removal is not sent.
   shows up in the desktop's review panel, and an episode does not reach the
   desktop at all yet.
 - Anime takes only each Simkl entry's own first-season numbering (its
-  season 1, or none), filed under whichever season of the merged franchise
-  that entry is here. An episode Simkl files under season 0, or 2 and
+  season 1, or none). It is filed under the season of the merged show that
+  entry can be shown to be, and under the entry's own id where it cannot be
+  shown to be one; a show's own entry that is not its first season is
+  skipped and counted. An episode Simkl files under season 0, or 2 and
   later, is refused. The next section has the mapping, and what became of
   later seasons pushed before it existed.
 - A local un-watch whose removal at Simkl failed can come back when that
@@ -375,12 +377,14 @@ whole title, a scrobble) is translated first, by `toSimklAnimeEpisode` in
 `src/shared/media-hub/serviceIds.ts`:
 
 - Season _s_, episode _e_ of a merged show goes out as episode _e_ of the
-  group's _s_-th member, under that member's own Kitsu id and with no
+  member that is season _s_, under that member's own Kitsu id and with no
   season number. A change that spans seasons is one entry per season, the
   same split `planMalPushes` makes for MAL.
-- Only where that member can be shown to BE season _s_ of the page (see
-  "When a member's place is not its season", below). Otherwise the season
-  is not sent.
+- Which member that is, is the group's _s_-th, but only where it can be
+  shown to BE season _s_ of the page (see "When a member's place is not its
+  season", below). Otherwise the season is not sent. That goes for the
+  first season as well: the show's own id is its first season's entry only
+  where that can be shown.
 - A title that was never merged is its own entry.
 - Specials (season 0) are not sent. They are TMDB's list for the whole
   franchise and belong to no entry this app can name.
@@ -396,14 +400,15 @@ whole title, a scrobble) is translated first, by `toSimklAnimeEpisode` in
 
 The catch-up reads the same mapping backwards (`fromSimklAnimeEpisode`):
 episode _e_ of an entry is kept under the show that entry's Kitsu id
-belongs to, at the season it is there. `tests/simklAnime.test.ts` runs the
-two round trip, and through the catch-up's own rules.
+belongs to, at the season it can be shown to be there. `tests/simklAnime.test.ts`
+runs the two round trip, and through the catch-up's own rules.
 
-**Not verified against Simkl.** The request shape is the one Simkl's anime
-guide gives for an anime id: an `anime` entry with a flat `episodes` list.
-The tests model an account that behaves as that guide says. No request has
-been made to the live API from a development machine, so whether Simkl
-files these as described is still to be confirmed on a real account.
+**Not verified against Simkl or MyAnimeList.** The request shape is the one
+Simkl's anime guide gives for an anime id: an `anime` entry with a flat
+`episodes` list. The tests model an account that behaves as that guide
+says. No request has been made to either live API from a development
+machine, so whether the services file these as described is still to be
+confirmed on a real account.
 
 ### When a member's place is not its season
 
@@ -414,25 +419,88 @@ always of the page. A merged show's page is numbered in one of two ways
 - A show whose first member has no TheTVDB mapping is built from its
   members in order. Season _N_ is member _N_.
 - A show whose first member has one is numbered by TMDB. Season _N_ is
-  TMDB's season _N_, whichever member sits at _N_. The two agree only for a
-  member whose own TheTVDB season is its place. A film or an OVA among the
-  seasons, or a later season Kitsu has no mapping for, breaks it: My Hero
-  Academia's fourth season is the group's seventh member, and season 7 on
-  its page is TMDB's seventh.
+  TMDB's season _N_, whichever member sits at _N_.
 
-So everything in this section that turns a member into a season of the
-show, or a season into a member, asks first whether the two can be shown to
-agree (`animeSeasonMatchesPage` in `serviceIds.ts`, read from the cached
-mappings with no request). Where they cannot:
+On a show numbered by TMDB, a member can be shown to be a season of the
+page only when all of this holds (`animeSeasonMembers` in `serviceIds.ts`,
+read from the cached mappings with no request):
 
-- that season is not sent to Simkl, rather than sent to whatever member
-  holds that place;
-- a later season opened by its own id opens and saves as itself, as it did
-  before, and its rows are not moved under the show.
+- Its own TheTVDB season, in the show's series, is the place it sits at. A
+  film or an OVA among the seasons, or a later season Kitsu has no mapping
+  for, breaks it: My Hero Academia's fourth season is the group's seventh
+  member, and season 7 on its page is TMDB's seventh. A member of another
+  series never is one: Naruto is the second member of the Naruto: Shippuden
+  group.
+- No other member maps to that season. Two cours of one TheTVDB season
+  share its episode numbers between them, and nothing says which cour has
+  which.
+- Every member of the show has been looked up. One nobody asked about could
+  be that same season.
 
-In one real library, 290 of 698 later seasons could be shown to agree. The
-catch-up, the MAL import and the MAL push still go by place alone; that is
-unchanged here and is wrong for the same shows.
+That applies to the first member too. A show can be fronted by something
+that is not its first season: a recap, a second season whose first was
+never crawled, one half of a first season. Season 1 of its page is still
+TMDB's first season, and the show's own id is not that season's entry.
+
+Everything that turns a member into a season of the show, or a season into
+a member, asks this first. `animeSeasonMembers` answers which member is
+each season and `animeSeasonOfMember` is its inverse;
+`tests/simklAnime.test.ts` runs them round trip, and
+`tests/animeEntryPlacing.test.ts` runs every path's own lookup against a
+database. Where it cannot be shown, nothing is written or sent by a
+member's place. What happens instead:
+
+- **Marks and scrobbles sent to Simkl, and the count sent to MyAnimeList.**
+  A season no member can be shown to be is not sent. A later member that
+  cannot be placed is, opened by its own id, an entry of its own, as a
+  title that was never merged is: Simkl is told its episodes under its id,
+  and MyAnimeList the count of the rows under its id.
+- **The catch-up on the phone and TV app.** A Simkl entry that cannot be
+  placed is kept under its own id, at season 1. The show's own id, when it
+  cannot be shown to be the first season, is skipped and counted.
+- **The MyAnimeList import.** An entry that cannot be placed is compared
+  with, and written under, the rows of its own id. The show's own id, when
+  it cannot be shown to be the first season, is listed with the unmatched
+  entries, and nothing is pulled or pushed for it.
+- **The Trakt import.** A later member that cannot be placed is kept under
+  its own id with Trakt's season numbers, as a title that was never merged
+  is, and so is a rating of it. The show's own id is the show either way:
+  Trakt numbers a show's seasons itself, and they are filed under the show
+  as they came.
+- **A page or a card opened by a later member's own id** opens and saves as
+  itself, as it did before, and its rows are not moved under the show.
+- **Home.** A tracked later member that cannot be placed is counted from
+  the rows under its own id, never from the show's rows at its place.
+
+Kept under its own id is the safe choice wherever that id has a page of its
+own, which every later member that cannot be placed has: the viewing is
+seen there, and the same episode sent back goes to the same entry. The
+show's own id has no such page (it opens the show), so there is nowhere to
+keep an entry that is not the show's first season, and it is left out.
+
+In one real library of 301 merged shows, 233 are numbered by TMDB. 286 of
+698 later seasons can be shown to be a season of their show, and 280 of the
+301 shows can be shown to be fronted by their first season.
+
+**What this leaves out.**
+
+- Rows already filed by place (by the catch-up, the MyAnimeList import or
+  the Trakt import before this rule) are not moved. Nothing tells them
+  apart from rows marked on the show's page.
+- A member whose TheTVDB season is _N_ but which sits at another place is
+  not taken as season _N_, though it probably is. Where TMDB has no season
+  _N_ the page fills it from the member at place _N_, and nothing cached
+  says which the page did. In the same library this would place 10 more
+  later seasons.
+- Two cours of one season could be told apart by their episode counts and
+  air order. They are not: both stay unplaced.
+- A single entry that TMDB splits into several seasons (Naruto: Shippuden
+  is one entry of 500 episodes and many seasons on its page) is the page's
+  first season by this rule. Its episodes past the end of that season have
+  no row the page reads.
+- An install with no TMDB key builds every page from its members. The rule
+  still treats a show whose first member has a TheTVDB mapping as numbered
+  by TMDB, so it places fewer members than it could there.
 
 ### A later season under its own id
 

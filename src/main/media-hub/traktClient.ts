@@ -23,7 +23,7 @@ import type {
   TraktStartResult,
   TraktStatusResult
 } from '../../shared/media-hub/types'
-import { animeGroupingReady, resolveAnimeGroupTarget } from './animeSeasons'
+import { animeGroupingReady, laterSeasonOf } from './animeSeasons'
 import { fetchJson } from './httpClient'
 import { kitsuIdForExternal } from './idBridge'
 import { handle } from './ipcGuard'
@@ -444,11 +444,11 @@ async function readAllPages(pathname: string): Promise<{ rows: unknown[]; trunca
  *
  * Resolved through idBridge (Simkl's cross-reference search, which carries
  * a native kitsu id for most anime even when looked up BY imdb id), then
- * through catalog.ts's resolveAnimeGroupTarget for the same canonical-
- * show/real-season translation malSync.ts's MAL reconcile-apply uses —
- * an anime split across multiple Trakt/IMDb entries (e.g. "Naruto" and
- * "Naruto: Shippuuden" are separate IMDb titles too) still lands on this
- * app's one merged show.
+ * through animeSeasons.ts's laterSeasonOf, so an anime split across
+ * multiple Trakt/IMDb entries lands on this app's one merged show wherever
+ * the entry can be shown to be a season of it. Where it cannot ("Naruto" is
+ * the second member of the Naruto: Shippuden group and no season of its
+ * page), it stays under its own id.
  */
 async function imdbToAnimeTargets(
   imdbIds: string[]
@@ -475,9 +475,16 @@ async function imdbToAnimeTargets(
     )
   }
 
+  // A later season of a merged show is moved under the show only where it
+  // can be shown to be a season of the show's page (laterSeasonOf). One that
+  // cannot be keeps its own id, as a title that was never merged does: its
+  // place in the group is not a season, and its id still opens as itself.
+  // The show's own id is the show either way — Trakt numbers a show's
+  // seasons itself, and those go under it as they came.
   const targets = new Map<string, { id: string; season: number }>()
   for (const [imdbId, kitsuId] of kitsuIds) {
-    targets.set(imdbId, resolveAnimeGroupTarget(`kitsu:${kitsuId}`))
+    const id = `kitsu:${kitsuId}`
+    targets.set(imdbId, laterSeasonOf(id) ?? { id, season: 1 })
   }
   return targets
 }

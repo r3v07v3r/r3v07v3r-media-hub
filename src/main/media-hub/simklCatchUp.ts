@@ -89,8 +89,10 @@ export interface CatchUpDeps {
     service: 'mal' | 'anidb',
     value: number
   ): Promise<{ kitsuId: number | null; answered: boolean }>
-  /** Where a raw Kitsu id belongs: the canonical show and its season there. */
-  animeTarget(kitsuId: number): { id: string; season: number }
+  /** Where a Simkl entry's Kitsu id is kept here: its show and the season
+   *  it can be shown to be there, itself when it cannot, null when it has no
+   *  place at all (animeSeasons.placeAnimeEntry). */
+  animeTarget(kitsuId: number): { id: string; season: number } | null
   /** Whether the anime catalog has been grouped (animeSeasons.animeGroupingReady). */
   animeReady(): boolean
   /** Rule 8's un-plan for a film just taken as watched (watchlists.unplanBecauseWatched). */
@@ -511,8 +513,16 @@ async function catchUpPass(
         // Null is a lookup that threw outright: nobody answered.
         const found = kitsuIds[index] ?? { kitsuId: null, answered: false }
         if (found.kitsuId) {
+          // Never by its place in the group alone: a member that cannot be
+          // shown to be a season of its show's page is kept as itself, and
+          // a show's own id that cannot be shown to be its first season is
+          // skipped and counted. Neither is guessed onto a season.
           const target = deps.animeTarget(found.kitsuId)
-          resolved.push({ title, id: target.id, type: 'anime', animeSeason: target.season })
+          if (target) {
+            resolved.push({ title, id: target.id, type: 'anime', animeSeason: target.season })
+          } else {
+            report.skipped += 1
+          }
         } else if (found.answered) {
           report.skipped += 1
         } else {
@@ -767,7 +777,7 @@ export async function catchUpFromServices(
       ),
     awaitingRemoval: watchlists.idsAwaitingRemoval,
     lookupKitsu: (service, value) => idBridge.kitsuIdLookup(service, value, 'visible'),
-    animeTarget: (kitsuId) => seasons.resolveAnimeGroupTarget(`kitsu:${kitsuId}`),
+    animeTarget: (kitsuId) => seasons.placeAnimeEntry(`kitsu:${kitsuId}`),
     animeReady: seasons.animeGroupingReady,
     // On the title's own push chain, like every other plan change — see
     // titlePushQueue.ts.

@@ -167,6 +167,28 @@ check('a season the change did not touch is not written, and one with no member 
   assert.deepEqual(pushes, [{ id: 'kitsu:2', watchedEpisodes: 3 }])
 })
 
+check('a season no member can be shown to be is not sent, whoever sits at that place', () => {
+  // What malTitleOf hands over for a show numbered by TMDB: the member at
+  // place 2 is an OVA, so season 2 of the page is blank; so is a first
+  // season the show's own id cannot be shown to be.
+  assert.deepEqual(
+    planMalPushes(
+      history,
+      { id: canonical, members: ['kitsu:1', null, 'kitsu:3'] },
+      { seasons: [1, 2] }
+    ),
+    [{ id: 'kitsu:1', watchedEpisodes: 2 }]
+  )
+  assert.deepEqual(
+    planMalPushes(
+      history,
+      { id: canonical, members: [null, 'kitsu:2'] },
+      { seasons: [1, 2], status: 'plan_to_watch' }
+    ),
+    [{ id: 'kitsu:2', watchedEpisodes: 3 }]
+  )
+})
+
 check("the group's total never judges a member; without its own, a member gets no status", () => {
   const pushes = planMalPushes(
     history,

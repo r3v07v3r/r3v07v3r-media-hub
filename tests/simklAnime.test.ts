@@ -36,13 +36,16 @@ import {
 } from '../src/main/media-hub/simklCatchUpRules'
 import { bySeason } from '../src/main/media-hub/titleStatusRules'
 import {
+  animeEntryTarget,
   animeHistoryCoordinates,
-  animeSeasonMatchesPage,
+  animeSeasonMembers,
   animeSeasonOf,
+  animeSeasonOfMember,
   fromSimklAnimeEpisode,
   toSimklAnimeEpisode,
+  type AnimeGroupOf,
   type AnimeGroupTarget,
-  type AnimeSiblings,
+  type AnimeSeasonMembers,
   type AnimeTvdbSeason,
   type LocalAnimeEpisode
 } from '../src/shared/media-hub/serviceIds'
@@ -70,7 +73,11 @@ const { siblings, positions } = animeGroupIndexesOf([
   { id: SHOW, groupedIds: [SEASON_2, SEASON_3] },
   { id: ALONE }
 ])
-const siblingsOf: AnimeSiblings = (id) => siblings.get(id)
+// The seasons of a show built from its members are its members, in order.
+const membersOf: AnimeSeasonMembers = (id) => {
+  const later = siblings.get(id)
+  return later ? [id, ...later] : undefined
+}
 // resolveAnimeGroupTarget's own fallback: an id in no group is itself, at
 // season 1.
 const targetOf: AnimeGroupTarget = (id) => positions.get(id) ?? { id, season: 1 }
@@ -85,12 +92,13 @@ check('the canonical id is season 1 and each sibling the next, in order', () => 
   assert.deepEqual(targetOf(SHOW), { id: SHOW, season: 1 })
   assert.deepEqual(targetOf(SEASON_2), { id: SHOW, season: 2 })
   assert.deepEqual(targetOf(SEASON_3), { id: SHOW, season: 3 })
-  assert.deepEqual(siblingsOf(SHOW), [SEASON_2, SEASON_3])
+  assert.deepEqual(siblings.get(SHOW), [SEASON_2, SEASON_3])
+  assert.deepEqual(membersOf(SHOW), [SHOW, SEASON_2, SEASON_3])
 })
 
 check('only the canonical id fronts a group', () => {
-  assert.equal(siblingsOf(SEASON_2), undefined)
-  assert.equal(siblingsOf(ALONE), undefined)
+  assert.equal(membersOf(SEASON_2), undefined)
+  assert.equal(membersOf(ALONE), undefined)
   assert.equal(positions.has(ALONE), false)
 })
 
@@ -98,11 +106,11 @@ check('only the canonical id fronts a group', () => {
 console.log('\ntoSimklAnimeEpisode')
 
 check("season 2 episode 5 is episode 5 of the second season's own entry", () => {
-  assert.deepEqual(toSimklAnimeEpisode({ id: SHOW, season: 2, episode: 5 }, siblingsOf), {
+  assert.deepEqual(toSimklAnimeEpisode({ id: SHOW, season: 2, episode: 5 }, membersOf), {
     id: SEASON_2,
     episode: 5
   })
-  assert.deepEqual(toSimklAnimeEpisode({ id: SHOW, season: 3, episode: 1 }, siblingsOf), {
+  assert.deepEqual(toSimklAnimeEpisode({ id: SHOW, season: 3, episode: 1 }, membersOf), {
     id: SEASON_3,
     episode: 1
   })
@@ -110,7 +118,7 @@ check("season 2 episode 5 is episode 5 of the second season's own entry", () => 
 
 check("season 1, or no season, is the id's own entry", () => {
   for (const season of [1, undefined, null]) {
-    assert.deepEqual(toSimklAnimeEpisode({ id: SHOW, season, episode: 5 }, siblingsOf), {
+    assert.deepEqual(toSimklAnimeEpisode({ id: SHOW, season, episode: 5 }, membersOf), {
       id: SHOW,
       episode: 5
     })
@@ -118,28 +126,28 @@ check("season 1, or no season, is the id's own entry", () => {
 })
 
 check('a special, and a season the group has no member for, have no place at Simkl', () => {
-  assert.equal(toSimklAnimeEpisode({ id: SHOW, season: 0, episode: 1 }, siblingsOf), null)
-  assert.equal(toSimklAnimeEpisode({ id: SHOW, season: 4, episode: 1 }, siblingsOf), null)
-  assert.equal(toSimklAnimeEpisode({ id: ALONE, season: 0, episode: 1 }, siblingsOf), null)
+  assert.equal(toSimklAnimeEpisode({ id: SHOW, season: 0, episode: 1 }, membersOf), null)
+  assert.equal(toSimklAnimeEpisode({ id: SHOW, season: 4, episode: 1 }, membersOf), null)
+  assert.equal(toSimklAnimeEpisode({ id: ALONE, season: 0, episode: 1 }, membersOf), null)
 })
 
 check('an episode or season that is not a whole number from 1 is refused', () => {
   for (const episode of [0, -1, 1.5, Number.NaN, undefined, null]) {
-    assert.equal(toSimklAnimeEpisode({ id: SHOW, season: 1, episode }, siblingsOf), null)
+    assert.equal(toSimklAnimeEpisode({ id: SHOW, season: 1, episode }, membersOf), null)
   }
   for (const season of [-1, 1.5, Number.NaN]) {
-    assert.equal(toSimklAnimeEpisode({ id: SHOW, season, episode: 1 }, siblingsOf), null)
+    assert.equal(toSimklAnimeEpisode({ id: SHOW, season, episode: 1 }, membersOf), null)
   }
 })
 
 check('a title with no group maps to itself, whatever season Kitsu labels it', () => {
-  assert.deepEqual(toSimklAnimeEpisode({ id: ALONE, season: 1, episode: 7 }, siblingsOf), {
+  assert.deepEqual(toSimklAnimeEpisode({ id: ALONE, season: 1, episode: 7 }, membersOf), {
     id: ALONE,
     episode: 7
   })
   // One Kitsu entry is one Simkl entry. A season of 2 on its episode list
   // is Kitsu's label for that entry, not a second entry.
-  assert.deepEqual(toSimklAnimeEpisode({ id: ALONE, season: 2, episode: 7 }, siblingsOf), {
+  assert.deepEqual(toSimklAnimeEpisode({ id: ALONE, season: 2, episode: 7 }, membersOf), {
     id: ALONE,
     episode: 7
   })
@@ -147,7 +155,7 @@ check('a title with no group maps to itself, whatever season Kitsu labels it', (
 
 check("a later season written under its own id is that id's own entry", () => {
   for (const season of [1, 2]) {
-    assert.deepEqual(toSimklAnimeEpisode({ id: SEASON_2, season, episode: 4 }, siblingsOf), {
+    assert.deepEqual(toSimklAnimeEpisode({ id: SEASON_2, season, episode: 4 }, membersOf), {
       id: SEASON_2,
       episode: 4
     })
@@ -201,14 +209,14 @@ check('local -> Simkl -> local is the identity for every season of a merged show
   for (const season of [1, 2, 3]) {
     for (const episode of EPISODES) {
       const local: LocalAnimeEpisode = { id: SHOW, season, episode }
-      const remote = toSimklAnimeEpisode(local, siblingsOf)
+      const remote = toSimklAnimeEpisode(local, membersOf)
       assert.ok(remote, `season ${season} has an entry`)
       assert.deepEqual(fromSimklAnimeEpisode(remote, targetOf), local)
     }
   }
   for (const episode of EPISODES) {
     const local: LocalAnimeEpisode = { id: ALONE, season: 1, episode }
-    const remote = toSimklAnimeEpisode(local, siblingsOf)
+    const remote = toSimklAnimeEpisode(local, membersOf)
     assert.ok(remote)
     assert.deepEqual(fromSimklAnimeEpisode(remote, targetOf), local)
   }
@@ -219,7 +227,7 @@ check('Simkl -> local -> Simkl is the identity for every entry', () => {
     for (const episode of EPISODES) {
       const local = fromSimklAnimeEpisode({ id, episode }, targetOf)
       assert.ok(local)
-      assert.deepEqual(toSimklAnimeEpisode(local, siblingsOf), { id, episode })
+      assert.deepEqual(toSimklAnimeEpisode(local, membersOf), { id, episode })
     }
   }
 })
@@ -227,12 +235,12 @@ check('Simkl -> local -> Simkl is the identity for every entry', () => {
 check('the two rows that do not come back as they went out', () => {
   // A later season written under its OWN id reaches the right entry, and
   // comes back under the show it belongs to.
-  const sibling = toSimklAnimeEpisode({ id: SEASON_2, season: 1, episode: 4 }, siblingsOf)
+  const sibling = toSimklAnimeEpisode({ id: SEASON_2, season: 1, episode: 4 }, membersOf)
   assert.ok(sibling)
   assert.deepEqual(fromSimklAnimeEpisode(sibling, targetOf), { id: SHOW, season: 2, episode: 4 })
   // An unmerged title Kitsu labels season 2 comes back at season 1: the
   // entry is all Simkl remembers.
-  const labelled = toSimklAnimeEpisode({ id: ALONE, season: 2, episode: 4 }, siblingsOf)
+  const labelled = toSimklAnimeEpisode({ id: ALONE, season: 2, episode: 4 }, membersOf)
   assert.ok(labelled)
   assert.deepEqual(fromSimklAnimeEpisode(labelled, targetOf), { id: ALONE, season: 1, episode: 4 })
 })
@@ -266,7 +274,7 @@ check('an episode written under it is kept under the show, at its season there',
 
 check('which is where the same episode comes back from Simkl', () => {
   const kept = animeHistoryCoordinates({ id: SEASON_2, season: 1, episode: 4 }, targetOf)
-  const sent = toSimklAnimeEpisode(kept, siblingsOf)
+  const sent = toSimklAnimeEpisode(kept, membersOf)
   assert.deepEqual(sent, { id: SEASON_2, episode: 4 }, "still the season's own entry")
   assert.ok(sent)
   assert.deepEqual(fromSimklAnimeEpisode(sent, targetOf), kept)
@@ -288,64 +296,179 @@ check('a show, an unmerged title and a row with no episode stay as they are', ()
 console.log('\na place in the group is not always the season on the page')
 
 // A show whose first member has a TheTVDB mapping is numbered by TMDB on its
-// page: season N is TMDB's season N, whichever member sits at N. Modelled on
-// My Hero Academia: seasons 1-3 map to their own TheTVDB seasons, then an OVA
-// sits at place 4 and the real fourth season, unmapped, at place 5.
+// page: season N is TMDB's season N, whichever member sits at N. Each group
+// below is a shape found in a real library.
 const TMDB_SHOW = 'kitsu:11469'
 const TVDB: Record<string, { seriesId: string; season: number } | 'none'> = {
+  // My Hero Academia: seasons 1-3 map to their own TheTVDB seasons, then an
+  // OVA sits at place 4 and the real fourth season, unmapped, at place 5.
   [TMDB_SHOW]: { seriesId: '305074', season: 1 },
   'kitsu:12268': { seriesId: '305074', season: 2 },
   'kitsu:13881': { seriesId: '305074', season: 3 },
   'kitsu:12511': 'none',
   'kitsu:41971': 'none',
-  'kitsu:777': { seriesId: '999', season: 6 },
+  // A show built from its members; its third member was never looked up.
   [SHOW]: 'none',
-  [SEASON_2]: 'none'
+  [SEASON_2]: 'none',
+  // Two cours Kitsu maps to one TheTVDB season, the later cour listed first.
+  'kitsu:7158': { seriesId: '262954', season: 1 },
+  'kitsu:8743': { seriesId: '262954', season: 2 },
+  'kitsu:8063': { seriesId: '262954', season: 2 },
+  // Both halves of a first season, mapped to it alike.
+  'kitsu:6028': { seriesId: '79151', season: 1 },
+  'kitsu:6508': { seriesId: '79151', season: 1 },
+  // A recap in front of the show it recaps.
+  'kitsu:8574': { seriesId: '262090', season: 0 },
+  'kitsu:7000': { seriesId: '262090', season: 1 },
+  'kitsu:7863': { seriesId: '262090', season: 2 },
+  // A show fronted by a later season: its first was never crawled.
+  'kitsu:8203': { seriesId: '114801', season: 5 },
+  'kitsu:9999': { seriesId: '114801', season: 6 },
+  // A gap in the numbering: the third stage is a film, so the fourth sits
+  // at place 3.
+  'kitsu:185': { seriesId: '79172', season: 1 },
+  'kitsu:186': { seriesId: '79172', season: 2 },
+  'kitsu:9': { seriesId: '79172', season: 4 },
+  // Two series merged into one show: Naruto behind Naruto: Shippuden.
+  'kitsu:1555': { seriesId: '79824', season: 1 },
+  'kitsu:11': { seriesId: '78857', season: 1 },
+  // A well-mapped show with one member nobody has looked up.
+  'kitsu:501': { seriesId: '555', season: 1 },
+  'kitsu:503': { seriesId: '555', season: 3 }
 }
 const tvdbOf: AnimeTvdbSeason = (id) => TVDB[id] ?? null
 
-check('a show built from its members: every place is its season', () => {
-  assert.equal(animeSeasonMatchesPage(SHOW, SEASON_2, 2, tvdbOf), true)
+const MHA = [TMDB_SHOW, 'kitsu:12268', 'kitsu:13881', 'kitsu:12511', 'kitsu:41971']
+const BUILT = [SHOW, SEASON_2, SEASON_3]
+const TWO_COURS = ['kitsu:7158', 'kitsu:8743', 'kitsu:8063']
+const SPLIT_FIRST = ['kitsu:6028', 'kitsu:6508']
+const RECAP_FIRST = ['kitsu:8574', 'kitsu:7000', 'kitsu:7863']
+const LATER_FIRST = ['kitsu:8203', 'kitsu:9999']
+const GAP = ['kitsu:185', 'kitsu:186', 'kitsu:9']
+const TWO_SERIES = ['kitsu:1555', 'kitsu:11']
+const UNASKED = ['kitsu:501', 'kitsu:502', 'kitsu:503']
+const NEVER_ASKED = ['kitsu:1', 'kitsu:2']
+const GROUPS = [
+  MHA,
+  BUILT,
+  TWO_COURS,
+  SPLIT_FIRST,
+  RECAP_FIRST,
+  LATER_FIRST,
+  GAP,
+  TWO_SERIES,
+  UNASKED,
+  NEVER_ASKED
+]
+
+check('a show built from its members: every member is its season', () => {
   // Even a member nobody has looked up: the page is the members, in order.
-  assert.equal(animeSeasonMatchesPage(SHOW, SEASON_3, 3, tvdbOf), true)
+  assert.deepEqual(animeSeasonMembers(BUILT, tvdbOf), BUILT)
 })
 
 check('a show numbered by TMDB: only a member whose own season is its place', () => {
-  assert.equal(animeSeasonMatchesPage(TMDB_SHOW, 'kitsu:12268', 2, tvdbOf), true)
-  assert.equal(animeSeasonMatchesPage(TMDB_SHOW, 'kitsu:13881', 3, tvdbOf), true)
   // An OVA at place 4, and the fourth season at place 5: neither is the
   // page's season 4 or 5 as far as anything can show.
-  assert.equal(animeSeasonMatchesPage(TMDB_SHOW, 'kitsu:12511', 4, tvdbOf), false)
-  assert.equal(animeSeasonMatchesPage(TMDB_SHOW, 'kitsu:41971', 5, tvdbOf), false)
-  // Its season, but at another place; and a member of another series.
-  assert.equal(animeSeasonMatchesPage(TMDB_SHOW, 'kitsu:13881', 4, tvdbOf), false)
-  assert.equal(animeSeasonMatchesPage(TMDB_SHOW, 'kitsu:777', 6, tvdbOf), false)
+  assert.deepEqual(animeSeasonMembers(MHA, tvdbOf), [
+    TMDB_SHOW,
+    'kitsu:12268',
+    'kitsu:13881',
+    null,
+    null
+  ])
+  // A member of another series is no season of this show's page.
+  assert.deepEqual(animeSeasonMembers(TWO_SERIES, tvdbOf), ['kitsu:1555', null])
+})
+
+check('two members mapped to one season: neither can be shown to be it', () => {
+  // The member at place 2 is the LATER cour here. Sent there by its place,
+  // episode 1 of the season would be marked on episode 1 of the wrong half.
+  assert.deepEqual(animeSeasonMembers(TWO_COURS, tvdbOf), ['kitsu:7158', null, null])
+  // And that holds for a first season too.
+  assert.deepEqual(animeSeasonMembers(SPLIT_FIRST, tvdbOf), [null, null])
+})
+
+check('a show fronted by something other than its first season', () => {
+  // Season 1 of the page is TMDB's first season. The recap that fronts the
+  // group is not it, and the real first season sits at place 2.
+  assert.deepEqual(animeSeasonMembers(RECAP_FIRST, tvdbOf), [null, null, null])
+  assert.deepEqual(animeSeasonMembers(LATER_FIRST, tvdbOf), [null, null])
+})
+
+check('a member at another place than its season is left out', () => {
+  // Probably season 4. But where TMDB has no season 4 the page fills it
+  // from the member at place 4, and nothing here can tell which it did.
+  assert.deepEqual(animeSeasonMembers(GAP, tvdbOf), ['kitsu:185', 'kitsu:186', null])
 })
 
 check('a mapping nobody has looked up proves nothing', () => {
-  assert.equal(animeSeasonMatchesPage('kitsu:1', 'kitsu:2', 2, tvdbOf), false)
-  assert.equal(animeSeasonMatchesPage(TMDB_SHOW, 'kitsu:2', 2, tvdbOf), false)
+  assert.deepEqual(animeSeasonMembers(NEVER_ASKED, tvdbOf), [null, null])
+  // One member never asked about could be any season of the series, so
+  // none of the others can be shown to be the only one at theirs.
+  assert.deepEqual(animeSeasonMembers(UNASKED, tvdbOf), [null, null, null])
+  assert.deepEqual(animeSeasonMembers([], tvdbOf), [])
 })
 
+check('season -> member -> season, and member -> season -> member, round trip', () => {
+  for (const group of GROUPS) {
+    const seasons = animeSeasonMembers(group, tvdbOf)
+    assert.equal(seasons.length, group.length, 'one answer per season of the page')
+    seasons.forEach((member, index) => {
+      if (member) assert.equal(animeSeasonOfMember(group, member, tvdbOf), index + 1)
+    })
+    for (const member of group) {
+      const season = animeSeasonOfMember(group, member, tvdbOf)
+      if (season === null) assert.equal(seasons.includes(member), false)
+      else assert.equal(seasons[season - 1], member)
+    }
+    // No member is two seasons.
+    const placed = seasons.filter((member) => member !== null)
+    assert.equal(new Set(placed).size, placed.length)
+  }
+  assert.equal(animeSeasonOfMember(MHA, 'kitsu:404', tvdbOf), null, 'not a member at all')
+})
+
+// What animeSeasons.ts builds from the grouped catalog: the group an id
+// belongs to, and the seasons of a show an id fronts.
+const groupOf: AnimeGroupOf = (id) => GROUPS.find((group) => group.includes(id))
+const seasonsOf: AnimeSeasonMembers = (id) => {
+  const group = GROUPS.find((members) => members[0] === id)
+  return group && animeSeasonMembers(group, tvdbOf)
+}
+const placeOf = (id: string): { id: string; season: number } | null =>
+  animeEntryTarget(id, groupOf, tvdbOf)
+
+check("where a service's entry is kept", () => {
+  // A season of its show's page: under the show, at that season.
+  assert.deepEqual(placeOf(TMDB_SHOW), { id: TMDB_SHOW, season: 1 })
+  assert.deepEqual(placeOf('kitsu:13881'), { id: TMDB_SHOW, season: 3 })
+  assert.deepEqual(placeOf(SEASON_3), { id: SHOW, season: 3 })
+  // A later member that cannot be shown to be one: a title of its own,
+  // never the season that sits at its place.
+  assert.deepEqual(placeOf('kitsu:41971'), { id: 'kitsu:41971', season: 1 })
+  assert.deepEqual(placeOf('kitsu:12511'), { id: 'kitsu:12511', season: 1 })
+  assert.deepEqual(placeOf('kitsu:11'), { id: 'kitsu:11', season: 1 })
+  assert.deepEqual(placeOf('kitsu:8743'), { id: 'kitsu:8743', season: 1 })
+  assert.deepEqual(placeOf('kitsu:7000'), { id: 'kitsu:7000', season: 1 })
+  // The show's own id, when it is not its first season: no place at all.
+  assert.equal(placeOf('kitsu:8574'), null)
+  assert.equal(placeOf('kitsu:6028'), null)
+  assert.equal(placeOf('kitsu:8203'), null)
+  // A title that was never merged is itself.
+  assert.deepEqual(placeOf(ALONE), { id: ALONE, season: 1 })
+})
+
+const mha = { id: TMDB_SHOW, type: 'anime' as const, title: 'My Hero Academia', year: '2016' }
+
 check('a season whose member cannot be shown to be it is not sent to Simkl', () => {
-  // What animeSiblingsWhenGrouped hands the builders: the places that do
-  // not match the page are blank.
-  const members = ['kitsu:12268', 'kitsu:13881', 'kitsu:12511', 'kitsu:41971']
-  const provable: AnimeSiblings = (id) =>
-    id === TMDB_SHOW
-      ? members.map((member, index) =>
-          animeSeasonMatchesPage(TMDB_SHOW, member, index + 2, tvdbOf) ? member : null
-        )
-      : undefined
-  const mha = { id: TMDB_SHOW, type: 'anime' as const, title: 'My Hero Academia', year: '2016' }
-  assert.deepEqual(historyPayload(mha, { season: 3, episode: 5 }, provable), {
+  assert.deepEqual(historyPayload(mha, { season: 3, episode: 5 }, seasonsOf), {
     anime: [{ ids: { kitsu: 13881 }, episodes: [{ number: 5 }] }]
   })
   // Season 4 on the page is TMDB's fourth season; the member at place 4 is
   // an OVA. Sent there, episode 5 would be marked on the wrong entry.
-  assert.deepEqual(historyPayload(mha, { season: 4, episode: 5 }, provable), {})
-  assert.deepEqual(historyPayload(mha, { season: 5, episode: 5 }, provable), {})
-  assert.equal(scrobblePayload(mha, { season: 4, episode: 5 }, 50, provable), null)
+  assert.deepEqual(historyPayload(mha, { season: 4, episode: 5 }, seasonsOf), {})
+  assert.deepEqual(historyPayload(mha, { season: 5, episode: 5 }, seasonsOf), {})
+  assert.equal(scrobblePayload(mha, { season: 4, episode: 5 }, 50, seasonsOf), null)
   assert.deepEqual(
     titleHistoryPayload(
       mha,
@@ -354,7 +477,7 @@ check('a season whose member cannot be shown to be it is not sent to Simkl', () 
         { season: 2, episodes: [1] },
         { season: 4, episodes: [1, 2] }
       ],
-      provable
+      seasonsOf
     ),
     {
       anime: [
@@ -365,28 +488,75 @@ check('a season whose member cannot be shown to be it is not sent to Simkl', () 
   )
 })
 
+check('nor is a first season the show itself cannot be shown to be', () => {
+  // Season 1 of this page is the show the recap recaps. Sent to the id the
+  // page is under, it would be marked on the recap's entry.
+  const recap = { id: 'kitsu:8574', type: 'anime' as const, title: 'Psycho-Pass', year: '2012' }
+  assert.deepEqual(historyPayload(recap, { season: 1, episode: 5 }, seasonsOf), {})
+  assert.deepEqual(historyPayload(recap, { season: 2, episode: 5 }, seasonsOf), {})
+  assert.equal(scrobblePayload(recap, { season: 1, episode: 5 }, 50, seasonsOf), null)
+  // While the catalog is not grouped nothing can tell, and a first season
+  // goes to the id it was asked under, as it always has.
+  assert.deepEqual(historyPayload(recap, { season: 1, episode: 5 }, undefined), {
+    anime: [{ title: 'Psycho-Pass', year: 2012, ids: { kitsu: 8574 }, episodes: [{ number: 5 }] }]
+  })
+})
+
+check('a later member opened by its own id is still its own entry', () => {
+  // It fronts no group, so whatever season its own page labels it, the
+  // episode goes to the entry its id names.
+  const fourth = { id: 'kitsu:41971', type: 'anime' as const, title: 'MHA 4', year: '2019' }
+  for (const season of [1, 4]) {
+    assert.deepEqual(historyPayload(fourth, { season, episode: 5 }, seasonsOf), {
+      anime: [{ title: 'MHA 4', year: 2019, ids: { kitsu: 41971 }, episodes: [{ number: 5 }] }]
+    })
+  }
+})
+
+check('local -> Simkl -> local is the identity for every season that is sent', () => {
+  for (const group of GROUPS) {
+    group.forEach((_, index) => {
+      for (const episode of EPISODES) {
+        const local: LocalAnimeEpisode = { id: group[0], season: index + 1, episode }
+        const remote = toSimklAnimeEpisode(local, seasonsOf)
+        if (remote) assert.deepEqual(fromSimklAnimeEpisode(remote, placeOf), local)
+      }
+    })
+  }
+})
+
+check('Simkl -> local -> Simkl is the identity for every entry that is kept', () => {
+  for (const id of GROUPS.flat()) {
+    for (const episode of EPISODES) {
+      const local = fromSimklAnimeEpisode({ id, episode }, placeOf)
+      if (local) assert.deepEqual(toSimklAnimeEpisode(local, seasonsOf), { id, episode })
+      else assert.equal(placeOf(id), null)
+    }
+  }
+})
+
 // ---------------------------------------------------------------------------
 console.log('\nrequest bodies')
 
 check("marking season 2 episode 5 names the second season's entry, flat, by id alone", () => {
   // No title or year: they are the show's, which at Simkl are the first
   // season's, and Simkl falls back to them when it cannot place an id.
-  assert.deepEqual(historyPayload(show, { season: 2, episode: 5 }, siblingsOf), {
+  assert.deepEqual(historyPayload(show, { season: 2, episode: 5 }, membersOf), {
     anime: [{ ids: { kitsu: 200 }, episodes: [{ number: 5 }] }]
   })
 })
 
 check('a first season keeps its title and year, and still sends no season', () => {
-  assert.deepEqual(historyPayload(show, { season: 1, episode: 5 }, siblingsOf), {
+  assert.deepEqual(historyPayload(show, { season: 1, episode: 5 }, membersOf), {
     anime: [{ title: 'Bleach', year: 2004, ids: { kitsu: 100 }, episodes: [{ number: 5 }] }]
   })
-  assert.deepEqual(historyPayload(alone, { episode: 9 }, siblingsOf), {
+  assert.deepEqual(historyPayload(alone, { episode: 9 }, membersOf), {
     anime: [{ title: 'Frieren', year: 2023, ids: { kitsu: 900 }, episodes: [{ number: 9 }] }]
   })
 })
 
 check("marking a season sends that season's entry its episodes", () => {
-  assert.deepEqual(seasonHistoryPayload(show, 3, [2, 1, 3], siblingsOf), {
+  assert.deepEqual(seasonHistoryPayload(show, 3, [2, 1, 3], membersOf), {
     anime: [{ ids: { kitsu: 300 }, episodes: [{ number: 1 }, { number: 2 }, { number: 3 }] }]
   })
 })
@@ -400,7 +570,7 @@ const WHOLE_TITLE = [
 ]
 
 check('a whole title is one entry per season it touched', () => {
-  assert.deepEqual(titleHistoryPayload(show, WHOLE_TITLE, siblingsOf), {
+  assert.deepEqual(titleHistoryPayload(show, WHOLE_TITLE, membersOf), {
     anime: [
       {
         title: 'Bleach',
@@ -415,13 +585,13 @@ check('a whole title is one entry per season it touched', () => {
 
 check('specials, an empty list and an unplaceable season send nothing at all', () => {
   const bodies: SimklHistoryPayload[] = [
-    historyPayload(show, { season: 0, episode: 1 }, siblingsOf),
-    historyPayload(show, { season: 4, episode: 1 }, siblingsOf),
-    historyPayload(show, {}, siblingsOf),
-    seasonHistoryPayload(show, 0, [1, 2], siblingsOf),
-    seasonHistoryPayload(show, 2, [], siblingsOf),
-    titleHistoryPayload(show, [{ season: 0, episodes: [1] }], siblingsOf),
-    titleHistoryPayload(show, [], siblingsOf)
+    historyPayload(show, { season: 0, episode: 1 }, membersOf),
+    historyPayload(show, { season: 4, episode: 1 }, membersOf),
+    historyPayload(show, {}, membersOf),
+    seasonHistoryPayload(show, 0, [1, 2], membersOf),
+    seasonHistoryPayload(show, 2, [], membersOf),
+    titleHistoryPayload(show, [{ season: 0, episodes: [1] }], membersOf),
+    titleHistoryPayload(show, [], membersOf)
   ]
   for (const body of bodies) {
     assert.deepEqual(body, {})
@@ -433,16 +603,16 @@ check('no anime entry ever goes out without episodes, or with a season', () => {
   // Sent to /sync/history/remove, an anime reference naming no episodes
   // removes that entry's whole history.
   const bodies: SimklHistoryPayload[] = [
-    historyPayload(show, { season: 2, episode: 5 }, siblingsOf),
-    historyPayload(show, { season: 2 }, siblingsOf),
-    historyPayload(alone, {}, siblingsOf),
-    seasonHistoryPayload(show, 1, [], siblingsOf),
-    seasonHistoryPayload(show, 2, [0, 3], siblingsOf),
-    titleHistoryPayload(show, WHOLE_TITLE, siblingsOf),
+    historyPayload(show, { season: 2, episode: 5 }, membersOf),
+    historyPayload(show, { season: 2 }, membersOf),
+    historyPayload(alone, {}, membersOf),
+    seasonHistoryPayload(show, 1, [], membersOf),
+    seasonHistoryPayload(show, 2, [0, 3], membersOf),
+    titleHistoryPayload(show, WHOLE_TITLE, membersOf),
     titleHistoryPayload(show, WHOLE_TITLE),
     batchHistoryPayload(
       [{ item: show, playback: { season: 3, episode: 2 } }, { item: alone }],
-      siblingsOf
+      membersOf
     )
   ]
   for (const body of bodies) {
@@ -469,25 +639,25 @@ check('before the catalog is grouped a later season is not sent', () => {
 })
 
 check('a scrobble names the entry and the flat episode, with no season', () => {
-  assert.deepEqual(scrobblePayload(show, { season: 2, episode: 5 }, 42, siblingsOf), {
+  assert.deepEqual(scrobblePayload(show, { season: 2, episode: 5 }, 42, membersOf), {
     progress: 42,
     anime: { ids: { kitsu: 200 } },
     episode: { number: 5 }
   })
-  assert.deepEqual(scrobblePayload(show, { season: 1, episode: 5 }, 42, siblingsOf), {
+  assert.deepEqual(scrobblePayload(show, { season: 1, episode: 5 }, 42, membersOf), {
     progress: 42,
     anime: { title: 'Bleach', year: 2004, ids: { kitsu: 100 } },
     episode: { number: 5 }
   })
   // A one-off with no episode coordinate is its entry's only episode.
-  assert.deepEqual(scrobblePayload(alone, {}, 10, siblingsOf)?.episode, { number: 1 })
-  assert.equal(scrobblePayload(show, { season: 0, episode: 1 }, 42, siblingsOf), null)
-  assert.equal(scrobblePayload(show, { season: 4, episode: 1 }, 42, siblingsOf), null)
+  assert.deepEqual(scrobblePayload(alone, {}, 10, membersOf)?.episode, { number: 1 })
+  assert.equal(scrobblePayload(show, { season: 0, episode: 1 }, 42, membersOf), null)
+  assert.equal(scrobblePayload(show, { season: 4, episode: 1 }, 42, membersOf), null)
 })
 
 check('a series and a film are built exactly as before', () => {
   const series = { id: 'tt0903747', type: 'series' as const, title: 'Breaking Bad', year: '2008' }
-  assert.deepEqual(historyPayload(series, { season: 2, episode: 5 }, siblingsOf), {
+  assert.deepEqual(historyPayload(series, { season: 2, episode: 5 }, membersOf), {
     shows: [
       {
         title: 'Breaking Bad',
@@ -497,13 +667,13 @@ check('a series and a film are built exactly as before', () => {
       }
     ]
   })
-  assert.deepEqual(scrobblePayload(series, { season: 2, episode: 5 }, 42, siblingsOf), {
+  assert.deepEqual(scrobblePayload(series, { season: 2, episode: 5 }, 42, membersOf), {
     progress: 42,
     show: { title: 'Breaking Bad', year: 2008, ids: { imdb: 'tt0903747' } },
     episode: { season: 2, number: 5 }
   })
   const film = { id: 'tt0245429', type: 'movie' as const, title: 'Spirited Away', year: '2001' }
-  assert.deepEqual(historyPayload(film, {}, siblingsOf), {
+  assert.deepEqual(historyPayload(film, {}, membersOf), {
     movies: [{ title: 'Spirited Away', year: 2001, ids: { imdb: 'tt0245429' } }]
   })
 })
@@ -572,12 +742,18 @@ const NOW = new Date('2026-09-20T12:00:00.000Z')
 
 /** The catch-up's own steps (simklCatchUp.ts): parse the library, place
  *  each entry by its Kitsu id, plan against what the device holds. */
-function caughtUp(library: unknown, watchedKeys: Iterable<string> = []): string[] {
+function caughtUp(
+  library: unknown,
+  watchedKeys: Iterable<string> = [],
+  place: (id: string) => { id: string; season: number } | null = targetOf
+): string[] {
   const { titles, dropped } = parseSimklLibrary({ anime: library })
   assert.equal(dropped, 0)
-  const resolved: ResolvedTitle[] = titles.map((title) => {
-    const target = targetOf(`kitsu:${title.kitsu}`)
-    return { title, id: target.id, type: 'anime', animeSeason: target.season }
+  const resolved: ResolvedTitle[] = titles.flatMap((title) => {
+    const target = place(`kitsu:${title.kitsu}`)
+    // An entry with no place is skipped and counted by the pass.
+    if (!target) return []
+    return [{ title, id: target.id, type: 'anime' as const, animeSeason: target.season }]
   })
   const local: CatchUpLocal = {
     watchedKeys: new Set(watchedKeys),
@@ -606,7 +782,7 @@ const REGULAR = WATCHED.filter((row) => row.season > 0)
 
 function pushed(): ReturnType<typeof simklAccount> {
   const account = simklAccount()
-  account.add(titleHistoryPayload(show, bySeason(WATCHED), siblingsOf))
+  account.add(titleHistoryPayload(show, bySeason(WATCHED), membersOf))
   return account
 }
 
@@ -639,10 +815,80 @@ check('the device that pushed them takes nothing back', () => {
 
 check('an unmark removes the one episode, from the one entry', () => {
   const account = pushed()
-  account.remove(historyPayload(show, { season: 2, episode: 1 }, siblingsOf))
+  account.remove(historyPayload(show, { season: 2, episode: 1 }, membersOf))
   assert.deepEqual(account.held(), { [SHOW]: [1, 2, 3], [SEASON_2]: [2], [SEASON_3]: [5] })
-  account.remove(titleHistoryPayload(show, bySeason(WATCHED), siblingsOf))
+  account.remove(titleHistoryPayload(show, bySeason(WATCHED), membersOf))
   assert.deepEqual(account.held(), {})
+})
+
+// ---------------------------------------------------------------------------
+console.log('\na show numbered by TMDB, pushed and read back')
+
+check('only the seasons a member can be shown to be reach Simkl', () => {
+  const account = simklAccount()
+  account.add(
+    titleHistoryPayload(
+      mha,
+      [
+        { season: 1, episodes: [1, 2] },
+        { season: 3, episodes: [1] },
+        { season: 4, episodes: [1, 2] },
+        { season: 5, episodes: [7] }
+      ],
+      seasonsOf
+    )
+  )
+  assert.deepEqual(account.held(), { [TMDB_SHOW]: [1, 2], 'kitsu:13881': [1] })
+  assert.deepEqual(caughtUp(account.library(), [], placeOf), [
+    `${TMDB_SHOW}:1:1`,
+    `${TMDB_SHOW}:1:2`,
+    `${TMDB_SHOW}:3:1`
+  ])
+})
+
+check('an entry that is no season of the page is kept as itself, never at its place', () => {
+  // Watched somewhere else: the third season, the OVA that sits at place 4
+  // and the fourth season that sits at place 5.
+  const account = simklAccount()
+  account.add({
+    anime: [
+      { ids: { kitsu: 13881 }, episodes: [{ number: 1 }] },
+      { ids: { kitsu: 12511 }, episodes: [{ number: 1 }] },
+      { ids: { kitsu: 41971 }, episodes: [{ number: 1 }, { number: 2 }] }
+    ]
+  })
+  assert.deepEqual(caughtUp(account.library(), [], placeOf), [
+    `${TMDB_SHOW}:3:1`,
+    'kitsu:12511:1:1',
+    'kitsu:41971:1:1',
+    'kitsu:41971:1:2'
+  ])
+  // By place alone, as it was: the OVA lands on the page's fourth season
+  // and the fourth season on its fifth.
+  assert.deepEqual(
+    caughtUp(account.library(), [], (id) => ({ id: TMDB_SHOW, season: MHA.indexOf(id) + 1 })),
+    [`${TMDB_SHOW}:3:1`, `${TMDB_SHOW}:4:1`, `${TMDB_SHOW}:5:1`, `${TMDB_SHOW}:5:2`]
+  )
+})
+
+check('and what was watched under its own id goes back to the same entry', () => {
+  const fourth = { id: 'kitsu:41971', type: 'anime' as const, title: 'MHA 4', year: '2019' }
+  const account = simklAccount()
+  account.add(historyPayload(fourth, { season: 1, episode: 2 }, seasonsOf))
+  assert.deepEqual(account.held(), { 'kitsu:41971': [2] })
+  assert.deepEqual(caughtUp(account.library(), ['kitsu:41971:1:2'], placeOf), [])
+})
+
+check("a show's own entry that is not its first season is not taken", () => {
+  // The recap that fronts the group, and the first season behind it.
+  const account = simklAccount()
+  account.add({
+    anime: [
+      { ids: { kitsu: 8574 }, episodes: [{ number: 1 }] },
+      { ids: { kitsu: 7000 }, episodes: [{ number: 3 }] }
+    ]
+  })
+  assert.deepEqual(caughtUp(account.library(), [], placeOf), ['kitsu:7000:1:3'])
 })
 
 // ---------------------------------------------------------------------------
@@ -663,7 +909,7 @@ check('the device that made one does not take it back as season 1', () => {
 
 check('marking it again sends it to the right entry, and leaves the old one', () => {
   const account = misfiled()
-  account.add(historyPayload(show, { season: 2, episode: 5 }, siblingsOf))
+  account.add(historyPayload(show, { season: 2, episode: 5 }, membersOf))
   assert.deepEqual(account.held(), { [SHOW]: [5], [SEASON_2]: [5] })
   assert.deepEqual(caughtUp(account.library(), [`${SHOW}:2:5`]), [])
 })

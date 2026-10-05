@@ -27,10 +27,10 @@ import type {
   MediaKind
 } from '../../shared/media-hub/types'
 import {
+  animeEntriesFor,
   animeGroupingReady,
-  animeSiblingsWhenGrouped,
-  groupedIdsFor,
-  resolveAnimeGroupTarget
+  animeSeasonMembersWhenGrouped,
+  placeAnimeEntry
 } from './animeSeasons'
 import { getDatabase } from './dbState'
 import { fetchJson } from './httpClient'
@@ -141,19 +141,6 @@ export async function resolveMalIdForKitsu(kitsuId: string): Promise<number> {
   return cross.mal || 0
 }
 
-/**
- * A Kitsu id as MAL keeps it. A member of a grouped anime — the canonical
- * id or any sibling — is one entry among the group's, in season order;
- * anything else is one entry on its own. Before the anime catalogue is
- * cached nothing is grouped, and every id is its own entry, as it was.
- */
-function malTitleOf(kitsuId: string): { id: string; members?: string[]; season: number } {
-  const target = resolveAnimeGroupTarget(kitsuId)
-  const siblings = groupedIdsFor(target.id)
-  if (!siblings?.length) return { id: kitsuId, season: 1 }
-  return { id: target.id, members: [target.id, ...siblings], season: target.season }
-}
-
 /** One entry's PATCH — the way every MAL progress push lands. */
 async function patchMalListStatus(
   push: MalEntryPush
@@ -210,8 +197,9 @@ async function sendMalPushes(
  *
  * A grouped anime is one show here and an entry per season at MAL, so what
  * is sent is one season's count — the season the change was in, given as
- * `season`, or the member's own place in the group — to that season's
- * entry. See planMalPushes.
+ * `season`, or the season a later member is — to that season's entry, when
+ * a member can be shown to be it. See animeEntriesFor (animeSeasons.ts) and
+ * planMalPushes.
  */
 export async function pushMalProgress(
   item: {
@@ -242,7 +230,7 @@ export async function pushMalProgress(
   if (item.type !== 'anime' || !String(item.id).startsWith('kitsu:')) return { malSynced: false }
   if (!malCredentials().accessToken) return { malSynced: false }
   if (!pushIsForActiveProfile(profile)) return { malSynced: false }
-  const title = malTitleOf(item.id)
+  const title = animeEntriesFor(item.id)
   // A sibling's entry is its own season whatever the caller says; only the
   // canonical id, which fronts the whole group, is told which season.
   const touched = item.id === title.id ? (season ?? title.season) : title.season
@@ -282,7 +270,7 @@ export async function pushMalTitleProgress(
   if (item.type !== 'anime' || !String(item.id).startsWith('kitsu:')) return { malSynced: false }
   if (!malCredentials().accessToken) return { malSynced: false }
   if (!pushIsForActiveProfile(profile)) return { malSynced: false }
-  const title = malTitleOf(item.id)
+  const title = animeEntriesFor(item.id)
   return sendMalPushes(
     planMalPushes(
       getDatabase().history(),
@@ -493,13 +481,17 @@ export function registerMalIpc(): void {
     // Each MAL entry's kitsuId is whichever sibling MAL itself matched to —
     // for a merged franchise (Naruto: Shippuuden, Bleach: Sennen Kessen-hen,
     // etc.) that is NOT this app's canonical grouped id, and its progress
-    // has to be compared against local history scoped to that sibling's
-    // real position in the group, not the group's combined total. See
-    // resolveAnimeGroupTarget's own doc for why.
-    const withTargets = withKitsuIds.map((entry) => ({
-      ...entry,
-      target: entry.kitsuId ? resolveAnimeGroupTarget(entry.kitsuId) : null
-    }))
+    // has to be compared against local history scoped to the season that
+    // sibling is on the show's page, not the group's combined total — or,
+    // where it cannot be shown to be one, against the rows under its own
+    // id. Never against whatever season sits at its place in the group. An
+    // entry with no place here at all (placeAnimeEntry answers null) is
+    // reported with the unmatched ones: nothing is compared, pulled or
+    // pushed for it.
+    const withTargets = withKitsuIds.map((entry) => {
+      const target = entry.kitsuId ? placeAnimeEntry(entry.kitsuId) : null
+      return { ...entry, kitsuId: target ? entry.kitsuId : '', target }
+    })
     const localProgress = localProgressByGroupTarget(withTargets, history)
     const localRatings = Object.fromEntries(getDatabase().ratings())
     return computeReconciliation(
@@ -525,7 +517,12 @@ export function registerMalIpc(): void {
 
       for (const item of diff?.toLocal || []) {
         try {
-          const target = resolveAnimeGroupTarget(item.kitsuId)
+          // Placed again rather than trusted from the preview: where an
+          // entry is kept follows the grouping, which can change in between.
+          const target = placeAnimeEntry(item.kitsuId)
+          if (!target) {
+            throw new Error('This entry can no longer be placed. Preview the sync again.')
+          }
           const episodeNumbers = Array.from(
             { length: item.toEpisode - item.fromEpisode + 1 },
             (_, i) => item.fromEpisode + i
@@ -540,14 +537,14 @@ export function registerMalIpc(): void {
           }
           // Empty when Simkl has no id for this title — see
           // historyPayload. Posting it would ask Simkl to match by title
-          // and year and change the account on a guess. A later season of
-          // a merged show goes to that season's own entry, which is the
-          // one MAL matched in the first place.
+          // and year and change the account on a guess. A season of a
+          // merged show goes to the member that is that season, which is
+          // the one MAL matched in the first place.
           const simklBody = seasonHistoryPayload(
             media,
             target.season,
             episodeNumbers,
-            animeSiblingsWhenGrouped()
+            animeSeasonMembersWhenGrouped()
           )
           if (simklCredentials().accessToken && hasSimklContent(simklBody)) {
             try {
@@ -603,11 +600,11 @@ function isFiniteNumber(value: unknown): value is number {
 
 /**
  * For each MAL entry (keyed by the raw kitsuId MAL itself matched to),
- * how many distinct episodes local history has recorded at that entry's
- * REAL position within its group — not localWatchedEpisodeCounts' bare
- * per-id total, which for a grouped franchise would be every merged
- * season's episodes summed together and would never agree with MAL's own
- * per-entry (per-season) count.
+ * how many distinct episodes local history has recorded where that entry
+ * is kept (placeAnimeEntry) — not localWatchedEpisodeCounts' bare per-id
+ * total, which for a grouped franchise would be every merged season's
+ * episodes summed together and would never agree with MAL's own per-entry
+ * (per-season) count.
  */
 function localProgressByGroupTarget(
   entries: { kitsuId: string; target: { id: string; season: number } | null }[],
