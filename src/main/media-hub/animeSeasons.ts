@@ -608,6 +608,10 @@ let animeGroupIndex: Map<string, string[]> | null = null
 /** See animeGroupIndex's own doc — built together in one pass since both read the same cached catalog blob. */
 let animeGroupPositionIndex: Map<string, { id: string; season: number }> | null = null
 
+/** Each merged show's combined totals (groupAnimeCatalog's episodeCounts),
+ *  by the id fronting it. Built with the two above, from the same blob. */
+let animeShowTotalsIndex: Map<string, { totalSeasons: number; totalEpisodes: number }> | null = null
+
 /** How many titles the catalog the two indexes were built from held. Zero
  *  is "no catalog", which is not the same answer as "a catalog with no
  *  merged shows" — see currentAnimeGroups. */
@@ -673,6 +677,7 @@ export function animeGroupingReady(): boolean {
 export function invalidateAnimeGroupIndex(): void {
   animeGroupIndex = null
   animeGroupPositionIndex = null
+  animeShowTotalsIndex = null
   animeLaterSeasonIndex = null
 }
 
@@ -729,8 +734,57 @@ function buildAnimeGroupIndexes(): void {
   const { siblings, positions } = animeGroupIndexesOf(items)
   animeGroupIndex = siblings
   animeGroupPositionIndex = positions
+  animeShowTotalsIndex = new Map()
+  for (const item of items) {
+    if (item.groupedIds?.length && item.episodeCounts) {
+      animeShowTotalsIndex.set(String(item.id), item.episodeCounts)
+    }
+  }
   animeGroupIndexSize = items.length
   animeLaterSeasonIndex = null
+}
+
+/**
+ * Index rows given what their show is now: each anime row that fronts a
+ * merged show carries its siblings and the show's totals, as the catalog's
+ * own card for it does. Anything else is returned as it is.
+ *
+ * The index is written from the raw crawl, before grouping, so a show's row
+ * knows only its first season: one season, that season's episodes. The grid,
+ * search and My Stuff cards are drawn from those rows, and a show's season
+ * count is what its card says about it (the "N seasons" chip). `showOf` is
+ * the grouping, handed in so this can be tested without a database.
+ */
+export function withShowTotals(
+  items: readonly CatalogItem[],
+  showOf: (
+    id: string
+  ) =>
+    | { groupedIds: string[]; episodeCounts?: { totalSeasons: number; totalEpisodes: number } }
+    | undefined
+): CatalogItem[] {
+  return items.map((item) => {
+    if (item.type !== 'anime') return item
+    const show = showOf(String(item.id))
+    if (!show?.groupedIds.length) return item
+    return {
+      ...item,
+      groupedIds: show.groupedIds,
+      episodeCounts: show.episodeCounts ?? {
+        totalSeasons: show.groupedIds.length + 1,
+        totalEpisodes: item.episodeCounts?.totalEpisodes ?? 0
+      }
+    }
+  })
+}
+
+/** withShowTotals over the catalog's current grouping. */
+export function withCurrentShowTotals(items: readonly CatalogItem[]): CatalogItem[] {
+  if (!animeGroupIndex) buildAnimeGroupIndexes()
+  return withShowTotals(items, (id) => {
+    const groupedIds = animeGroupIndex!.get(id)
+    return groupedIds ? { groupedIds, episodeCounts: animeShowTotalsIndex?.get(id) } : undefined
+  })
 }
 
 export function groupedIdsFor(catalogId: string): string[] | undefined {

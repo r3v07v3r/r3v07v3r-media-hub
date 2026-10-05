@@ -9,8 +9,9 @@
 //
 // Pinned here: where a card's rows are found (watchedLaterSeasons), what the
 // card makes of them (adapters.ts, watchStatus.ts), what the index says
-// about its completion, and that the library grid and search leave it out
-// while a plan card can still name it (database.ts, animeSeasons.ts).
+// about its completion, that the library grid and search leave it out
+// while a plan card can still name it (database.ts, animeSeasons.ts), and
+// that the show's own card says how many seasons it stands for.
 //
 // Run with: npx tsx tests/laterSeasonCards.test.ts
 
@@ -22,8 +23,11 @@ import path from 'node:path'
 import {
   animeGroupIndexesOf,
   foldLaterSeasons,
-  laterSeasonsOf
+  laterSeasonsOf,
+  withShowTotals
 } from '../src/main/media-hub/animeSeasons'
+import { toPosterItem } from '../src/app-ui/lib/posterItem'
+import { mergedSeasonsLabel } from '../src/shared/media-hub/catalogFields'
 import { createDatabase } from '../src/main/media-hub/database'
 import { watchedLaterSeasons } from '../src/shared/media-hub/serviceIds'
 import type { CatalogItem, Episode, HistoryEntry } from '../src/shared/media-hub/types'
@@ -554,6 +558,59 @@ check('a later season found by search is answered as its show', () => {
     foldLaterSeasons([anime(OTHER_SECOND), anime(ALONE)], laterSeasons, []).map((item) => item.id),
     [ALONE]
   )
+})
+
+// ---------------------------------------------------------------------
+// 5. The show's card says how many seasons it stands for.
+// ---------------------------------------------------------------------
+//
+// The index is written from the raw crawl, so a show's own row knows one
+// season and that season's episodes. Its card on the grid, in search and in
+// My Stuff is given the show's totals from the grouping (withShowTotals),
+// and a merged anime's card carries an "N seasons" chip, on the desktop
+// (MediaCard, the library tile) and on the phone (PosterCard). The rating is
+// left as it is: the front season's own score, not an average.
+
+check('a show’s index row is given the show’s siblings and totals', () => {
+  const row = anime(SHOW, { rating: '8.1', episodeCounts: { totalSeasons: 1, totalEpisodes: 2 } })
+  const showOf = (id: string) =>
+    id === SHOW
+      ? { groupedIds: [SECOND, THIRD], episodeCounts: { totalSeasons: 3, totalEpisodes: 7 } }
+      : undefined
+  const [show, alone, series] = withShowTotals(
+    [row, anime(ALONE), { ...anime(SHOW), type: 'series' }],
+    showOf
+  )
+  assert.deepEqual(show.groupedIds, [SECOND, THIRD])
+  assert.deepEqual(show.episodeCounts, { totalSeasons: 3, totalEpisodes: 7 })
+  assert.equal(show.rating, '8.1', 'the front season’s own score, not an average')
+  assert.equal(alone.episodeCounts, undefined, 'a title that fronts nothing is as it was')
+  assert.equal(series.groupedIds, undefined, 'only anime rows are shows of merged seasons')
+  // A grouping with no totals recorded still counts its seasons.
+  const [counted] = withShowTotals([row], () => ({ groupedIds: [SECOND] }))
+  assert.deepEqual(counted.episodeCounts, { totalSeasons: 2, totalEpisodes: 2 })
+})
+
+check('a merged anime’s card says how many seasons, and no other card does', () => {
+  assert.equal(mergedSeasonsLabel('anime', 3), '3 seasons')
+  assert.equal(mergedSeasonsLabel('anime', 1), null)
+  assert.equal(mergedSeasonsLabel('anime', undefined), null)
+  assert.equal(mergedSeasonsLabel('series', 5), null, 'every series has seasons')
+  assert.equal(mergedSeasonsLabel('movie', 2), null)
+
+  // The desktop card reads totalSeasons off the MediaItem the grid builds.
+  const [show] = withShowTotals([anime(SHOW)], () => ({
+    groupedIds: [SECOND, THIRD],
+    episodeCounts: { totalSeasons: 3, totalEpisodes: 7 }
+  }))
+  const media = catalogItemToMediaItem(show)
+  assert.equal(mergedSeasonsLabel(media.mediaKind, media.totalSeasons), '3 seasons')
+  assert.equal(media.totalEpisodes, 7)
+
+  // The phone's poster, from the same item.
+  assert.equal(toPosterItem(show).seasons, '3 seasons')
+  assert.equal(toPosterItem(anime(SHOW, { groupedIds: [SECOND] })).seasons, '2 seasons')
+  assert.equal(toPosterItem(anime(ALONE)).seasons, undefined)
 })
 
 console.log(`\n${pass} passed`)

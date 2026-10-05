@@ -1,4 +1,5 @@
 import type { CatalogItem, MediaKind, TrackedItem } from '@shared/media-hub/types'
+import { mergedSeasonsLabel } from '@shared/media-hub/catalogFields'
 
 /** The small, display-only shape every poster row/grid in this app renders
  *  from — a deliberately thin slice of CatalogItem (never the whole thing)
@@ -11,14 +12,22 @@ export interface PosterItem {
   /** A second line under the title — used by Home's Continue Watching row
    *  to show "S2 E4"; absent everywhere else. */
   subtitle?: string
+  /** "3 seasons" on a merged anime's poster — see mergedSeasonsLabel. */
+  seasons?: string
 }
 
 export function toPosterItem(item: CatalogItem): PosterItem {
+  const seasons = mergedSeasonsLabel(
+    item.type,
+    item.episodeCounts?.totalSeasons ??
+      (item.groupedIds?.length ? item.groupedIds.length + 1 : undefined)
+  )
   return {
     id: item.id,
     kind: item.type,
     title: item.title,
-    poster: item.poster || undefined
+    poster: item.poster || undefined,
+    ...(seasons ? { seasons } : {})
   }
 }
 

@@ -11,6 +11,7 @@ export default function PosterCard({ item }: { item: PosterItem }) {
     <Link to={`/title/${item.kind}/${item.id}`} className="poster-card">
       <span className="poster-card__art">
         {item.poster ? <img src={item.poster} alt="" loading="lazy" decoding="async" /> : null}
+        {item.seasons ? <span className="poster-card__seasons">{item.seasons}</span> : null}
       </span>
       <span className="poster-card__title">{item.title}</span>
       {item.subtitle ? <span className="poster-card__subtitle">{item.subtitle}</span> : null}

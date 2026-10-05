@@ -6,7 +6,7 @@ import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { resolveArtwork } from '@renderer/lib/artwork'
-import { parseRating } from '@shared/media-hub/catalogFields'
+import { mergedSeasonsLabel, parseRating } from '@shared/media-hub/catalogFields'
 import type { MediaItem } from '@renderer/types'
 import {
   applyCategoryFilters,
@@ -175,6 +175,7 @@ function LibraryTile({
   const artwork = resolveArtwork(media)
   const rating = score(media)
   const state = watchState(media)
+  const seasons = mergedSeasonsLabel(media.mediaKind, media.totalSeasons)
 
   return (
     <li>
@@ -220,10 +221,15 @@ function LibraryTile({
             <Icon name={state === 'watched' ? 'check' : 'clock'} size={11} />
           </span>
         )}
-        {rating && (
-          <span className={styles.tileRating}>
-            <Icon name="star" size={11} />
-            {rating}
+        {(rating || seasons) && (
+          <span className={styles.tileBadges}>
+            {rating && (
+              <span className={styles.tileRating}>
+                <Icon name="star" size={11} />
+                {rating}
+              </span>
+            )}
+            {seasons && <span className={styles.tileSeasons}>{seasons}</span>}
           </span>
         )}
         <button

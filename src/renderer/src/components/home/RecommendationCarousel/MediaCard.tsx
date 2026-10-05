@@ -12,6 +12,7 @@ import { RatingBadge } from '@renderer/components/detail/RatingBadge'
 import { ratingSourceFor } from '@renderer/components/detail/ratingSource'
 import type { PlannedServiceId } from '@shared/media-hub/types'
 import { kindOf } from '@renderer/components/mystuff/plannedFilterRules'
+import { mergedSeasonsLabel } from '@shared/media-hub/catalogFields'
 
 const MATCH_CLASS: Record<string, string> = {
   excellent: styles.matchExcellent,
@@ -82,6 +83,8 @@ export function MediaCard({
   // On the Planned tab every card is planned, so the corner badge would
   // say the same thing forty times; the provenance chip is the fact worth
   // reading there. Everywhere else the badge is how a planned title shows.
+  // A merged anime stands for all its seasons; the card says how many.
+  const seasons = mergedSeasonsLabel(media.mediaKind, media.totalSeasons)
   const status = getWatchStatus(media, continueWatching)
   const watchStatus =
     status.state === 'planned' && plannedTag ? { state: 'unwatched' as const } : status
@@ -196,6 +199,7 @@ export function MediaCard({
                 value={(media.imdbRating ?? media.communityRating ?? 0).toFixed(1)}
               />
             )}
+            {seasons && <span className={styles.seasonsChip}>{seasons}</span>}
           </div>
           {media.matchPercentage !== undefined && (
             <span

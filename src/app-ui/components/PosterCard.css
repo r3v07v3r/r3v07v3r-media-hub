@@ -12,6 +12,7 @@
    surrounding layout — the placeholder tint fills the same space the art
    would have. */
 .poster-card__art {
+  position: relative;
   display: block;
   aspect-ratio: 2 / 3;
   border-radius: var(--radius-small);
@@ -24,6 +25,20 @@
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+/* "3 seasons" on a merged anime: the poster stands for the whole show. */
+.poster-card__seasons {
+  position: absolute;
+  left: 0.35rem;
+  bottom: 0.35rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--radius-small);
+  background: rgba(2, 5, 13, 0.72);
+  color: var(--text-primary);
+  font-size: 0.7rem;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .poster-card__title {

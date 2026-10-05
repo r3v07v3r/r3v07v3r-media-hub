@@ -59,8 +59,9 @@ trending feed (either one alone fills the grid), anime from Kitsu. No key is req
   from the Settings page's Browsing card. Save any filter combination as a named view; it comes back as
   a chip. **Scan deeper** on a category page pulls in more of the catalog than loaded by itself.
   An anime whose seasons are merged into one show is one tile in the Anime library and in search,
-  on the desktop and the phone; its seasons are tabs on its page, and searching a later season's
-  own name finds the show.
+  on the desktop and the phone, with an "N seasons" chip on its poster; its rating is its first
+  season's. Its seasons are tabs on its page, and searching a later season's own name finds the
+  show.
 - **Recommendations that say why.** Home shows the top row; **For You** shows the whole ranking,
   shelved by reason: a franchise continuation, a director or actor who recurs in what you have watched, a genre
   match. After

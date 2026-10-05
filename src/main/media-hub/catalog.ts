@@ -74,7 +74,8 @@ import {
   kitsuRealEpisodes,
   groupedVideosAreComplete,
   laterSeasons,
-  laterSeasonOf
+  laterSeasonOf,
+  withCurrentShowTotals
 } from './animeSeasons'
 import { keepAnimeHistoryWithShows } from './animeSyncRepair'
 import { omdbRottenTomatoesRating } from './omdb'
@@ -1730,7 +1731,8 @@ export function registerCatalogIpc(): void {
         : []
       if (!ids.length) return { items: [], completedIds: [] }
       // A later season's card is complete when that season of its show is.
-      return getDatabase().indexByIds(ids, laterSeasons())
+      const answer = getDatabase().indexByIds(ids, laterSeasons())
+      return { ...answer, items: withCurrentShowTotals(answer.items) }
     }
   )
 
@@ -1756,7 +1758,11 @@ export function registerCatalogIpc(): void {
     // The index keeps a row for every season of a merged anime. The grid
     // shows the show, and leaves out each season that opens as the show
     // (laterSeasons, the same answer laterSeasonOf gives one id at a time).
-    return getDatabase().indexQuery(query, query.kind === 'anime' ? laterSeasons() : undefined)
+    // A show's row knows only its first season; its card is given the show's
+    // totals (withCurrentShowTotals).
+    if (query.kind !== 'anime') return getDatabase().indexQuery(query)
+    const page = getDatabase().indexQuery(query, laterSeasons())
+    return { ...page, items: withCurrentShowTotals(page.items) }
   })
 
   handle<CatalogFacetsPayload, CatalogFacets>(
@@ -1843,7 +1849,9 @@ export function registerCatalogIpc(): void {
         seen.add(id)
         extra.push(item)
       }
-      return [...byTitle, ...extra]
+      return kind === 'anime'
+        ? withCurrentShowTotals([...byTitle, ...extra])
+        : [...byTitle, ...extra]
     }
   )
 
