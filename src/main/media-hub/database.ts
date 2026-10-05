@@ -651,6 +651,24 @@ export interface MediaHubDatabase {
    */
   importWatched(rows: ImportedPlay[]): number
   /**
+   * One kind of a catch-up (simklCatchUp.ts), written whole or not at all:
+   * the viewings taken from a service, exactly as importWatched takes them,
+   * the shows it starts following, and the films it takes off the plan.
+   *
+   * One transaction because the three are decided together and cannot be
+   * decided again apart. A follow and an un-plan are only offered for a
+   * viewing that is NEW here — so viewings that landed without them would
+   * never get them: the next pass finds every one already recorded and
+   * offers nothing.
+   *
+   * Returns the new viewings, and which of `unplan` were on the list.
+   */
+  applyCatchUp(input: {
+    plays: ImportedPlay[]
+    follow: Array<Partial<CatalogItem> & { id: unknown }>
+    unplan: string[]
+  }): { plays: number; unplanned: string[] }
+  /**
    * Writes ratings from another service, skipping every title already rated
    * here. Same gap-filling rule as importWatched, and for the stronger
    * version of the same reason: a score is somebody's opinion, and the one
@@ -1474,6 +1492,33 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     return rows.sort((a, b) => b.watchedAt.localeCompare(a.watchedAt))
   }
 
+  /** Writes imported viewings and says how many were new. The caller owns
+   *  the transaction — see importWatched and applyCatchUp. */
+  function importRows(rows: ImportedPlay[]): number {
+    let added = 0
+    for (const row of rows) {
+      const value = normalizeTitle({ ...row, id: row.id })
+      const season = Number.isFinite(row.season) ? (row.season as number) : null
+      const episode = Number.isFinite(row.episode) ? (row.episode as number) : null
+      const params = {
+        profile: currentProfileId,
+        id: value.id,
+        type: value.type,
+        title: value.title,
+        season,
+        episode,
+        now: row.watchedAt,
+        json: JSON.stringify(value)
+      }
+      q.importWatched.run({
+        ...params,
+        key: `${value.id}:${season ?? 'movie'}:${episode ?? 'movie'}`
+      })
+      added += Number(q.importPlay.run(params).changes || 0)
+    }
+    return added
+  }
+
   const db: MediaHubDatabase = {
     setActiveProfile(profileId) {
       const next = String(profileId || '').trim()
@@ -2034,26 +2079,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         durable(() => {
           sql.exec('BEGIN')
           try {
-            for (const row of list) {
-              const value = normalizeTitle({ ...row, id: row.id })
-              const season = Number.isFinite(row.season) ? (row.season as number) : null
-              const episode = Number.isFinite(row.episode) ? (row.episode as number) : null
-              const params = {
-                profile: currentProfileId,
-                id: value.id,
-                type: value.type,
-                title: value.title,
-                season,
-                episode,
-                now: row.watchedAt,
-                json: JSON.stringify(value)
-              }
-              q.importWatched.run({
-                ...params,
-                key: `${value.id}:${season ?? 'movie'}:${episode ?? 'movie'}`
-              })
-              added += Number(q.importPlay.run(params).changes || 0)
-            }
+            added = importRows(list)
             sql.exec('COMMIT')
           } catch (error) {
             sql.exec('ROLLBACK')
@@ -2063,6 +2089,47 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         return added
       } catch (error) {
         return fail(error as Error) as unknown as number
+      }
+    },
+
+    applyCatchUp({ plays, follow, unplan }) {
+      try {
+        const result = { plays: 0, unplanned: [] as string[] }
+        if (!plays.length && !follow.length && !unplan.length) return result
+        const now = new Date()
+        durable(() => {
+          sql.exec('BEGIN')
+          try {
+            result.plays = importRows(plays)
+            for (const item of follow) {
+              const value = normalizeTitle(item)
+              const baseline = latestReleased(item.videos as EpisodeLike[] | undefined, now)
+              q.track.run({
+                profile: currentProfileId,
+                id: value.id,
+                type: value.type,
+                title: value.title,
+                poster: value.poster,
+                json: JSON.stringify(value),
+                now: now.toISOString(),
+                baselineSeason: baseline.season,
+                baselineEpisode: baseline.episode
+              })
+            }
+            for (const id of unplan) {
+              if (q.untrack.run(currentProfileId, String(id)).changes > 0) {
+                result.unplanned.push(String(id))
+              }
+            }
+            sql.exec('COMMIT')
+          } catch (error) {
+            sql.exec('ROLLBACK')
+            throw error
+          }
+        })
+        return result
+      } catch (error) {
+        return fail(error as Error) as unknown as { plays: number; unplanned: string[] }
       }
     },
 
