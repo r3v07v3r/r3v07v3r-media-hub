@@ -13,10 +13,19 @@
 // `require('electron')` is intercepted for the whole file and answered with a
 // stand-in, so a regression here fails an assertion rather than starting the
 // download it is meant to prevent.
+//
+// The other half is scripts/ensure-electron.mjs, which `npm run dev` and
+// `npm start` run first: electron-vite reads node_modules/electron/path.txt
+// itself and stops when it is missing, which is what a fresh install leaves
+// from Electron 42 on. It is driven here against a fake package directory
+// whose install.js only counts its runs, never against the real one.
 // Run with: npx tsx tests/electronBinary.test.ts
 
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import Module from 'node:module'
+import os from 'node:os'
+import path from 'node:path'
 
 const requested: string[] = []
 const standIn = { standIn: true }
@@ -93,6 +102,56 @@ async function main(): Promise<void> {
       delete process.env.R3_ELECTRON_SHIM
     }
     assert.deepEqual(requested, ['electron'])
+  })
+
+  console.log('\nensure-electron before dev and start')
+  const { ensureElectron } = await import('../scripts/ensure-electron.mjs')
+
+  /** A package directory whose install.js records each run and writes path.txt, as the real one does. */
+  function fakePackage(installBody?: string): { dir: string; runs: () => number } {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-electron-'))
+    const log = path.join(dir, 'runs.log')
+    fs.writeFileSync(
+      path.join(dir, 'install.js'),
+      installBody ??
+        `const fs = require('fs'), path = require('path')
+fs.appendFileSync(${JSON.stringify(log)}, 'run\\n')
+fs.writeFileSync(path.join(__dirname, 'path.txt'), 'electron')`
+    )
+    const runs = (): number =>
+      fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).length : 0
+    return { dir, runs }
+  }
+
+  await check('with no path.txt it runs install.js once; with path.txt it does nothing', () => {
+    const fake = fakePackage()
+    assert.equal(ensureElectron(fake.dir, {}), true)
+    assert.equal(fake.runs(), 1)
+    assert.ok(fs.existsSync(path.join(fake.dir, 'path.txt')))
+    assert.equal(ensureElectron(fake.dir, {}), false)
+    assert.equal(fake.runs(), 1, 'a second start must not install again')
+  })
+
+  await check('ELECTRON_EXEC_PATH, electron-vite’s own override, leaves nothing to fetch', () => {
+    const fake = fakePackage()
+    assert.equal(ensureElectron(fake.dir, { ELECTRON_EXEC_PATH: '/opt/electron/electron' }), false)
+    assert.equal(fake.runs(), 0)
+  })
+
+  await check(
+    'a failed install stops dev or start with the reason, not later in electron-vite',
+    () => {
+      const fake = fakePackage('process.exit(3)')
+      assert.throws(() => ensureElectron(fake.dir, {}), /install\.js failed \(3\)/)
+    }
+  )
+
+  await check('dev and start both run it first', () => {
+    const { scripts } = JSON.parse(
+      fs.readFileSync(path.join(import.meta.dirname, '..', 'package.json'), 'utf8')
+    ) as { scripts: Record<string, string> }
+    assert.equal(scripts.predev, 'node scripts/ensure-electron.mjs')
+    assert.equal(scripts.prestart, 'node scripts/ensure-electron.mjs')
   })
 
   console.log(`\n${pass} passed`)
