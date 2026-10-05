@@ -598,10 +598,11 @@ export function createApi(transport: ApiTransport) {
         setScrobble: (enabled: boolean): Promise<{ scrobbleEnabled: boolean }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.trackingSetScrobble, { enabled }),
         /** Bring this device up to date with the tracking services — the
-         *  watchlist pull, then what Simkl says was watched. For the phone
-         *  and TV app; the desktop settles disagreements in its review panel
-         *  instead. Cheap to call often: a pass that ran moments ago, or is
-         *  still running, answers for this call too. */
+         *  watchlist pull, then what Simkl says was watched, then Trakt's
+         *  history. Add-only. The phone and TV app ask on open and resume,
+         *  the desktop on open and focus; the desktop's review panel handles
+         *  what it cannot settle. Cheap to call often: a pass that ran
+         *  moments ago, or is still running, answers for this call too. */
         catchUp: (options?: { force?: boolean }): Promise<CatchUpReport> =>
           transport.invoke(MEDIA_HUB_CHANNELS.trackingCatchUp, options),
         /** Whether one title is on the list, and which of it is watched —

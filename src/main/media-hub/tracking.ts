@@ -167,7 +167,14 @@ import {
   simklUrl,
   simklWatchedSnapshot
 } from './simklClient'
-import { newWatchSyncMemory, runWatchSync } from './watchSync'
+import {
+  filmDiffCurrent,
+  localFilmsSignature,
+  newWatchSyncMemory,
+  recordFilmDiff,
+  runWatchSync
+} from './watchSync'
+import { parseSimklActivities } from './simklCatchUpRules'
 import { titlePushQueue, titlePushKey } from './titlePushQueue'
 import { cachedMetadata } from './titleNames'
 import { imdbForSimklKeyedId, isSimklKeyedId } from './simklKeyedHistory'
@@ -586,7 +593,11 @@ interface SimklPinPollResponse {
 // never successfully pushed while offline, a watch recorded from another
 // device, or similar) — surfaced for review, never silently applied in
 // either direction, since guessing wrong would mean either erasing a
-// real watch or fabricating one.
+// real watch or fabricating one. (Additions are the one exception: the
+// catch-up in simklCatchUp.ts takes in what Simkl holds and this library
+// does not, add-only, on the desktop as on the phone, and the check below
+// runs after it. What reaches this panel is what the catch-up could not
+// settle: Simkl saying a film here is not watched, mostly.)
 //
 // MOVIES ONLY, for now. A movie's watched state is a clean boolean on
 // both sides, which is exactly what makes it tractable to diff safely.
@@ -637,6 +648,14 @@ const RECONCILE_COOLDOWN_KEY_PREFIX = 'reconcile:cooldown:v1'
  * still done once per cooldown window; it is just no longer wasted.
  */
 const RECONCILE_RESULT_KEY_PREFIX = 'reconcile:result:v2'
+/**
+ * How long that diff is kept. Longer than the cooldown, because the launch
+ * check now asks Simkl's /sync/activities first and, when neither the films
+ * there nor the films here have moved since the last diff (watchSync.ts's
+ * filmDiffCurrent), answers with this one instead of reading Simkl's films
+ * again. A day bounds how stale that can be: after it the films are read.
+ */
+const RECONCILE_RESULT_TTL_MS = 24 * 60 * 60 * 1000
 
 /**
  * A cached diff, stamped with whose account it was computed against.
@@ -695,23 +714,36 @@ function writeReconcileResult(
     // holds, and explicit so it stays right if that guard is ever loosened.
     reconcileKey(RECONCILE_RESULT_KEY_PREFIX, profile),
     { account, profile, discrepancies },
-    RECONCILE_COOLDOWN_MS
+    RECONCILE_RESULT_TTL_MS
   )
 }
 
-/** The cached diff, but only if it belongs to the account connected now. */
-function cachedReconcileResult(): WatchStatusDiscrepancy[] {
+/** The cached diff, but only if it belongs to the account connected now.
+ *  Null when there is none, which is not the same as one with nothing in it. */
+function storedReconcileResult(): WatchStatusDiscrepancy[] | null {
   const account = simklAccountMark()
   // No account connected matches no stamp — never the empty-string
   // account a malformed row might carry.
-  if (!account) return []
+  if (!account) return null
   const profile = getDatabase().activeProfile()
   const row = getDatabase().getCache<CachedReconcileResult>(
     reconcileKey(RECONCILE_RESULT_KEY_PREFIX)
   )
-  return row?.account === account && row.profile === profile && Array.isArray(row.discrepancies)
-    ? row.discrepancies
-    : []
+  if (row?.account !== account || row.profile !== profile || !Array.isArray(row.discrepancies)) {
+    return null
+  }
+  // Kept for up to a day now, so what was decided since it was made is
+  // taken out on the way back: ignored, given up on, or queued to push.
+  const ignored = ignoredReconcileIds()
+  const givenUpOn = abandonedReconcileIds()
+  const decided = new Set(pendingPushes().map((entry) => entry.id))
+  return row.discrepancies.filter(
+    (d) => !ignored.has(d.id) && !givenUpOn.has(d.id) && !decided.has(d.id)
+  )
+}
+
+function cachedReconcileResult(): WatchStatusDiscrepancy[] {
+  return storedReconcileResult() ?? []
 }
 /** Ids someone has explicitly said to stop asking about — kept far longer
  *  than the cooldown above (this is a decision, not a rate limit), but
@@ -1508,7 +1540,9 @@ async function computeMovieDiscrepancies(
       .filter((h) => h.type === 'movie')
       .map((h) => [h.id, h] as const)
   )
-  const snapshot = await simklWatchedSnapshot(priority)
+  // Films only: this diff reads nothing else, and the shows library with
+  // every episode's date is the largest thing this app asks Simkl for.
+  const snapshot = await simklWatchedSnapshot(priority, { moviesOnly: true })
   // A row written under Simkl's own number for a title this account holds
   // under its IMDb id is the same viewing twice, not a disagreement — fold
   // it into the real row before diffing (see simklKeyedHistory.ts). Done
@@ -1686,9 +1720,10 @@ export function registerTrackingIpc(): void {
   )
 
   /**
-   * The phone and TV app's catch-up — see simklCatchUp.ts. Asked for on
-   * launch and on every resume; the pass itself decides whether that is
-   * worth a request, so the screen never has to.
+   * The catch-up — see simklCatchUp.ts. The phone and TV app ask on launch
+   * and on every resume, the desktop on launch and on window focus
+   * (useServiceCatchUp); the pass itself decides whether that is worth a
+   * request, so the screen never has to.
    */
   handle<{ force?: boolean } | undefined, CatchUpReport>(
     MEDIA_HUB_CHANNELS.trackingCatchUp,
@@ -2210,6 +2245,13 @@ export function registerTrackingIpc(): void {
     // budget is the flush's own retry pacing, which applies to entries
     // that have already failed and never to one nobody has tried.
     const justPushed = await flushPendingPushes()
+    // The catch-up first (simklCatchUp.ts): what Simkl holds that this
+    // library does not is taken in without asking, add-only, so the panel
+    // is left with what remains — Simkl saying a film here is not watched,
+    // and anything the catch-up could not place. Shares the pass the launch
+    // asked for if it is still running, and answers from the last one within
+    // two minutes; nothing runs while something plays.
+    await catchUpFromServices().catch((error) => logError('tracking:reconcile:catch-up', error))
     if (db.getCache(reconcileKey(RECONCILE_COOLDOWN_KEY_PREFIX))) {
       // Inside the cooldown, but that no longer means "nothing to say" —
       // the background watch-sync job may have run the diff moments ago.
@@ -2219,12 +2261,38 @@ export function registerTrackingIpc(): void {
       const cached = cachedReconcileResult()
       return { ran: false, discrepancies: cached.filter((d) => !justPushed.has(d.id)) }
     }
-    db.putCache(reconcileKey(RECONCILE_COOLDOWN_KEY_PREFIX), true, RECONCILE_COOLDOWN_MS)
     const account = simklAccountMark()
     const profile = db.activeProfile()
+    // Simkl's one small question before its films library, the same gate
+    // the half-hourly pass reads (watchSync.ts). Unanswered, the films are
+    // not read: fetching them without it is what Simkl suspends clients for.
+    let movies: string | null
     try {
-      const { discrepancies } = await computeMovieDiscrepancies()
+      movies = parseSimklActivities(await simklActivities('visible')).movies
+    } catch (error) {
+      logError('tracking:reconcile:activities', error)
+      return { ran: false, discrepancies: cachedReconcileResult() }
+    }
+    // Read before the diff, like the stamp: a film marked while it runs
+    // is then seen by the next check.
+    const local = localFilmsSignature(db.history())
+    if (filmDiffCurrent(db, profile, account, movies, local)) {
+      // Neither side's films moved since the last diff: that diff stands.
+      const stored = storedReconcileResult()
+      if (stored) {
+        return { ran: false, discrepancies: stored.filter((d) => !justPushed.has(d.id)) }
+      }
+    }
+    db.putCache(reconcileKey(RECONCILE_COOLDOWN_KEY_PREFIX), true, RECONCILE_COOLDOWN_MS)
+    try {
+      const { discrepancies, fetched } = await computeMovieDiscrepancies()
       writeReconcileResult(account, profile, discrepancies)
+      // Recorded only against films fetched from Simkl just now, and only
+      // for the profile and account it was asked for — as the half-hourly
+      // pass records its own.
+      if (fetched && db.activeProfile() === profile && simklAccountMark() === account) {
+        recordFilmDiff(db, profile, account, movies, local, Date.now())
+      }
       // Anything confirmed moments ago is settled, whatever Simkl's
       // all-items view says — that read can lag its own write, and
       // re-asking about a title someone just resolved is the exact

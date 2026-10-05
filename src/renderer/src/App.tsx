@@ -17,6 +17,7 @@ import MoodExplorePage from '@renderer/routes/MoodExplorePage'
 import PersonPage from '@renderer/routes/PersonPage'
 import PlayerOverlayWindow from '@renderer/routes/PlayerOverlayWindow'
 import { PLAYER_OVERLAY_ROUTE } from '@shared/media-hub/playerRoute'
+import { useServiceCatchUp } from '@renderer/hooks/useServiceCatchUp'
 
 // Keyed on the pathname so that navigating away from a page that threw
 // clears the fallback — without it, one bad title page would leave the error
@@ -59,6 +60,13 @@ function ScrollToTopOnNavigate() {
   return null
 }
 
+/** The desktop's catch-up with the tracking services, on open and on focus —
+ *  see useServiceCatchUp. */
+function ServiceCatchUp() {
+  useServiceCatchUp()
+  return null
+}
+
 function LegacyTvShowDetailRedirect() {
   const { id } = useParams()
   return <Navigate to={`/series/${encodeURIComponent(id ?? '')}`} replace />
@@ -95,6 +103,7 @@ export default function App() {
         <AppStateProvider>
           <AppShell>
             <ScrollToTopOnNavigate />
+            <ServiceCatchUp />
             <RoutedErrorBoundary>
               <Routes>
                 <Route path="/" element={<HomeDashboard />} />

@@ -1,12 +1,14 @@
-// Bringing the phone and TV app up to date with what was watched elsewhere.
+// Bringing a device up to date with what was watched elsewhere.
 //
-// The desktop app learns of a disagreement with Simkl through its review
-// panel, and somebody decides. The phone and TV app have no such panel and
-// nobody to ask: they open, and Continue Watching should already know about
-// the episode watched on the laptop last night. So this pass runs unattended
-// whenever the lite UI asks — on launch, on resume — and it only ever adds:
-// the watchlist pull, then Simkl's watched history taken into the local
-// record, then the shows Simkl says are being watched followed here.
+// The phone and TV app open, and Continue Watching should already know about
+// the episode watched on the laptop last night; the desktop should know
+// about the one watched on the phone. So this pass runs unattended whenever
+// an interface asks — the lite UI on launch and on resume, the desktop on
+// launch and on window focus — and it only ever adds: the watchlist pull,
+// then Simkl's watched history taken into the local record, then the shows
+// Simkl says are being watched followed here. What it cannot settle by
+// adding (Simkl saying a film here is not watched) is left to the desktop's
+// review panel, which runs after it.
 //
 // What it decides to write is simklCatchUpRules.ts, which is pure and tested
 // directly. This is the fetching, the ordering and the writing, and its

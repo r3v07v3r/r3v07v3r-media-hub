@@ -233,12 +233,18 @@ asks that one question first and reads only what moved:
   some things on this side change what a read would do without touching
   Simkl: a queued removal given up on (rule 6), sync switched back on, a
   title that came from Simkl and has since left Trakt as well.
-- **The watched library the desktop's review panel is compared against**
-  is fetched when the films stamp moved, or when the set of films watched
+- **The watched films the desktop's review panel is compared against**
+  are fetched when the films stamp moved, or when the set of films watched
   here changed (a film marked here whose push to Simkl failed moves only
   this side), and only if the app's interface has asked for that panel
-  since it started. The phone and TV app never do, so there it is never
-  fetched.
+  since it started. The phone and TV app never do, so there they are never
+  fetched. Films only: the panel compares nothing else, and the shows
+  library with every episode's date, the largest thing the app asks Simkl
+  for, is left to the MyAnimeList preview, which needs it. The desktop's
+  own check a few seconds after launch asks `/sync/activities` the same
+  way first, after the catch-up below has run, and when neither side's
+  films moved since the last comparison it shows that one again rather
+  than reading Simkl's films (a comparison is kept for a day).
 - **Trakt and MyAnimeList** have no such question to ask, and are read
   every half hour as before.
 
@@ -305,23 +311,31 @@ whatever the setting says. The phone and TV player sends none either way.
   confused for each other. (In that review, films only: "Use Local" sends
   the local value to Simkl and then Trakt; "Use Simkl" rewrites the local
   record and sends Simkl's value on to Trakt. A Trakt failure is logged and
-  does not undo either choice.) The one exception is the phone and TV app's
-  catch-up, below, which takes Simkl's history in without a review.
+  does not undo either choice.) The one exception is the catch-up, below,
+  which takes Simkl's history in without a review, adding only.
 
-## The catch-up on the phone and TV app
+## The catch-up
 
-The desktop settles disagreements with Simkl in a review panel. The phone
-and TV app have no panel and nobody to ask, so they run a **catch-up**
-(`src/main/media-hub/simklCatchUp.ts`; what it decides to write is in
-`simklCatchUpRules.ts`, which is tested directly).
+Every device runs a **catch-up** (`src/main/media-hub/simklCatchUp.ts`;
+what it decides to write is in `simklCatchUpRules.ts`, which is tested
+directly): what Simkl says was watched elsewhere, and this library does
+not have yet, is added without asking. It never removes anything, so it
+needs no review. On the desktop, what it cannot settle by adding (Simkl
+saying a film here is not watched, or a film it could not place) is still
+the "Out of sync with Simkl" panel's, whose check runs after it. The phone
+and TV app have no panel, and the catch-up is all they have.
 
-**Who asks.** Only the phone and TV interface, through `tracking.catchUp`:
-when the app opens, when it comes back to the front, and straight after
-linking to a desktop. The desktop app never runs it. A call within two
-minutes of the last pass, or while one is running, is answered with that
-pass's report; nothing runs while something is playing; a fresh link skips
-the two-minute wait. All of that is per profile: a pass for one profile
-never answers for another, which gets its own.
+**Who asks.** Every interface, through `tracking.catchUp`. The phone and TV
+app ask when the app opens, when it comes back to the front, and straight
+after linking to a desktop. The desktop asks when its window opens and when
+it comes back to the front, but for focus at most every ten minutes
+(`useServiceCatchUp.ts`), because a desktop window gains focus far more
+often than a phone resumes and each pass that gets through is a Simkl
+request. A call within two minutes of the last pass, or while one is
+running, is answered with that pass's report; nothing runs while something
+is playing; a fresh link skips the two-minute wait. All of that is per
+profile: a pass for one profile never answers for another, which gets its
+own.
 
 **What it reads.** First the watchlist pull above, so the plan is settled
 before any history lands: the pull refuses to plan anything with local
@@ -386,10 +400,9 @@ with viewings recorded here, the unscoped Simkl removal is not sent.
   holds without a usable date is left out. A finished film with no watched
   date is recorded at the date it was added to the list there, or failing
   that at the time of the catch-up.
-- One direction. The desktop still does not take in episodes watched on the
-  phone. Those reach Simkl through the ordinary history push; a film then
-  shows up in the desktop's review panel, and an episode does not reach the
-  desktop at all yet.
+- Through Simkl. An episode or film watched on the phone reaches Simkl
+  through the ordinary history push, and the desktop's next catch-up takes
+  it from there; with Simkl not connected nothing travels between the two.
 - Anime takes only each Simkl entry's own first-season numbering (its
   season 1, or none), filed under whichever season of the merged franchise
   that entry is here. An episode Simkl files under season 0, or 2 and
