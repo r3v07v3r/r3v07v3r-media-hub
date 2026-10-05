@@ -2043,6 +2043,15 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           if (status === 'watched') forgetContinueWatching(id)
           settle()
           clearPending()
+          // A plan from the pill gets the same toast and Undo as one from
+          // the card menu. Only a title that was not planned before: the
+          // Undo takes it off the plan, which is not where it started
+          // otherwise.
+          if (status === 'planned' && !wasPlanned && !episodes) {
+            pushNotification(
+              plannedToast(media, result.profileId, () => toggleMyList(media, false))
+            )
+          }
           // A whole show in one click is worth a word, and a way back: the
           // undo replays exactly the rows this change reported, dates and
           // all, and touches nothing else. An undo itself (episodes given)
@@ -2054,15 +2063,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // which no single press puts back, and when clearing it dropped
           // every dated viewing, which the next press would replace with
           // one stamped now.
-          // A plan from the pill gets the same toast and Undo as one from
-          // the card menu. Only a title that was not planned before: the
-          // Undo takes it off the plan, which is not where it started
-          // otherwise.
-          if (status === 'planned' && !wasPlanned && !episodes) {
-            pushNotification(
-              plannedToast(media, result.profileId, () => toggleMyList(media, false))
-            )
-          }
           const worthAToast =
             !episodes &&
             viewings > 0 &&
