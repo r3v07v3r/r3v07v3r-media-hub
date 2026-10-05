@@ -220,7 +220,8 @@ how many are still waiting.
 
 - **Bring an existing history in** from **Control centre → General → Your library**: IMDb's ratings
   export (needs nothing) and a Letterboxd "Export Your Data" zip (needs TMDB connected, to match
-  titles). A connected Trakt account imports from **Accounts**. Viewings keep the dates you watched
+  titles). A connected Trakt account imports from **Accounts**, and is imported once by itself the
+  first time its history is pulled if you have not pressed Import. Viewings keep the dates you watched
   them; imported ratings keep the score but not the date. All three only fill in what is missing.
 - **Back up your library** to a single file and restore it on another machine, from the same card.
   Service credentials stay on the machine that holds them.

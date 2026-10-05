@@ -436,8 +436,10 @@ with viewings recorded here, the unscoped Simkl removal is not sent.
 ## Trakt's history
 
 The "Import my Trakt library" button reads a whole Trakt account once:
-every viewing with its date, and every rating. It stays the way an
-account's past comes in, and it is safe to press again.
+every viewing with its date, and every rating. It is safe to press again.
+Somebody who connects Trakt and never presses it still gets their past:
+the pull below runs the same import once on its first pass (see "It
+starts with the account's past").
 
 After that, Trakt's history comes in by itself (`traktHistoryPull.ts`),
 in the half-hourly background sync and in every catch-up (desktop launch
@@ -460,10 +462,19 @@ account, durably, like Simkl's stamps.
   A rewatch on Trakt of something already watched here therefore adds no
   play here. A viewing un-marked here whose removal Trakt has not taken
   yet (on its way, or owed after a failure) is skipped the same way.
-- **It starts from the moment it first runs.** With nothing on record for
-  the profile and account, a pass records Trakt's stamps and the time and
-  reads nothing; the account's past is the import button's. An import that
-  finishes records where the pull carries on from.
+- **It starts with the account's past.** With nothing on record for the
+  profile and account (no import has been run for it, and no pull), the
+  first pass runs the import button's own code (`importTraktLibrary`,
+  history and ratings, with its backup) once, leaving out every viewing
+  already held here and every one whose removal Trakt has not taken, as
+  above. Then it records Trakt's stamps and the time, and later passes read
+  only what is new. If that import fails (the anime catalog still being
+  organised, a profile switch) nothing is recorded and the next pass runs
+  it again. An import pressed by hand records where the pull carries on
+  from, so the pull never reads the whole account after one. An import
+  made by a version that kept no such record is not known about, and the
+  first pass reads the account again; with held viewings left out, that
+  adds only what is missing.
 - A viewing given to Trakt with a date older than three days before the
   last pull (a backdated entry) is not seen by the pull; the import finds
   it.
