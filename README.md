@@ -427,7 +427,7 @@ variables are in [daemon/README.md](daemon/README.md).
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `npm run dev`              | Start Electron with the Vite development server and hot reload.                                                                 |
 | `npm start`                | Preview an already-built application.                                                                                           |
-| `npm test`                 | Run every registered test file (89 today, plain `tsx` scripts chained in `package.json`).                                       |
+| `npm test`                 | Run every registered test file (plain `tsx` scripts chained in `package.json`).                                                 |
 | `npm run lint`             | Check JavaScript and TypeScript with ESLint.                                                                                    |
 | `npm run typecheck`        | Type-check the Electron/Node and renderer projects. The daemon is a third project, checked separately.                          |
 | `npm run typecheck:daemon` | Type-check the r3-cache daemon (`daemon/`, `src/shared/`, `src/main/media-hub/`).                                               |
