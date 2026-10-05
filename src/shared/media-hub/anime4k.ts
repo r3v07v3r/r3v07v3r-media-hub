@@ -5,8 +5,9 @@
 // helps any content a little. Anime4K is a different kind of thing — a set of
 // small neural-network shaders trained on line art, which restore lines and
 // remove ringing before upscaling. It makes a visible difference on anime and
-// is wrong for everything else, which is why it is a separate switch and why
-// the player shows a live on/off toggle for it rather than a global default.
+// is wrong for everything else, which is why it is a separate switch, why a
+// title only starts with it on when it is anime (anime4kStartsActive), and why
+// the player shows a live on/off toggle for the cases that rule gets wrong.
 //
 // The shaders are NOT bundled with the app. They are fetched on demand from
 // the pinned upstream release (see main/media-hub/anime4kInstall.ts) when the
@@ -110,10 +111,22 @@ export interface Anime4kSettings {
   mode: Anime4kMode
 }
 
+/**
+ * Whether a title starts with the shaders on. Anime does and nothing else
+ * does: the networks are trained on line art, and on live action they smear
+ * skin and film grain. `override` is what the person last set the player's
+ * own toggle to for this title, and wins either way — it is how an animated
+ * series the catalogue files under Series gets them, and how an anime that
+ * looks wrong with them loses them.
+ */
+export function anime4kStartsActive(kind: string | undefined, override?: boolean): boolean {
+  return override ?? kind === 'anime'
+}
+
 /** What the player pushes to the overlay. `available` is installed AND
  *  enabled: the overlay shows the toggle only when there is something to
- *  toggle. `active` is the live switch, which survives title changes but
- *  not a restart. */
+ *  toggle. `active` is the live switch: where the title started
+ *  (anime4kStartsActive) until somebody presses it. */
 export interface Anime4kPlayerState {
   available: boolean
   active: boolean

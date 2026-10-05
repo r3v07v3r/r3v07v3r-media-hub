@@ -340,7 +340,9 @@ async function openPlayback(
     audioLanguage: settings.audioLanguage || 'en',
     subtitleLanguage: settings.subtitleLanguage || undefined,
     bufferSeconds: getPlaybackBufferSeconds(settings.playbackBuffer),
-    videoScaling: normalizeVideoScaling(settings.videoScaling)
+    videoScaling: normalizeVideoScaling(settings.videoScaling),
+    mediaId: cacheMeta?.catalogId,
+    mediaKind: cacheMeta?.mediaKind
   })
   activeMediaTracks = tracks
   // The ranking preferred a release that declared the wanted audio, and mpv

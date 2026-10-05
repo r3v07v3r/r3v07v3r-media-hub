@@ -55,6 +55,7 @@ import {
   scalerPropertiesFor,
   type VideoScalingPreset
 } from '../../shared/media-hub/videoScaling'
+import { anime4kStartsActive } from '../../shared/media-hub/anime4k'
 import { anime4kShaderPaths } from './anime4kInstall'
 import { anime4kSettings } from './preferences'
 import { handle } from './ipcGuard'
@@ -295,15 +296,24 @@ async function applyVideoScaling(preset: VideoScalingPreset): Promise<void> {
   queuePatch({ videoScaling: preset }, true)
 }
 
-// The live Anime4K switch. Like fitMode, it belongs with the long-lived mpv
-// process rather than the overlay: switched off during one episode, it stays
-// off for the next. It does NOT persist across restarts — the Settings toggle
-// is the standing preference, this is the in-the-moment one, and a session
-// always starts with the standing one.
-let anime4kActive: boolean | null = null
+// What the player's Anime4K switch was last set to by hand, per title. A title
+// starts from what it is (anime4kStartsActive: on for anime, off for anything
+// else) and the switch overrides that for the title it was pressed on — every
+// episode of it, since an episode change keeps the id — without deciding
+// anything for the next title. It used to be one flag for the whole process,
+// which is how a film came up with shaders meant for line art.
+//
+// Like fitMode, it belongs with the long-lived mpv process rather than the
+// overlay. It does NOT persist across restarts — the Settings toggle is the
+// standing preference, this is the in-the-moment one.
+const anime4kOverrides = new Map<string, boolean>()
+/** The title the switch speaks for. Empty when what is playing has no
+ *  catalogue id, and then a press is applied but not remembered. */
+let anime4kTitleId = ''
 
 /**
- * Puts the Anime4K chain in front of mpv's scaler, or takes it out.
+ * Puts the Anime4K chain in front of mpv's scaler, or takes it out. Answers
+ * whether there was anything to switch.
  *
  * `clr` then one `append` per file rather than a single `set` with a joined
  * list: `set` parses its value with the platform list separator (`;` on
@@ -314,7 +324,7 @@ let anime4kActive: boolean | null = null
  * the pack is absent or disabled, but a keypress can still arrive, and a
  * stale one is not worth an error toast.
  */
-async function applyAnime4k(active: boolean): Promise<void> {
+async function applyAnime4k(active: boolean): Promise<boolean> {
   const prefs = anime4kSettings(readSettings())
   const available = prefs.installed && prefs.enabled
   const on = available && active
@@ -324,8 +334,8 @@ async function applyAnime4k(active: boolean): Promise<void> {
       await player.command('change-list', 'glsl-shaders', 'append', shader)
     }
   }
-  anime4kActive = active
   queuePatch({ anime4k: { available, active: on, mode: prefs.mode } }, true)
+  return available
 }
 
 // ---------------------------------------------------------------------------
@@ -723,6 +733,11 @@ export interface StartPlayerSessionOptions {
    *  mpv keeps reading — see mpv.ts's BUFFERING note. Only applied when the
    *  process is started, since these are launch options. */
   bufferSeconds?: number
+  /** Which title this is and what kind, as the catalogue files it. Decides
+   *  whether the Anime4K chain starts on — see anime4kStartsActive. Absent
+   *  for playback with no catalogue identity, which starts with it off. */
+  mediaId?: string
+  mediaKind?: 'movie' | 'series' | 'anime'
 }
 
 /**
@@ -892,12 +907,19 @@ export async function startPlayerSession(
   // would still be showing the mode that was chosen before.
   await applyFitMode(fitMode).catch(() => {})
   await applyPictureSettings().catch(() => {})
-  // Same again for the shader chain, with one more reason: Settings may have
+  // Same again for the shader chain, with two more reasons. Settings may have
   // installed, enabled, or changed the mode since the last title, and this is
-  // where that becomes real. A session starts with the standing preference;
-  // the live switch (anime4kActive) only carries over once somebody has used
-  // it in this process.
-  await applyAnime4k(anime4kActive ?? true).catch(() => {})
+  // where that becomes real. And whether the chain is on at all is decided
+  // per title: mpv keeps `glsl-shaders` across `loadfile`, so the anime that
+  // just finished would otherwise hand its shaders to the film after it.
+  //
+  // The id changes hands here and not at the top of this function: until the
+  // load above has finished the outgoing title is the one on screen, and a
+  // press of the switch in that gap is about that title.
+  anime4kTitleId = options.mediaId ?? ''
+  await applyAnime4k(
+    anime4kStartsActive(options.mediaKind, anime4kOverrides.get(anime4kTitleId))
+  ).catch(() => {})
   // The overlay's Scaling menu shows what loadFile() just applied.
   queuePatch({ videoScaling: normalizeVideoScaling(options.videoScaling) }, true)
 
@@ -1175,9 +1197,16 @@ async function runCommand(command: PlayerCommand): Promise<PlayerCommandOutcome>
     case 'set-video-scaling':
       await applyVideoScaling(normalizeVideoScaling(command.preset))
       return
-    case 'set-anime4k':
-      await applyAnime4k(command.active === true)
+    case 'set-anime4k': {
+      const active = command.active === true
+      // Remembered only when there was something to switch: a stale keypress
+      // with the pack off must not decide how this title starts once the
+      // pack is turned on.
+      if ((await applyAnime4k(active)) && anime4kTitleId) {
+        anime4kOverrides.set(anime4kTitleId, active)
+      }
       return
+    }
     case 'set-picture-control': {
       if (!isVideoPictureControl(command.control)) throw new Error('Invalid picture control.')
       const value = Number(command.value)

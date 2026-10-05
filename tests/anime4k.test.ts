@@ -12,6 +12,7 @@ import {
   ANIME4K_REQUIRED_FILES,
   anime4kModeDescription,
   anime4kShaderChain,
+  anime4kStartsActive,
   normalizeAnime4kMode
 } from '../src/shared/media-hub/anime4k'
 import { extractAnime4kShaders } from '../src/main/media-hub/anime4kArchive'
@@ -96,6 +97,22 @@ assert.equal(normalizeAnime4kMode('a'), 'A')
 assert.equal(normalizeAnime4kMode(undefined), 'A')
 assert.equal(normalizeAnime4kMode('D'), 'A')
 assert.equal(normalizeAnime4kMode({ mode: 'B' }), 'A')
+
+// --- Where a title starts -----------------------------------------------
+
+// On for anime and for nothing else: a film that came up with the shaders on
+// because the last thing played was anime is the bug this rule replaced.
+assert.equal(anime4kStartsActive('anime'), true)
+assert.equal(anime4kStartsActive('movie'), false)
+assert.equal(anime4kStartsActive('series'), false)
+// No catalogue identity at all is not anime.
+assert.equal(anime4kStartsActive(undefined), false)
+
+// The player's own switch, once pressed for a title, wins in both directions.
+assert.equal(anime4kStartsActive('anime', false), false)
+assert.equal(anime4kStartsActive('series', true), true)
+assert.equal(anime4kStartsActive('movie', false), false)
+assert.equal(anime4kStartsActive('anime', true), true)
 
 // --- Extraction ---------------------------------------------------------
 

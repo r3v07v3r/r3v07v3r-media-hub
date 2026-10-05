@@ -161,8 +161,8 @@ Playback is mpv, embedded inside the app's own window on Windows; there is no tr
   or OpenSubtitles is connected. Both are searched together; SubDL rows come first because its
   downloads are unmetered, and OpenSubtitles can match by file hash for frame-accurate sync.
 - **Anime4K** (optional): install the shader pack once from **Control centre → General →
-  Performance & Display**, then toggle it live with the player's button or <kbd>a</kbd>, and pick a
-  mode. The same card holds **Video scaling** (Standard, High or Sharp), the **Playback buffer** preset,
+  Performance & Display** and pick a mode. Anime starts with it on and films and series with it
+  off; the player's button or <kbd>a</kbd> switches it for the title you are watching. The same card holds **Video scaling** (Standard, High or Sharp), the **Playback buffer** preset,
   and the switch for Home's live CPU, GPU, RAM and network gauges.
 - **Unsafe files are kept out.** A release whose name advertises an executable is never chosen or
   submitted to TorBox, and any file the app's web content tries to save to disk is refused if its

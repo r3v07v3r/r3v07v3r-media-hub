@@ -1349,7 +1349,7 @@ export default function SettingsPage({
                     <ToggleRow
                       icon="play"
                       title="Use Anime4K while watching"
-                      description="Puts the shaders in the playback pipeline for every title. The player's Anime4K button (or the A key) switches them off and on without leaving the film. Best on anime; leave it off for live action."
+                      description="Anime starts with the shaders on; films and series start with them off. The player's Anime4K button (or the A key) switches them for the title you are watching, and that choice is kept for the rest of that title."
                       checked={mediaHubSettings.anime4k.enabled}
                       onChange={handleSetAnime4kEnabled}
                     />
