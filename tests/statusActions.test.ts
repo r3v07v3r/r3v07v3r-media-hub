@@ -14,6 +14,11 @@
 // Those are read from the source: the components need the CSS-module
 // build to render, and what matters is which handler each event reaches.
 //
+// Disliked titles are hidden from browsing unless the person switched Hide
+// Disliked off (preferences.ts's hideDislikedDefault), a page can still
+// show them with its own toggle, and a disliked card is marked wherever it
+// is shown.
+//
 // Run with: npx tsx tests/statusActions.test.ts
 
 import assert from 'node:assert/strict'
@@ -26,6 +31,11 @@ import {
   QUICK_UNDO_MS
 } from '../src/renderer/src/lib/mediaHub/statusToasts'
 import { notificationTtlMs } from '../src/renderer/src/context/OverlayContext'
+import { hideDislikedDefault, logoutSettings } from '../src/main/media-hub/preferences'
+import {
+  applyWatchStateFilters,
+  filterStateFromSearchParams
+} from '../src/renderer/src/lib/mediaHub/categoryFilters'
 
 let pass = 0
 function check(name: string, fn: () => void): void {
@@ -130,6 +140,68 @@ check('the library side panel can take a title off the plan on its own', () => {
   const panel = functionSource(libraryPage, 'LibraryDetails')
   assert.match(panel, /myList\.has\(media\.id\) &&/)
   assert.match(panel, /toggleMyList\(media, false\)[\s\S]*Remove from plan/)
+})
+
+// --- Hide Disliked on by default --------------------------------------------
+
+check('Hide Disliked is on unless the person turned it off', () => {
+  assert.equal(hideDislikedDefault({}), true)
+  assert.equal(hideDislikedDefault({ hideDislikedDefault: true }), true)
+  assert.equal(hideDislikedDefault({ hideDislikedDefault: false }), false)
+  // Signing out keeps the choice, and keeps an unset one unset-and-on.
+  assert.equal(logoutSettings({}).hideDislikedDefault, true)
+  assert.equal(logoutSettings({ hideDislikedDefault: false }).hideDislikedDefault, false)
+})
+
+check('a browse page starts from the default and its own toggle can show disliked titles', () => {
+  const defaults = { hideWatched: false, hideCompleted: false, hideDisliked: true }
+  const fresh = filterStateFromSearchParams(new URLSearchParams(), defaults)
+  assert.equal(fresh.hideDisliked, true)
+  const shown = filterStateFromSearchParams(new URLSearchParams('hideDisliked=0'), defaults)
+  assert.equal(shown.hideDisliked, false)
+  const items = [
+    { id: 'a', disliked: true },
+    { id: 'b', disliked: false }
+  ]
+  assert.deepEqual(
+    applyWatchStateFilters(items as never[], fresh).map((item: { id: string }) => item.id),
+    ['b']
+  )
+  assert.equal(applyWatchStateFilters(items as never[], shown).length, 2)
+})
+
+check('every renderer reader of the setting falls back to on', () => {
+  const root = path.resolve(__dirname, '../src/renderer/src')
+  const offenders: string[] = []
+  const walk = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else if (/\.tsx?$/.test(entry.name)) {
+        if (/hideDislikedDefault \?\? false/.test(fs.readFileSync(full, 'utf8')))
+          offenders.push(full)
+      }
+    }
+  }
+  walk(root)
+  assert.deepEqual(offenders, [])
+})
+
+check('a disliked card is marked on MediaCard and on a library tile', () => {
+  const card = fs.readFileSync(
+    path.resolve(
+      __dirname,
+      '../src/renderer/src/components/home/RecommendationCarousel/MediaCard.tsx'
+    ),
+    'utf8'
+  )
+  assert.match(card, /const disliked = dislikedIds\.has\(media\.id\)/)
+  assert.match(card, /disliked \? styles\.cardDisliked/)
+  assert.match(card, /\{disliked && \([\s\S]*?Not interested/)
+  const tile = functionSource(libraryPage, 'LibraryTile')
+  assert.match(tile, /const disliked = dislikedIds\.has\(media\.id\)/)
+  assert.match(tile, /disliked \? styles\.tileDisliked/)
+  assert.match(tile, /\{disliked && \([\s\S]*?Not interested/)
 })
 
 console.log(`\n${pass} passed`)

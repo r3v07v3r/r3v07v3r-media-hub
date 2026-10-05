@@ -56,7 +56,8 @@ trending feed (either one alone fills the grid), anime from Kitsu. No key is req
   for anime, and status. Hide what you have started or watched, shows you are caught up on, and
   titles you marked **Not interested** (they collect under My Stuff → Not for me), in any
   combination, and choose which of those start switched on
-  from the Settings page's Browsing card. Save any filter combination as a named view; it comes back as
+  from the Settings page's Browsing card. Hiding Not interested titles starts on; a page's own
+  toggle shows them again, dimmed and marked. Save any filter combination as a named view; it comes back as
   a chip. **Scan deeper** on a category page pulls in more of the catalog than loaded by itself.
 - **Recommendations that say why.** Home shows the top row; **For You** shows the whole ranking,
   shelved by reason: a franchise continuation, a director or actor who recurs in what you have watched, a genre

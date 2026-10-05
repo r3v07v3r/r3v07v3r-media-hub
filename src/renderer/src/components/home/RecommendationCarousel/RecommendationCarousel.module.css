@@ -627,6 +627,26 @@
   flex: 0 1 auto;
 }
 
+/* A title marked Not interested, where it is still shown: the art dimmed
+   and a chip naming it, so it never reads as an ordinary suggestion. */
+.cardDisliked .cardArtImage {
+  filter: grayscale(0.85) brightness(0.6);
+}
+.dislikedChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.6);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
 /* The way out of a row that only shows the first twenty. Sits at the far
    end of the heading so it reads as part of the shelf's own label
    rather than another control competing with the cards. */

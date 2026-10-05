@@ -183,13 +183,19 @@ function LibraryTile({
   // From the overlay context rather than the app-wide one: it never
   // changes, so a grid of tiles is not re-rendered by it.
   const { openContextMenu } = useOverlayActions()
+  // Marked Not interested. Hide Disliked (on by default) keeps these out of
+  // the grid; with it switched off on the page they stay, dimmed and named,
+  // so a dislike is visible where it was made. From the live set, like
+  // MediaCard, so the mark lands with the click rather than the reload.
+  const { dislikedIds } = useAppState()
+  const disliked = dislikedIds.has(media.id)
 
   return (
     <li>
       <article
         className={`${styles.tile} ${selected ? styles.tileSelected : ''} ${
           state === 'watched' ? styles.tileWatched : state === 'planned' ? styles.tilePlanned : ''
-        }`}
+        } ${disliked ? styles.tileDisliked : ''}`}
         data-media-id={media.id}
         tabIndex={0}
         role="button"
@@ -210,7 +216,7 @@ function LibraryTile({
         }}
         aria-label={`${media.title}.${
           state === 'watched' ? ' Watched.' : state === 'planned' ? ' Planned to watch.' : ''
-        } Select for details; double click to open.`}
+        }${disliked ? ' Not interested.' : ''} Select for details; double click to open.`}
       >
         <ArtworkImage
           className={styles.tileArtwork}
@@ -266,6 +272,12 @@ function LibraryTile({
           <Icon name="more-horizontal" size={14} />
         </button>
         <div className={styles.tileCopy}>
+          {disliked && (
+            <em className={styles.tileDislikedNote} aria-hidden="true">
+              <Icon name="thumbs-down" size={10} />
+              Not interested
+            </em>
+          )}
           <span>{media.title}</span>
           <small>
             {mediaKindLabel(media)} · {media.releaseYear ?? 'New'} · {formatLibraryMeta(media)}
@@ -845,7 +857,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
     () => ({
       hideWatched: mediaHubSettings?.hideWatchedDefault ?? false,
       hideCompleted: mediaHubSettings?.hideCompletedDefault ?? false,
-      hideDisliked: mediaHubSettings?.hideDislikedDefault ?? false
+      hideDisliked: mediaHubSettings?.hideDislikedDefault ?? true
     }),
     [mediaHubSettings]
   )
