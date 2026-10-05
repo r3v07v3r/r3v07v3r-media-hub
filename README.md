@@ -152,8 +152,9 @@ Playback is mpv, embedded inside the app's own window on Windows; there is no tr
   on or off, <kbd>Esc</kbd> leave fullscreen, or close the player.
 - **Skip the intro and the credits.** Anime uses Aniskip's community-submitted times; movies and
   series read the release's own chapter marks, so a mislabeled chapter is never trusted.
-- **Keep watching a series.** When an episode ends, the next one is offered on a post-play card and
-  starts after a short countdown. If a stream stops well short of its runtime, a card says so and
+- **Keep watching a series.** When the credits start, an Up next card offers the next episode
+  beside Skip credits; when the episode ends, the same card starts it after a short countdown. If a
+  stream stops well short of its runtime, a card says so and
   offers Resume or Stop instead of marking the title watched. Turn it off with **Play the next episode** on the Settings page.
   Play on a series card starts the next episode you have not watched, not the first.
 - **Subtitles** come from the release's embedded tracks, or are searched automatically when SubDL

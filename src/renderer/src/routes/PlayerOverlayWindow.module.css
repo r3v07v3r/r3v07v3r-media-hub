@@ -427,9 +427,9 @@
   cursor: pointer;
 }
 
-/* Sits above the controls bar's own band (bottom: 140px is where .skipButton
-   clears it) so the two never overlap if a skip window is still open when the
-   file ends. */
+/* Sits above the controls bar's own band, in the corner .skipButton uses —
+   the two are never up together: during the credits the card takes Skip
+   credits in as one of its own buttons. */
 .postPlay {
   position: absolute;
   right: 32px;
