@@ -134,10 +134,10 @@ interface StoredRecommendations {
 }
 
 /**
- * The three id sets a stored ranking has to be re-checked against.
+ * The id sets a stored ranking has to be re-checked against.
  *
  * Passed in rather than read here, because every caller already has them
- * — home:personalized builds all three from rows it has just read, and
+ * — home:personalized builds the first three from rows it has just read, and
  * making this reach for them again would be a second pass over the whole
  * watch history for an answer already sitting in the caller's scope.
  */
@@ -145,36 +145,73 @@ export interface LiveExclusions {
   watchedIds: Set<string>
   trackedIds: Set<string>
   dislikedIds: Set<string>
+  /**
+   * Every later season of a merged anime, by the season's own id
+   * (animeSeasons.ts's laterSeasons). Absent while the catalog is not
+   * grouped, when no id can be told from one that stands alone.
+   *
+   * A later season is never a suggestion of its own. The franchise is one
+   * show here: its own row is the title that competes for a place, and a
+   * tile for "Season 3" only ever opened that show's page. Its viewings are
+   * kept under the show as well, so the three sets above never held it —
+   * which is how a season watched to the end kept being offered — and the
+   * index the candidates are drawn from keeps a row for every season.
+   */
+  laterSeasonIds?: { has(id: string): boolean }
 }
 
-/** Builds the exclusion sets from a history already in hand, plus the two small tables. */
-export function liveExclusions(history: HistoryEntry[]): LiveExclusions {
+/**
+ * Builds the exclusion sets from a history already in hand, plus the two
+ * small tables. `laterSeasonIds` is handed in as the history is — see
+ * LiveExclusions — so everything here but the rebuild stays clear of the
+ * catalog (see rebuildRecommendations on late imports).
+ */
+export function liveExclusions(
+  history: HistoryEntry[],
+  laterSeasonIds?: LiveExclusions['laterSeasonIds']
+): LiveExclusions {
   const db = getDatabase()
   return {
     watchedIds: new Set(history.map((entry) => String(entry.id))),
     trackedIds: new Set(db.tracked().map((item) => String(item.id))),
-    dislikedIds: new Set(db.disliked().map((item) => String(item.id)))
+    dislikedIds: new Set(db.disliked().map((item) => String(item.id))),
+    laterSeasonIds
   }
 }
 
-function keep(item: CatalogItem, exclusions: LiveExclusions): boolean {
+/** What rules a title out whatever else is true of it — a continuation included. */
+function ruledOut(id: string, exclusions: LiveExclusions): boolean {
+  return exclusions.dislikedIds.has(id) || exclusions.laterSeasonIds?.has(id) === true
+}
+
+/** Whether a title may be suggested at all: not seen, not saved, not hidden, and a title of its own. */
+export function recommendable(item: CatalogItem, exclusions: LiveExclusions): boolean {
   const id = String(item.id)
   return (
-    !exclusions.watchedIds.has(id) &&
-    !exclusions.trackedIds.has(id) &&
-    !exclusions.dislikedIds.has(id)
+    !exclusions.watchedIds.has(id) && !exclusions.trackedIds.has(id) && !ruledOut(id, exclusions)
   )
 }
 
 /**
- * keep(), for a stored entry.
+ * recommendable(), for a candidate that may be a continuation.
  *
  * A continuation — the next part of a series being watched in order — is
  * the one kind of entry allowed to be something already seen or already
  * planned: that is precisely what "rewatching the series" and "the sequel
- * is on my list" look like. What retires it instead is being watched AGAIN
- * after the list was built: they carried on, and the rebuild that watch
- * requested will name the part after. "Not interested" still wins.
+ * is on my list" look like. "Not interested" still wins, and so does being
+ * a later season: the next season of a merged show is inside the show, not
+ * a title after it.
+ */
+function keepCandidate(item: CatalogItem, continues: boolean, exclusions: LiveExclusions): boolean {
+  return continues ? !ruledOut(String(item.id), exclusions) : recommendable(item, exclusions)
+}
+
+/**
+ * keepCandidate(), for a stored entry.
+ *
+ * What retires a stored continuation is being watched AGAIN after the list
+ * was built: they carried on, and the rebuild that watch requested will
+ * name the part after.
  */
 function keepStored(
   entry: ScoredRecommendation,
@@ -182,10 +219,8 @@ function keepStored(
   latestWatch: ReadonlyMap<string, number>,
   builtAt: number
 ): boolean {
-  const id = String(entry.item.id)
-  if (exclusions.dislikedIds.has(id)) return false
-  if (entry.continuation) return (latestWatch.get(id) ?? 0) <= builtAt
-  return keep(entry.item, exclusions)
+  if (!keepCandidate(entry.item, Boolean(entry.continuation), exclusions)) return false
+  return !entry.continuation || (latestWatch.get(String(entry.item.id)) ?? 0) <= builtAt
 }
 
 // Somebody has to ask for a rebuild, and it must not be this module: the
@@ -345,7 +380,17 @@ export function readStoredRecommendations(
     requestRecommendationsRebuild()
     return null
   }
-  if (Date.now() - (stored.builtAt || 0) > REBUILD_AFTER_MS) requestRecommendationsRebuild()
+  // A later season in the stored list means it was ranked before the
+  // catalog was grouped, or by a build that still offered them. Dropping it
+  // above keeps the row right, but nothing takes its place until the list
+  // is ranked again — and on a real library a fifth of a stored list was
+  // later seasons, three quarters of its anime.
+  const holdsLaterSeason =
+    exclusions.laterSeasonIds !== undefined &&
+    stored.entries.some((entry) => exclusions.laterSeasonIds!.has(String(entry?.item?.id)))
+  if (holdsLaterSeason || Date.now() - (stored.builtAt || 0) > REBUILD_AFTER_MS) {
+    requestRecommendationsRebuild()
+  }
 
   // The one part of the ranking that cannot be precomputed: it depends on
   // what time it is at the moment somebody looks, not on when the list was
@@ -435,6 +480,7 @@ export async function rebuildRecommendations(
   // rebuild request — and a top-level import here would take all of it down
   // with the one function that genuinely needs a catalog.
   const { catalogData } = await import('./catalog')
+  const { laterSeasons } = await import('./animeSeasons')
   const { continuationsFor, defaultSources } = await import('./continuations')
   const [movies, series, anime] = await Promise.all(
     (['movie', 'series', 'anime'] as const).map((kind) =>
@@ -458,7 +504,9 @@ export async function rebuildRecommendations(
   // it for itself.
   const profile = db.activeProfile()
   const history = db.history()
-  const exclusions = liveExclusions(history)
+  // The index half of the pool holds a row for every season of a merged
+  // anime — see LiveExclusions.laterSeasonIds.
+  const exclusions = liveExclusions(history, laterSeasons())
   const preferredGenres = db.preferredGenres(4)
 
   // What this person keeps coming back to, learned from the credits of
@@ -480,7 +528,7 @@ export async function rebuildRecommendations(
   // What comes next after the last couple of weeks' viewing, from the
   // catalogue rather than from title shapes — see continuations.ts. These
   // are the only candidates allowed past the watched/planned exclusions
-  // (keepStored says why), and a next part the pool never held joins it.
+  // (keepCandidate says why), and a next part the pool never held joins it.
   const poolById = new Map(pool.map((item) => [String(item.id), item]))
   const continuations = await continuationsFor(
     history,
@@ -496,9 +544,7 @@ export async function rebuildRecommendations(
     }
   }
   const candidates = pool.filter((item) =>
-    continuations.has(String(item.id))
-      ? !exclusions.dislikedIds.has(String(item.id))
-      : keep(item, exclusions)
+    keepCandidate(item, continuations.has(String(item.id)), exclusions)
   )
   const credits = creditsFor(candidates.map((item) => String(item.id)))
 

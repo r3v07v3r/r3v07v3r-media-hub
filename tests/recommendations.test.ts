@@ -29,6 +29,7 @@ import {
   liveExclusions,
   onRebuildRequested,
   readStoredRecommendations,
+  recommendable,
   requestRecommendationsRebuild,
   storeRecommendations
 } from '../src/main/media-hub/recommendations'
@@ -133,6 +134,108 @@ check('drops what has been watched, saved or hidden since the list was built', (
   }
   assert.equal(served.items.length, SERVED_COUNT, 'the buffer should absorb the exclusions')
   assert.equal(ids[0], 'id-3', 'the next-best surviving title takes the top slot')
+})
+
+// A merged anime is one show. Its later seasons keep ids of their own, the
+// index the candidates come from keeps a row for each, and their viewings
+// are kept under the show — so none of the three sets above ever holds one.
+// A list built before the catalog was grouped can be full of them.
+
+check('a later season of a merged anime is never served, watched or not', () => {
+  const db = freshDatabase()
+  storeRecommendations(ranked(STORED_COUNT), ['Action'])
+  // id-0 and id-2 are later seasons; nothing has been watched, saved or
+  // hidden. The grouping is the only reason they go.
+  const laterSeasonIds = new Set(['id-0', 'id-2'])
+
+  const served = readStoredRecommendations(
+    liveExclusions(db.history(), laterSeasonIds),
+    db.history()
+  )
+
+  assert.ok(served)
+  const ids = served.items.map((x) => x.id)
+  assert.ok(!ids.includes('id-0') && !ids.includes('id-2'), 'a season is not a title of its own')
+  assert.equal(ids[0], 'id-1', 'the titles around them keep their order')
+  assert.equal(served.items.length, SERVED_COUNT)
+  for (const rail of served.rails) {
+    for (const x of rail.items) assert.ok(!laterSeasonIds.has(x.id), `${x.id} is on a shelf`)
+  }
+})
+
+check('a stored list that holds a later season asks to be ranked again', () => {
+  const db = freshDatabase()
+  storeRecommendations(ranked(STORED_COUNT), [])
+  const listener = countingListener()
+  try {
+    // Nothing takes a dropped season's place until the list is rebuilt, and
+    // a list ranked before the catalog was grouped can be mostly seasons.
+    readStoredRecommendations(liveExclusions(db.history(), new Set(['id-7'])), db.history())
+    assert.equal(listener.count(), 1, 'the read that dropped one should ask')
+    // A fresh list with none in it is left to age as it always was.
+    readStoredRecommendations(liveExclusions(db.history(), new Set(['elsewhere'])), db.history())
+    readStoredRecommendations(liveExclusions(db.history(), undefined), db.history())
+    assert.equal(listener.count(), 1, 'a list with no later season in it should not')
+  } finally {
+    listener.stop()
+  }
+})
+
+check('not even as what comes next', () => {
+  freshDatabase()
+  // A continuation is the one entry allowed to be something already seen or
+  // already planned. The next season of a merged show is neither a rewatch
+  // nor a sequel: it is inside the show.
+  const entries = ranked(STORED_COUNT)
+  entries[0].continuation = { from: 'Title id-9', watchedAt: null }
+  entries[1].continuation = { from: 'Title id-9', watchedAt: null }
+  storeRecommendations(entries, [])
+
+  const served = readStoredRecommendations(
+    {
+      // Watched and planned: what a continuation is let past.
+      watchedIds: new Set(['id-0', 'id-1']),
+      trackedIds: new Set(['id-0', 'id-1']),
+      dislikedIds: new Set(),
+      laterSeasonIds: new Set(['id-0'])
+    },
+    NO_HISTORY
+  )
+
+  assert.ok(served)
+  const ids = served.items.map((x) => x.id)
+  assert.ok(!ids.includes('id-0'), 'a later season is ruled out as a continuation too')
+  assert.ok(ids.includes('id-1'), 'a continuation that is a title of its own still gets past')
+})
+
+check(
+  'while the catalog is not grouped, no id can be told apart and the list is served as stored',
+  () => {
+    const db = freshDatabase()
+    storeRecommendations(ranked(STORED_COUNT), [])
+
+    const exclusions = liveExclusions(db.history(), undefined)
+    assert.equal(exclusions.laterSeasonIds, undefined)
+    const served = readStoredRecommendations(exclusions, db.history())
+
+    assert.ok(served)
+    assert.equal(served.items[0].id, 'id-0')
+  }
+)
+
+check('a candidate is ruled out the same way before it is ever ranked', () => {
+  const exclusions = {
+    watchedIds: new Set(['seen']),
+    trackedIds: new Set(['saved']),
+    dislikedIds: new Set(['hidden']),
+    // What animeSeasons.ts hands over is a map, by the season's own id.
+    laterSeasonIds: new Map([['season-2', { id: 'show', season: 2 }]])
+  }
+  for (const id of ['seen', 'saved', 'hidden', 'season-2']) {
+    assert.equal(recommendable(item(id), exclusions), false, id)
+  }
+  assert.equal(recommendable(item('show'), exclusions), true, 'the show stands for its seasons')
+  assert.equal(recommendable(item('season-2'), { ...exclusions, laterSeasonIds: undefined }), true)
 })
 
 check('reports a miss when too little of the stored list survives', () => {
