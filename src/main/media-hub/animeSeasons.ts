@@ -143,6 +143,23 @@ export async function kitsuTvdbMapping(
   }
 }
 
+/**
+ * The TheTVDB series an anime is mapped to, as far as kitsuTvdbMapping has
+ * already found out: '' when Kitsu has no mapping for it, null when the
+ * lookup has never answered. No request.
+ *
+ * An expired answer counts. The mapping "essentially never changes", and
+ * the question asked of it (animeRegroup.ts: is this show numbered by TMDB
+ * or by its members?) is better served by last month's answer than by none.
+ */
+export function cachedTvdbSeries(catalogId: string): string | null {
+  const cached = getDatabase().getCache<TvdbMapping>(
+    `kitsu:tvdb:${String(catalogId).replace(/^kitsu:/, '')}`,
+    { allowExpired: true }
+  )
+  return cached ? String(cached.seriesId || '') : null
+}
+
 /** Cached (30d) TheTVDB-series-id -> TMDB-tv-id bridge via TMDB's own
  *  /find endpoint. Returns null when TMDB has no matching tv entry, or no
  *  API key is configured — callers fall back to Kitsu's own per-id data
@@ -589,6 +606,11 @@ let animeGroupIndex: Map<string, string[]> | null = null
 /** See animeGroupIndex's own doc — built together in one pass since both read the same cached catalog blob. */
 let animeGroupPositionIndex: Map<string, { id: string; season: number }> | null = null
 
+/** How many titles the catalog the two indexes were built from held. Zero
+ *  is "no catalog", which is not the same answer as "a catalog with no
+ *  merged shows" — see currentAnimeGroups. */
+let animeGroupIndexSize = 0
+
 /**
  * Marks that the anime catalog currently in cache has been through the
  * franchise-grouping pass.
@@ -675,11 +697,51 @@ function buildAnimeGroupIndexes(): void {
   const { siblings, positions } = animeGroupIndexesOf(items)
   animeGroupIndex = siblings
   animeGroupPositionIndex = positions
+  animeGroupIndexSize = items.length
 }
 
 export function groupedIdsFor(catalogId: string): string[] | undefined {
   if (!animeGroupIndex) buildAnimeGroupIndexes()
   return animeGroupIndex!.get(String(catalogId))
+}
+
+/**
+ * Every merged show in the cached catalog, with its siblings — or null when
+ * there is no catalog to read them from (its cache row aged out, or was
+ * never written). Read from the index, so asking again costs nothing until
+ * the index is next invalidated.
+ *
+ * Null rather than an empty list because the caller compares this against
+ * the grouping watch history is filed under (animeRegroup.ts). "No shows
+ * are merged" would be read as every show having come apart, and their
+ * seasons moved back out under their own ids.
+ */
+export function currentAnimeGroups(): { id: string; groupedIds: string[] }[] | null {
+  if (!animeGroupIndex) buildAnimeGroupIndexes()
+  if (!animeGroupIndexSize) return null
+  return [...animeGroupIndex!].map(([id, groupedIds]) => ({ id, groupedIds }))
+}
+
+/**
+ * Whether a season list built with `builtWith` as the title's siblings is
+ * out of date: the catalog now gives it other siblings, another order, or
+ * none.
+ *
+ * "None" only counts once the catalog is grouped. A raw one has no siblings
+ * for anybody (see animeGroupingReady), and re-resolving every merged show
+ * as a single season for those minutes is the opposite of the point.
+ */
+export function animeGroupingMovedOn(
+  catalogId: string,
+  builtWith: readonly string[] | undefined
+): boolean {
+  const siblings = groupedIdsFor(catalogId)
+  if (!siblings?.length) {
+    return Boolean(builtWith?.length) && animeGroupIndexSize > 0 && animeGroupingReady()
+  }
+  return (
+    siblings.length !== builtWith?.length || siblings.some((id, index) => id !== builtWith[index])
+  )
 }
 
 /**

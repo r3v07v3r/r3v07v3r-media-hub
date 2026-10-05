@@ -65,6 +65,7 @@ import { mergeSearchResults } from '../../shared/media-hub/titleSearch'
 import { coalesce, coalesceScope, PRIORITY_RANK, type TaskPriority } from './taskScheduler'
 import {
   ANIME_GROUPED_KEY,
+  animeGroupingMovedOn,
   buildGroupedAnimeVideos,
   groupAnimeCatalog,
   groupedIdsFor,
@@ -74,6 +75,7 @@ import {
   laterSeasonLookup,
   laterSeasonOf
 } from './animeSeasons'
+import { keepAnimeHistoryWithShows } from './animeSyncRepair'
 import { omdbRottenTomatoesRating } from './omdb'
 import { withUpcomingEpisodes } from './episodeAiring'
 import { searchCredits, titleCredits, titlesFeaturing } from './credits'
@@ -277,6 +279,11 @@ function runAnimeGrouping(items: CatalogItem[], generation: number): void {
       // it worked out, so the index has to drop the pre-grouping answer
       // it may have already handed out.
       invalidateAnimeGroupIndex()
+      // A show fronted by another id, or with its seasons in another order,
+      // than the last pass gave it: the history written under the old
+      // answer moves now, in this same tick, before anything is read or
+      // written under the new one. See animeRegroup.ts.
+      keepAnimeHistoryWithShows()
     })
     .catch((error) => logError('catalog:anime-grouping', error))
     .finally(() => {
@@ -583,6 +590,13 @@ async function catalogListing(
       throw primaryError
     }
 
+    // The catalog about to be replaced may be a grouped one, and the write
+    // below is the end of it. Watch history is filed by that grouping, so
+    // it is noted first if it has not been: on the first launch after the
+    // ledger arrived this is the only copy there will ever be of the
+    // grouping the rows were written under. Normally a comparison that
+    // finds nothing new.
+    if (kind === 'anime') keepAnimeHistoryWithShows()
     db.putCache(key, items, CATALOG_TTL_MS)
     // ...and into the accumulating index, which is what this blob is on its
     // way to being replaced by (see migration 2). Written alongside rather
@@ -772,8 +786,15 @@ async function resolveMetadata(
   // would mean scanning the cache table, and this costs one Map lookup on
   // a path that is already reading from the database. Only titles that
   // actually gained siblings re-resolve, and only once.
+  //
+  // The same goes for a show whose siblings CHANGED: a member added, or
+  // the same members in another order. Where a show is numbered by its
+  // members, its watch history is moved to the new order the moment the
+  // pass lands (animeRegroup.ts), and a season list still in the old order
+  // would show those marks on the wrong seasons for the rest of this
+  // entry's day.
   const groupingIsNewer =
-    type === 'anime' && !cached?.groupedIds?.length && Boolean(groupedIdsFor(resolvedId)?.length)
+    type === 'anime' && Boolean(cached) && animeGroupingMovedOn(resolvedId, cached?.groupedIds)
   if (cached && !groupingIsNewer) {
     // withUpcomingEpisodes re-runs here for the same reason disambiguateVideos
     // does, plus one of its own: an anime's airing schedule is cached for
@@ -837,6 +858,11 @@ async function resolveMetadata(
       const indexed = db.indexByIds([String(resolvedId)]).items.find((x) => x.type === type)
       if (!indexed) throw primaryError
       item = { ...indexed, videos: [] }
+      // The row's grouped_ids is what the title fronted when the index was
+      // seeded and is never cleared: a title that reaches this branch is in
+      // no current catalog, so those are not its siblings now. What it
+      // fronts today, if anything, is added below.
+      delete item.groupedIds
     } else {
       item = { ...source, videos: [] }
     }
