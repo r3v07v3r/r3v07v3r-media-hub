@@ -97,7 +97,7 @@ import {
   unplanBecauseWatched,
   type PlannedSyncReport
 } from './watchlists'
-import { fetchJson } from './httpClient'
+import { fetchJson, retryOnceOn429 } from './httpClient'
 import { mapWithLimit, type TaskPriority } from './taskScheduler'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
@@ -223,7 +223,10 @@ async function syncSimklHistory(
   // with what can be said about it to this particular service.
   if (!hasSimklContent(body)) return { simklSynced: false }
   try {
-    await simklRequest(pathname, { method: 'POST', body: JSON.stringify(body) }, priority)
+    // One delayed retry on a 429 — see retryOnceOn429.
+    await retryOnceOn429(() =>
+      simklRequest(pathname, { method: 'POST', body: JSON.stringify(body) }, priority)
+    )
     return { simklSynced: true }
   } catch (error) {
     logError(`simkl:${pathname}`, error)

@@ -95,6 +95,12 @@ const LANES: Record<string, LaneConfig> = {
   anilist: { concurrency: 1, minGapMs: 2_500 },
   tmdb: { concurrency: 4, minGapMs: 60 },
   mal: { concurrency: 2, minGapMs: 300 },
+  // Trakt allows an account one write a second, and answers a faster one
+  // with 429. History pushes, scrobbles and ratings all come here in bursts
+  // (a season marked is several titles' chains at once), so the lane is
+  // serial and a second apart. Reads share it: an import walks its pages a
+  // second apart, which is the price of one budget per upstream.
+  trakt: { concurrency: 1, minGapMs: 1_000 },
   omdb: { concurrency: 2, minGapMs: 200 },
   torbox: { concurrency: 4, minGapMs: 50 },
   // A media server on the local network is not a metered public API: it is
@@ -124,6 +130,7 @@ const LANE_HOSTS: [string, string][] = [
   ['themoviedb.org', 'tmdb'],
   ['tmdb.org', 'tmdb'],
   ['myanimelist.net', 'mal'],
+  ['trakt.tv', 'trakt'],
   ['omdbapi.com', 'omdb'],
   ['torbox.app', 'torbox']
 ]

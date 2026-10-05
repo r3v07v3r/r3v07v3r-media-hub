@@ -32,6 +32,9 @@ import { laneForUrl, schedule, type TaskPriority } from './taskScheduler'
 
 export interface HttpError extends Error {
   status?: number
+  /** On a 429, how long the service asked to be left alone, from its
+   *  Retry-After header. Absent when it did not say. */
+  retryAfterMs?: number
 }
 
 interface JsonErrorBody {
@@ -170,6 +173,10 @@ async function request<T>(
         body.detail || body.error || `Request failed (${response.status})`
       ) as HttpError
       error.status = response.status
+      if (response.status === 429) {
+        const wait = retryAfterMs(response.headers.get('retry-after'), Date.now())
+        if (wait != null) error.retryAfterMs = wait
+      }
       throw error
     }
 
@@ -209,5 +216,53 @@ async function readJsonBody(
   } catch (error) {
     if (strict && text.trim()) throw error
     return {}
+  }
+}
+
+/**
+ * A Retry-After header as milliseconds from `nowMs`: either a number of
+ * seconds or an HTTP date. Undefined for anything else, including no header.
+ */
+export function retryAfterMs(header: string | null | undefined, nowMs: number): number | undefined {
+  const value = String(header ?? '').trim()
+  if (!value) return undefined
+  if (/^\d+(\.\d+)?$/.test(value)) return Math.round(Number(value) * 1000)
+  const at = Date.parse(value)
+  return Number.isFinite(at) ? Math.max(0, at - nowMs) : undefined
+}
+
+/** The longest a push waits on a 429 before trying once more. A service
+ *  that asks for longer is not waited on here: the push fails as it always
+ *  did, and whatever retries failed pushes takes it from there. */
+export const MAX_RETRY_AFTER_MS = 60_000
+
+/** How long a 429 with no Retry-After is waited out. */
+const DEFAULT_RETRY_AFTER_MS = 1_000
+
+/**
+ * Sends a push, and if the service answers 429, waits the time it asked for
+ * and sends it once more.
+ *
+ * Simkl and Trakt both limit how fast an account may write, and the bursts
+ * this app makes (a season marked, a review batch flushed alongside a mark)
+ * can trip that limit with a request that is otherwise fine. Treated as an
+ * ordinary failure, that push was lost. One delayed retry is what the
+ * header is asking for; a second 429 is a real failure and is thrown. The
+ * wait happens outside the scheduler's lane, so nothing else queues behind
+ * it.
+ */
+export async function retryOnceOn429<T>(
+  send: () => Promise<T>,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((done) => setTimeout(done, ms))
+): Promise<T> {
+  try {
+    return await send()
+  } catch (error) {
+    const failure = error as HttpError
+    if (failure?.status !== 429) throw error
+    const wait = failure.retryAfterMs ?? DEFAULT_RETRY_AFTER_MS
+    if (wait > MAX_RETRY_AFTER_MS) throw error
+    await sleep(wait)
+    return send()
   }
 }

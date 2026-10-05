@@ -260,6 +260,15 @@ The record of what was read is kept per profile and per Simkl account, and
 is shared with the phone and TV app's catch-up (below), so the two of them
 read Simkl's lists once per change between them rather than once each.
 
+**Rate limits on writes.** Trakt allows an account one write a second, so
+every Trakt request goes through a lane of its own in the request scheduler
+(`taskScheduler.ts`), one at a time and a second apart. When Trakt answers
+any write (history, a scrobble, a rating, a plan change) with 429, or Simkl
+answers a history push with one, the request waits the time the service's
+`Retry-After` header asks for (a second when it gives none) and is sent once
+more; a second 429, or a wait longer than a minute, is an ordinary failure
+(`retryOnceOn429` in `httpClient.ts`).
+
 ## What this deliberately does not do
 
 - **No merging of what a "list" means.** Trakt's watchlist, Simkl's

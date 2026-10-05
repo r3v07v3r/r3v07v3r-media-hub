@@ -24,7 +24,7 @@ import type {
   TraktStatusResult
 } from '../../shared/media-hub/types'
 import { animeGroupingReady, resolveAnimeGroupTarget } from './animeSeasons'
-import { fetchJson } from './httpClient'
+import { fetchJson, retryOnceOn429 } from './httpClient'
 import { kitsuIdForExternal } from './idBridge'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
@@ -237,11 +237,17 @@ export async function traktRequest<T = unknown>(
   await refreshIfDue()
   const { clientId, accessToken } = traktCredentials()
   if (!clientId || !accessToken) throw new Error('Trakt is not connected.')
-  return fetchJson<T>(
-    `${API}${pathname}`,
-    { ...options, headers: { ...headers(clientId, accessToken), ...options.headers } },
-    { priority, label: 'Trakt' }
-  )
+  const send = (): Promise<T> =>
+    fetchJson<T>(
+      `${API}${pathname}`,
+      { ...options, headers: { ...headers(clientId, accessToken), ...options.headers } },
+      { priority, label: 'Trakt' }
+    )
+  // A write is a push: Trakt allows one a second, and a burst that trips
+  // that gets one delayed retry rather than being lost (see retryOnceOn429).
+  // Reads are not retried here; a pull that fails is asked again next pass.
+  const writes = Boolean(options.method && options.method.toUpperCase() !== 'GET')
+  return writes ? retryOnceOn429(send) : send()
 }
 
 /** Who is signed in, for the Settings card. */
