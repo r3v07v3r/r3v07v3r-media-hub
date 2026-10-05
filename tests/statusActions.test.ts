@@ -182,10 +182,30 @@ check('both toggles in AppStateContext check the Undo target before acting', () 
   // Every Undo that runs the plan toggle says so, so it raises no toast.
   assert.match(context, /plannedToast\([^;]*toggleMyListRef\.current\(media, false, true\)/)
   assert.match(context, /unplannedToast\([^;]*toggleMyListRef\.current\(media, true, true\)/)
+  // That Undo (fromUndo, back onto the plan) restores the removed row
+  // rather than toggling a fresh one in; every other press is the toggle.
+  assert.match(
+    context,
+    /fromUndo && to === true \? tracking\?\.restorePlan\(payload\) : tracking\?\.toggle\(payload\)/
+  )
   assert.match(
     context,
     /plannedToast\(media, result\.profileId, \(\) => toggleMyList\(media, false, true\)\)/
   )
+})
+
+check('the restore behind that Undo reaches the services as an add', () => {
+  // The removal was pushed by the toggle; the Undo must be pushed as an add,
+  // as planning the title again would be.
+  const tracking = fs.readFileSync(
+    path.resolve(__dirname, '../src/main/media-hub/tracking.ts'),
+    'utf8'
+  )
+  const start = tracking.indexOf('MEDIA_HUB_CHANNELS.trackingRestorePlan,')
+  assert.ok(start > 0, 'the restore handler is registered')
+  const body = tracking.slice(start, tracking.indexOf('MEDIA_HUB_CHANNELS.', start + 40))
+  assert.match(body, /pushLocalPlanChange\([\s\S]*,\s*true\s*\)/)
+  assert.doesNotMatch(body, /pushLocalPlanChange\([\s\S]*,\s*false\s*\)/)
 })
 
 check(

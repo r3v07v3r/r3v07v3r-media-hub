@@ -630,6 +630,11 @@ export function createApi(transport: ApiTransport) {
           transport.invoke(MEDIA_HUB_CHANNELS.trackingTitleState, { id }),
         toggle: (item: TrackableItem): Promise<{ tracked: boolean }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.trackingToggle, item),
+        /** Undo of a Remove from plan made through toggle: the removed row
+         *  comes back as it was, or the title is planned afresh when that
+         *  row is no longer held. Pushed to the services as an add. */
+        restorePlan: (item: TrackableItem): Promise<{ tracked: boolean }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.trackingRestorePlan, item),
         markWatched: (payload: MarkWatchedPayload): Promise<MarkWatchedResult> =>
           transport.invoke(MEDIA_HUB_CHANNELS.trackingMarkWatched, payload),
         unmarkWatched: (payload: MarkWatchedPayload): Promise<MarkWatchedResult> =>

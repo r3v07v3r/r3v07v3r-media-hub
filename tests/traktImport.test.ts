@@ -188,6 +188,8 @@ interface PullHarness {
   fileError: Error | null
   /** What the import button's path (faked) finds at Trakt, already filed. */
   importRows: ImportedPlay[]
+  /** The ratings the faked import finds at Trakt. */
+  importRatings: { id: string; score: number }[]
   importError: Error | null
   /** The held set the pull handed the import, as the import read it. */
   importHeld: ReadonlySet<string> | null
@@ -207,6 +209,7 @@ function pullHarness(): PullHarness {
     during: null,
     fileError: null,
     importRows: [],
+    importRatings: [],
     importError: null,
     importHeld: null,
     state: () =>
@@ -237,7 +240,10 @@ function pullHarness(): PullHarness {
       h.calls.push('import')
       if (h.importError) throw h.importError
       h.importHeld = held()
-      return { plays: pullDb.importWatched(playsNotHeld(h.importRows, h.importHeld)) }
+      return {
+        plays: pullDb.importWatched(playsNotHeld(h.importRows, h.importHeld)),
+        ratings: pullDb.importRatings(h.importRatings)
+      }
     },
     // The import's filing, faked: an anime series moves under its show.
     file: async (rows: ImportedPlay[]) => {
@@ -250,8 +256,8 @@ function pullHarness(): PullHarness {
     backup: () => {
       h.calls.push('backup')
     },
-    announce: () => {
-      h.calls.push('announce')
+    announce: (scopes) => {
+      h.calls.push(`announce ${scopes.join(' ')}`)
     },
     now: () => h.clock,
     log: () => {}
@@ -287,7 +293,7 @@ async function pulls(): Promise<void> {
       }
     ] as ImportedPlay[]
     const report = await pullTraktHistory(h.deps)
-    assert.deepEqual(h.calls, ['last_activities', 'import', 'announce'])
+    assert.deepEqual(h.calls, ['last_activities', 'import', 'announce history'])
     assert.deepEqual(report, { plays: 1, read: true })
     assert.ok(h.importHeld?.has('tt1160419:movie:movie'), 'the film watched here is held')
     assert.ok(h.importHeld?.has('tt0000077:1:1'), 'the removal still owed is held')
@@ -340,7 +346,7 @@ async function pulls(): Promise<void> {
       `history since ${since}`,
       'file',
       'backup',
-      'announce'
+      'announce history'
     ])
     assert.equal(pulled.plays, 2, 'the echo of the episode played here is not a second play')
     const keys = h.db
@@ -380,6 +386,25 @@ async function pulls(): Promise<void> {
       h.db.history().map((row) => `${row.id}:${row.season}:${row.episode}`),
       ['tt11280740:1:2']
     )
+  }
+
+  {
+    // The first pass brings in ratings and no new viewings (every one is
+    // already held here): the screens are still told, about the ratings.
+    const h = pullHarness()
+    h.db.markWatched({ id: 'tt1160419', type: 'movie', title: 'Dune' })
+    h.importRows = [
+      { id: 'tt1160419', type: 'movie', title: 'Dune', watchedAt: '2019-04-02T21:15:00.000Z' }
+    ] as ImportedPlay[]
+    h.importRatings = [{ id: 'tt1160419', score: 8 }]
+    const report = await pullTraktHistory(h.deps)
+    assert.deepEqual(report, { plays: 0, read: true })
+    assert.deepEqual(h.calls, ['last_activities', 'import', 'announce ratings'])
+
+    // Nothing at all written: nothing announced.
+    const quiet = pullHarness()
+    await pullTraktHistory(quiet.deps)
+    assert.deepEqual(quiet.calls, ['last_activities', 'import'])
   }
 
   {
@@ -425,6 +450,8 @@ async function pulls(): Promise<void> {
       'utf8'
     )
     assert.match(client, /fullImport: \(held\) => importTraktLibrary\(\{ skipHeld: held \}\)/)
+    // What moved is what the screens are told: ratings as well as history.
+    assert.match(client, /notifyLibraryChanged\('trakt-pull', \.\.\.scopes\)/)
     const body = client.slice(client.indexOf('export async function importTraktLibrary('))
     const filter = body.indexOf('playsNotHeld(filedPlays, options.skipHeld())')
     assert.ok(filter > 0, 'the import filters held viewings when asked')

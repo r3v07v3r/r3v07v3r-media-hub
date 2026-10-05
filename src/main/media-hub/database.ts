@@ -99,6 +99,19 @@ export interface AnimeRowsMoved {
 }
 
 /** Normalizes an arbitrary catalog-ish item into the shape we persist for tracked/watched rows. */
+/** One tracked row as stored, every column but the profile. What an Undo
+ *  of Remove from plan writes back (tracking.ts's restore-plan handler). */
+export interface TrackedRow {
+  id: string
+  type: string
+  title: string
+  poster: string | null
+  metadataJson: string
+  trackedAt: string
+  baselineSeason: number
+  baselineEpisode: number
+}
+
 function normalizeTitle(item: TrackInput): TrackedItem {
   return {
     id: String(item.id),
@@ -660,6 +673,13 @@ export interface MediaHubDatabase {
   importBackup(filePath: string): RestoreSummary
   track(item: Partial<CatalogItem> & { id: unknown }, now?: Date): TrackedItem
   untrack(id: string | number): boolean
+  /** The active profile's tracked row for `id` as stored, every column,
+   *  or null. Read just before an untrack so the row can be put back. */
+  trackedRow(id: string | number): TrackedRow | null
+  /** Writes `row` back exactly as trackedRow read it, its tracked_at,
+   *  baseline and metadata included, into the active profile. Does nothing
+   *  when the title is tracked again already; whether it wrote. */
+  restoreTracked(row: TrackedRow): boolean
   isTracked(id: string | number): boolean
   tracked(): TrackedItem[]
   markWatched(
@@ -1080,6 +1100,8 @@ interface PreparedQueries {
   restampWatched: StatementSync
   playCounts: StatementSync
   untrack: StatementSync
+  trackedRow: StatementSync
+  restoreTracked: StatementSync
   isTracked: StatementSync
   tracked: StatementSync
   trackedRows: StatementSync
@@ -1226,6 +1248,14 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
        ON CONFLICT(profile_id,content_id) DO UPDATE SET type=excluded.type,title=excluded.title,poster=excluded.poster,metadata_json=excluded.metadata_json`
     ),
     untrack: sql.prepare('DELETE FROM tracked WHERE profile_id=? AND content_id=?'),
+    trackedRow: sql.prepare(
+      'SELECT content_id,type,title,poster,metadata_json,tracked_at,baseline_season,baseline_episode FROM tracked WHERE profile_id=? AND content_id=?'
+    ),
+    restoreTracked: sql.prepare(
+      `INSERT INTO tracked(profile_id,content_id,type,title,poster,metadata_json,tracked_at,baseline_season,baseline_episode)
+       VALUES(@profile,@id,@type,@title,@poster,@json,@trackedAt,@baselineSeason,@baselineEpisode)
+       ON CONFLICT(profile_id,content_id) DO NOTHING`
+    ),
     isTracked: sql.prepare('SELECT 1 FROM tracked WHERE profile_id=? AND content_id=?'),
     tracked: sql.prepare(
       'SELECT metadata_json FROM tracked WHERE profile_id=? ORDER BY tracked_at DESC'
@@ -2186,6 +2216,46 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     untrack(id) {
       try {
         return durable(() => q.untrack.run(currentProfileId, String(id)).changes > 0)
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
+    trackedRow(id) {
+      try {
+        const row = q.trackedRow.get(currentProfileId, String(id)) as Row | undefined
+        if (!row) return null
+        return {
+          id: String(row.content_id),
+          type: String(row.type),
+          title: String(row.title),
+          poster: row.poster == null ? null : String(row.poster),
+          metadataJson: String(row.metadata_json),
+          trackedAt: String(row.tracked_at),
+          baselineSeason: Number(row.baseline_season) || 0,
+          baselineEpisode: Number(row.baseline_episode) || 0
+        }
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
+    restoreTracked(row) {
+      try {
+        return durable(
+          () =>
+            q.restoreTracked.run({
+              profile: currentProfileId,
+              id: row.id,
+              type: row.type,
+              title: row.title,
+              poster: row.poster,
+              json: row.metadataJson,
+              trackedAt: row.trackedAt,
+              baselineSeason: row.baselineSeason,
+              baselineEpisode: row.baselineEpisode
+            }).changes > 0
+        )
       } catch (error) {
         return fail(error as Error)
       }

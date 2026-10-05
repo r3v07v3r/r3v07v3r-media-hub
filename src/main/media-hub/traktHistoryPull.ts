@@ -37,7 +37,7 @@
 // The dependencies are injected, as in simklCatchUp.ts and watchSync.ts,
 // so the test drives a real temporary database with Trakt faked.
 
-import type { ImportedPlay } from '../../shared/media-hub/types'
+import type { ImportedPlay, LibraryChangeScope } from '../../shared/media-hub/types'
 import type { MediaHubDatabase } from './database'
 import { parseTraktActivities, parseTraktHistory, type TraktWatchedStamps } from './trakt'
 
@@ -131,8 +131,10 @@ export interface TraktPullDeps {
   /** The import button's whole-account read and write (traktClient.ts's
    *  importTraktLibrary, its backup included), skipping the viewings `held`
    *  answers with when it is about to write. For a first pass with nothing
-   *  on record. How many viewings it wrote. */
-  fullImport(held: () => ReadonlySet<string>): Promise<{ plays: number }>
+   *  on record. How many viewings and how many ratings it wrote: the import
+   *  brings in the account's ratings too, and a pass that wrote only
+   *  ratings must still tell the screens. */
+  fullImport(held: () => ReadonlySet<string>): Promise<{ plays: number; ratings: number }>
   /** The viewings this pull wrote, for the record of what each pass merged
    *  (episodeSync.ts's noteArrivals). Optional so a test that is not about
    *  it can leave it out. */
@@ -141,8 +143,10 @@ export interface TraktPullDeps {
   file(rows: ImportedPlay[]): Promise<ImportedPlay[]>
   /** The backup before history rows are written (autoBackup.ts). */
   backup(): void
-  /** Tell every open surface and the ranking that history moved. */
-  announce(): void
+  /** Tell every open surface and the ranking what moved: 'history' for
+   *  viewings, 'ratings' for scores (only the first pass's import writes
+   *  those). */
+  announce(scopes: LibraryChangeScope[]): void
   now(): number
   log(scope: string, error: unknown): void
 }
@@ -191,7 +195,10 @@ export async function pullTraktHistory(deps: TraktPullDeps): Promise<TraktPullRe
       const imported = await deps.fullImport(held)
       if (moved()) return { plays: 0, read: true }
       writeState(db, profile, { account, stamps, since: new Date(startedAt).toISOString() })
-      if (imported.plays) deps.announce()
+      const scopes: LibraryChangeScope[] = []
+      if (imported.plays > 0) scopes.push('history')
+      if (imported.ratings > 0) scopes.push('ratings')
+      if (scopes.length) deps.announce(scopes)
       return { plays: imported.plays, read: true }
     }
     if (sameStamps(state.stamps, stamps)) return { plays: 0, read: false }
@@ -214,7 +221,7 @@ export async function pullTraktHistory(deps: TraktPullDeps): Promise<TraktPullRe
     // From when this pull asked, so a viewing that lands during it is read
     // again next time rather than missed.
     writeState(db, profile, { account, stamps, since: new Date(startedAt).toISOString() })
-    if (plays) deps.announce()
+    if (plays) deps.announce(['history'])
     return { plays, read: true }
   } catch (error) {
     deps.log('trakt:pull', error)

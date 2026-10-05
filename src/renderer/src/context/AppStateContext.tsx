@@ -1005,9 +1005,16 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // here, same as the sibling mutations, ensures any such stale fetch
       // gets cancelled and a fresh one (reflecting this toggle's already-
       // completed, synchronous db write) supersedes it.
-      window.api?.mediaHub?.tracking
-        .toggle(mediaItemToTrackablePayload(media))
-        .then((result) => {
+      // The Undo on the "off your plan" toast puts back the row the removal
+      // took out (when it was planned, the episode count it runs from, its
+      // details) rather than planning the title afresh; it reaches the
+      // services as an add either way. Every other press is the toggle.
+      const tracking = window.api?.mediaHub?.tracking
+      const payload = mediaItemToTrackablePayload(media)
+      const write =
+        fromUndo && to === true ? tracking?.restorePlan(payload) : tracking?.toggle(payload)
+      write
+        ?.then((result) => {
           // Persisted from the toggle's own answer rather than waiting for
           // the refresh below to carry it. That refresh throws whenever
           // every catalog source is down — precisely when someone is most

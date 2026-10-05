@@ -707,9 +707,9 @@ export function pullTraktHistoryNow(
     // At most once a day: this runs every half hour, and its backups must
     // not push the ones taken before a regroup out of the rotation.
     backup: () => backupBeforeRewrite('trakt-pull', { notWithinMs: 24 * 60 * 60 * 1000 }),
-    announce: () => {
+    announce: (scopes) => {
       requestRecommendationsRebuild()
-      notifyLibraryChanged('trakt-pull', 'history')
+      notifyLibraryChanged('trakt-pull', ...scopes)
     },
     now: () => Date.now(),
     log: logError

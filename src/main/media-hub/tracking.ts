@@ -94,6 +94,7 @@ import {
 } from './animeSeasons'
 import { catchUpFromServices, noteSimklActivities, recentSimklActivities } from './simklCatchUp'
 import { getDatabase } from './dbState'
+import type { TrackedRow } from './database'
 import {
   applyLocalPlanChange,
   lastPlannedSyncReport,
@@ -2052,6 +2053,33 @@ function scheduleEpisodeFlush(): void {
 }
 
 /** Registers every `tracking:*`, `home:personalized`, and `simkl:*` IPC handler. Call once during main-process startup. */
+// The tracked rows Remove from plan (the toggle) took out, per profile and
+// id, so the toast's Undo can put back the row itself: the date it was
+// planned, the episode baseline its "new episodes" count runs from, and its
+// stored details. A plain re-plan would stamp all three afresh. In memory
+// only and for a while longer than the toast stays up; an Undo that finds
+// nothing here plans the title afresh.
+const REMOVED_PLAN_HOLD_MS = 10 * 60 * 1000
+const removedPlans = new Map<string, { row: TrackedRow; at: number }>()
+
+function removedPlanKey(profile: string, id: string): string {
+  return `${profile}\u0000${id}`
+}
+
+function holdRemovedPlan(profile: string, row: TrackedRow, now = Date.now()): void {
+  for (const [key, held] of removedPlans) {
+    if (now - held.at > REMOVED_PLAN_HOLD_MS) removedPlans.delete(key)
+  }
+  removedPlans.set(removedPlanKey(profile, row.id), { row, at: now })
+}
+
+function takeRemovedPlan(profile: string, id: string, now = Date.now()): TrackedRow | null {
+  const key = removedPlanKey(profile, id)
+  const held = removedPlans.get(key)
+  removedPlans.delete(key)
+  return held && now - held.at <= REMOVED_PLAN_HOLD_MS ? held.row : null
+}
+
 export function registerTrackingIpc(): void {
   handle<undefined, TrackingListResult>(MEDIA_HUB_CHANNELS.trackingList, async () => {
     const db = getDatabase()
@@ -2218,8 +2246,13 @@ export function registerTrackingIpc(): void {
     // legacy Simkl-keyed card plans the real title, once.
     item = { ...item, id: canonicalWriteId(item) }
     const tracked = db.isTracked(item.id)
-    if (tracked) db.untrack(item.id)
-    else db.track(item)
+    if (tracked) {
+      // Kept for the toast's Undo (restore-plan below), which puts this
+      // row back rather than planning the title afresh.
+      const row = db.trackedRow(item.id)
+      db.untrack(item.id)
+      if (row) holdRemovedPlan(db.activeProfile(), row)
+    } else db.track(item)
     // A search-only title gets an index row, or My List cannot show it.
     if (!tracked) indexTrackedTitle(item)
     requestRecommendationsRebuild()
@@ -2238,6 +2271,37 @@ export function registerTrackingIpc(): void {
     )
     return { tracked: !tracked }
   })
+
+  handle<TrackableItem, { tracked: boolean }>(
+    MEDIA_HUB_CHANNELS.trackingRestorePlan,
+    (_e, item) => {
+      const db = getDatabase()
+      item = { ...item, id: canonicalWriteId(item) }
+      const row = takeRemovedPlan(db.activeProfile(), String(item.id))
+      // Planned again some other way since (the card menu, a pull): that
+      // plan stands, and there is nothing to push.
+      if (db.isTracked(item.id)) return { tracked: true }
+      // The row the toggle removed, as it was. Without it (held too long,
+      // or the app restarted in between) the title is planned afresh, as
+      // the Undo did before.
+      if (row) db.restoreTracked(row)
+      else db.track(item)
+      indexTrackedTitle(item)
+      requestRecommendationsRebuild()
+      // The removal went out to the services; the Undo goes out as an add,
+      // exactly as planning it again from the card menu would.
+      pushLocalPlanChange(
+        {
+          id: String(item.id),
+          type: (item.type ?? 'movie') as MediaKind,
+          title: String(item.title ?? ''),
+          year: item.year ? String(item.year) : undefined
+        },
+        true
+      )
+      return { tracked: true }
+    }
+  )
 
   handle<MarkWatchedPayload, MarkWatchedResult>(
     MEDIA_HUB_CHANNELS.trackingMarkWatched,

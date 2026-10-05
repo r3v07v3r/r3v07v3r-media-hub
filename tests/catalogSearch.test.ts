@@ -15,6 +15,9 @@
 //     a season, set a status, not for me) or pulled from a service's
 //     plan-to-watch, so the grids and My Stuff, which read the index by id,
 //     can show it; un-planning writes nothing;
+//   - the Undo of Remove from plan (tracking:restore-plan) puts back the
+//     tracked row the toggle removed, its date, baseline and details, and
+//     plans the title afresh only when no such row is held;
 //   - the crawl announces the index it wrote, which is what lets the phone's
 //     Browse grid, empty on a fresh install, fill in when the crawl lands.
 //
@@ -275,6 +278,53 @@ async function main(): Promise<void> {
     })
     assert.equal(db.isTracked('tt7100009'), false, 'the toggle un-planned it')
     assert.deepEqual(indexedKinds('tt7100009'), [])
+  })
+
+  await check('the Undo of Remove from plan puts back the row the removal took', async () => {
+    const id = 'tt7100010'
+    db.track(
+      {
+        id,
+        type: 'series',
+        title: 'Restored Harbour',
+        videos: [
+          { season: 1, episode: 1, released: '2024-01-01T00:00:00.000Z' },
+          { season: 1, episode: 2, released: '2024-01-08T00:00:00.000Z' }
+        ]
+      } as never,
+      new Date('2024-01-05T00:00:00.000Z')
+    )
+    const before = db.trackedRow(id)
+    assert.equal(before?.trackedAt, '2024-01-05T00:00:00.000Z')
+    assert.equal(before?.baselineEpisode, 1, 'planned when only episode 1 had aired')
+
+    await invoke(MEDIA_HUB_CHANNELS.trackingToggle, {
+      id,
+      type: 'series',
+      title: 'Restored Harbour'
+    })
+    assert.equal(db.isTracked(id), false, 'Remove from plan')
+    // The renderer's card is what the Undo sends: no episode list, and its
+    // own title. A re-plan from it would stamp now, a baseline of nothing
+    // aired, and these details.
+    const card = { id, type: 'series', title: 'Restored Harbour (card)' }
+    assert.deepEqual(await invoke(MEDIA_HUB_CHANNELS.trackingRestorePlan, card), {
+      tracked: true
+    })
+    assert.deepEqual(db.trackedRow(id), before, 'the removed row, every column')
+
+    // Planned again already: an Undo after that leaves the plan as it is.
+    assert.equal(db.restoreTracked(before!), false)
+    await invoke(MEDIA_HUB_CHANNELS.trackingRestorePlan, card)
+    assert.deepEqual(db.trackedRow(id), before)
+
+    // Nothing held for it (removed some other way, or the app restarted in
+    // between): the Undo plans it afresh, as it did before.
+    db.untrack(id)
+    await invoke(MEDIA_HUB_CHANNELS.trackingRestorePlan, card)
+    const fresh = db.trackedRow(id)
+    assert.equal(fresh?.title, 'Restored Harbour (card)')
+    assert.notEqual(fresh?.trackedAt, before?.trackedAt)
   })
 
   await check('a status set on a typeless Kitsu id does not land in the movie grid', async () => {
