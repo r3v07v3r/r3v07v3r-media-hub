@@ -378,6 +378,9 @@ whole title, a scrobble) is translated first, by `toSimklAnimeEpisode` in
   group's _s_-th member, under that member's own Kitsu id and with no
   season number. A change that spans seasons is one entry per season, the
   same split `planMalPushes` makes for MAL.
+- Only where that member can be shown to BE season _s_ of the page (see
+  "When a member's place is not its season", below). Otherwise the season
+  is not sent.
 - A title that was never merged is its own entry.
 - Specials (season 0) are not sent. They are TMDB's list for the whole
   franchise and belong to no entry this app can name.
@@ -402,10 +405,41 @@ The tests model an account that behaves as that guide says. No request has
 been made to the live API from a development machine, so whether Simkl
 files these as described is still to be confirmed on a real account.
 
+### When a member's place is not its season
+
+"Season = the member's place in the group" is true of history, and not
+always of the page. A merged show's page is numbered in one of two ways
+(`buildGroupedAnimeVideos` in `animeSeasons.ts`):
+
+- A show whose first member has no TheTVDB mapping is built from its
+  members in order. Season _N_ is member _N_.
+- A show whose first member has one is numbered by TMDB. Season _N_ is
+  TMDB's season _N_, whichever member sits at _N_. The two agree only for a
+  member whose own TheTVDB season is its place. A film or an OVA among the
+  seasons, or a later season Kitsu has no mapping for, breaks it: My Hero
+  Academia's fourth season is the group's seventh member, and season 7 on
+  its page is TMDB's seventh.
+
+So everything in this section that turns a member into a season of the
+show, or a season into a member, asks first whether the two can be shown to
+agree (`animeSeasonMatchesPage` in `serviceIds.ts`, read from the cached
+mappings with no request). Where they cannot:
+
+- that season is not sent to Simkl, rather than sent to whatever member
+  holds that place;
+- a later season opened by its own id opens and saves as itself, as it did
+  before, and its rows are not moved under the show.
+
+In one real library, 290 of 698 later seasons could be shown to agree. The
+catch-up, the MAL import and the MAL push still go by place alone; that is
+unchanged here and is wrong for the same shows.
+
 ### A later season under its own id
 
 A later season of a merged show still has an id of its own. One thing
-keeps using it, and nothing else does.
+keeps using it, and nothing else does. All of this applies to a later
+season whose place is its season on the page (above); any other still
+behaves as a title of its own.
 
 - **The plan uses it.** A service lists a season under that season's id,
   so a watchlist pull plans it under that id, as its own card. That is on

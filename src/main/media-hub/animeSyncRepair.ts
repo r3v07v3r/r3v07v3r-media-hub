@@ -38,7 +38,7 @@
 // it is not ready yet.
 
 import type { ContentIdRemap } from './database'
-import { animeGroupingReady, resolveAnimeGroupTarget } from './animeSeasons'
+import { animeGroupingReady, resolveAnimeGroupTarget, seasonMatchesPage } from './animeSeasons'
 import { getDatabase } from './dbState'
 import { logError } from './logger'
 import { notifyLibraryChanged } from './rendererBridge'
@@ -90,6 +90,11 @@ export function repairAnimeSyncIds(): { repaired: number; ran: boolean } {
       // Same id back means this title is not a merged sibling — either the
       // canonical show itself or an ungrouped title, both already correct.
       if (target.id === id) continue
+      // Its place in the group has to be its season on the show's page, or
+      // the rows would land on a different season and mark it watched (see
+      // seasonMatchesPage). Where that cannot be shown they stay where they
+      // are, under an id that still opens as itself.
+      if (!seasonMatchesPage(target.id, id, target.season)) continue
       // Every row of a later season is that one season of the show,
       // whatever season the row carries: the old sync wrote a 1, but a row
       // written from the season's own page carries Kitsu's label for the
