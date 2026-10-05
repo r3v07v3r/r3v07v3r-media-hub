@@ -3,6 +3,12 @@
 // The interesting cases are all about what a restore must NOT do: leak a PIN,
 // carry the refetchable cache, half-apply a bad file, or silently drop rows a
 // schema change has moved on from.
+//
+// Also the automatic backup taken before a step that rewrites history rows
+// (autoBackup.ts): it is an ordinary backup a restore can read, and only the
+// newest few are kept, so the folder never grows.
+//
+// Run with: npx tsx tests/backup.test.ts
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -12,6 +18,12 @@ import path from 'node:path'
 import { followAnimeRegroup } from '../src/main/media-hub/animeRegroup'
 import { createDatabase } from '../src/main/media-hub/database'
 import { readBackup } from '../src/main/media-hub/backup'
+import {
+  AUTO_BACKUP_KEEP,
+  autoBackupFiles,
+  recentAutoBackup,
+  writeRotatingBackup
+} from '../src/main/media-hub/autoBackup'
 
 const ALICE = 'profile-alice'
 const BOB = 'profile-bob'
@@ -279,6 +291,56 @@ db.exportBackup(backupFile, {
   target.importBackup(backupFile)
   assert.deepEqual(target.animeGroupLedger(), now)
   target.close()
+}
+
+// ---------------------------------------------------------------------
+// The automatic backup before a rewrite: a real backup, rotated.
+// ---------------------------------------------------------------------
+{
+  const backups = path.join(dir, 'backups')
+  const start = Date.parse('2026-10-05T12:00:00.000Z')
+  const options = {
+    appVersion: '1.2.3',
+    profiles: [
+      { id: ALICE, name: 'Alice' },
+      { id: BOB, name: 'Bob' }
+    ],
+    activeProfileId: ALICE
+  }
+  const written: string[] = []
+  for (let i = 0; i < AUTO_BACKUP_KEEP + 2; i++) {
+    written.push(
+      writeRotatingBackup(db, backups, {
+        ...options,
+        reason: i % 2 ? 'trakt-import' : 'anime-regroup',
+        now: new Date(start + i * 60_000)
+      })
+    )
+  }
+  const kept = autoBackupFiles(backups)
+  assert.equal(kept.length, AUTO_BACKUP_KEEP, 'only the newest few are kept')
+  assert.deepEqual(
+    kept,
+    written.slice(-AUTO_BACKUP_KEEP).map((file) => path.basename(file)),
+    'and they are the newest, oldest first'
+  )
+  assert.equal(fs.existsSync(written[0]), false, 'the oldest is gone')
+  // Each is a backup a restore takes, with the library in it.
+  const latest = readBackup(written.at(-1) as string)
+  assert.equal(latest.activeProfileId, ALICE)
+  assert.ok(latest.tables.watch_history.length > 0)
+  // A file somebody saved here by hand is not part of the rotation.
+  fs.writeFileSync(path.join(backups, 'my-own.json'), '{}')
+  writeRotatingBackup(db, backups, {
+    ...options,
+    reason: 'mal-apply',
+    now: new Date(start + 60 * 60_000)
+  })
+  assert.equal(fs.existsSync(path.join(backups, 'my-own.json')), true)
+  assert.equal(autoBackupFiles(backups).length, AUTO_BACKUP_KEEP)
+  // What spaces out a step that runs every half hour.
+  assert.equal(recentAutoBackup(backups, 'mal-apply', 60_000, Date.now()), true)
+  assert.equal(recentAutoBackup(backups, 'trakt-pull', 60_000, Date.now()), false)
 }
 
 db.close()

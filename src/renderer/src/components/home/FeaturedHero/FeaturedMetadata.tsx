@@ -1,8 +1,14 @@
 import { MediaItem } from '@renderer/types'
 import { Icon } from '@renderer/components/icons/Icon'
+import { useAppState } from '@renderer/context/AppStateContext'
 import styles from './FeaturedHero.module.css'
 
 export function FeaturedMetadata({ item }: { item: MediaItem }) {
+  // A title marked Not interested from Home stays on the hero until the
+  // page is left (heldFeed.ts), and Hide Disliked switched off on a library
+  // page leaves it in that page's hero pool. Either way it is named here.
+  const { dislikedIds } = useAppState()
+  const disliked = dislikedIds.has(item.id)
   return (
     <div>
       <h1 className={styles.title}>
@@ -11,6 +17,11 @@ export function FeaturedMetadata({ item }: { item: MediaItem }) {
       </h1>
       {item.description && <p className={styles.description}>{item.description}</p>}
       <div className={styles.metaRow}>
+        {disliked && (
+          <span className={styles.dislikedChip}>
+            <Icon name="thumbs-down" /> Not interested
+          </span>
+        )}
         {item.releaseYear && <span>{item.releaseYear}</span>}
         {item.communityRating && (
           <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>

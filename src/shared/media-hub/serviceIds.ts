@@ -160,6 +160,32 @@ export function animeSeasonMembers(
 }
 
 /**
+ * Whether a member's own TheTVDB season, in the show's series, is `season`:
+ * the mappings alone, whatever place the member sits at and whoever else is
+ * in the group. Always yes on a show with no mapping, which is built from
+ * its members.
+ *
+ * NOT the rule for acting on a season: that is animeSeasonMembers, which
+ * also asks for the member's place and that no other member claims the
+ * season. This is for the one caller that asks about a grouping that is
+ * gone (animeRegroup.ts, deciding where rows filed under an old grouping
+ * belong), where there is no place left to ask about.
+ */
+export function animeTvdbSeasonIs(
+  showId: string,
+  memberId: string,
+  season: number,
+  tvdbOf: AnimeTvdbSeason
+): boolean {
+  const show = tvdbOf(showId)
+  if (show === null) return false
+  if (show === 'none') return true
+  const member = tvdbOf(memberId)
+  if (member === null || member === 'none') return false
+  return member.seriesId === show.seriesId && member.season === season
+}
+
+/**
  * The inverse of animeSeasonMembers: the season of its show's page a member
  * is, or null where it cannot be shown to be one.
  */

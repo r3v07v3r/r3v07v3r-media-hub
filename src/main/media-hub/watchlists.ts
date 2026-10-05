@@ -52,6 +52,7 @@ import {
   type PlannedOrigin
 } from './watchlistRules'
 import { resolveAnimeGroupTarget } from './animeSeasons'
+import { indexTrackedTitle } from './catalog'
 import type { MediaKind } from '../../shared/media-hub/types'
 import { isForegroundPriority, type TaskPriority } from './taskScheduler'
 
@@ -113,6 +114,10 @@ export interface PlannedSyncReport {
   /** Titles removed locally because they left every service that had
    *  them — only ever titles this app had pulled in itself. */
   removed: number
+  /** Watch-history changes (marks, un-marks) that failed to reach a service
+   *  and are waiting to be retried — see historyRetry.ts. Filled in when the
+   *  report is handed to the interface, not stored with it. */
+  historyPending?: number
 }
 
 const REPORT_CACHE_KEY = 'planned:last-sync'
@@ -758,6 +763,10 @@ async function pullPlanned(
     }
     try {
       db.track({ id: entry.id, type: entry.type, title: entry.title, year: entry.year })
+      // The grids, My Stuff and the Planned row read the index by id, so a
+      // pulled title the crawl never reached would be planned and shown
+      // nowhere. The row has no art yet; opening the title fills it in.
+      indexTrackedTitle({ id: entry.id, type: entry.type, title: entry.title, year: entry.year })
       rememberOrigin(entry.id, entry.source)
       added += 1
     } catch (error) {

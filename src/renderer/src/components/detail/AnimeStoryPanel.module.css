@@ -66,6 +66,43 @@
   color: var(--text-secondary);
 }
 
+/* Release order / Story order: two halves of one control, the chosen one
+   lit. */
+.orderToggle {
+  display: inline-flex;
+  align-self: flex-start;
+  padding: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.orderButton {
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--text-secondary);
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.orderButton:hover {
+  color: var(--text-primary);
+}
+
+.orderButton:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 1px;
+}
+
+.orderButtonActive {
+  background: rgba(31, 201, 255, 0.16);
+  color: var(--text-primary);
+}
+
 .groupLabel {
   margin: 12px 0 6px;
   font-size: 11px;
@@ -108,6 +145,15 @@
 .storyLink:focus-visible {
   outline: 2px solid var(--accent-cyan);
   outline-offset: 2px;
+}
+
+/* The title already on screen: listed for its place in the order, not a
+   link back to the same page. */
+.current,
+.current:hover {
+  transform: none;
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.12);
 }
 
 .prequel:hover,

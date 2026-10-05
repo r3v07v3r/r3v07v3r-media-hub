@@ -112,6 +112,31 @@ export interface CatalogItem {
    *  and lets metadata() build a real multi-season episode list for it. */
   groupedIds?: string[]
   /**
+   * Anime only — what kind of entry Kitsu says this is, lowercased: 'tv',
+   * 'movie', 'ova', 'ona', 'special' or 'music'. Absent when Kitsu gave none,
+   * and on anything cached before it was read.
+   *
+   * Only a TV entry is merged into a show as one of its seasons (see
+   * groupAnimeCatalog). A film or an OVA is a title of its own, listed on
+   * the show's page beside the seasons it falls between (groupedExtras).
+   */
+  subtype?: string
+  /**
+   * Anime only, on a merged show — the films, OVAs, ONAs, specials and music
+   * entries the grouping found linked to its seasons, by Kitsu id. They are
+   * not seasons and not in groupedIds: each stays a title of its own, and the
+   * show's page lists them between the seasons they came out between.
+   */
+  groupedExtras?: string[]
+  /**
+   * Anime only, on a merged show — Kitsu's start date of each season, this
+   * item's own first, then one per groupedIds entry in the same order ('' when
+   * unknown). What placing groupedExtras between the seasons is measured
+   * against, since the later seasons' own entries are not kept in the
+   * catalog.
+   */
+  seasonStarts?: string[]
+  /**
    * Anime only, and only on the answer to catalog:meta — set when the id
    * asked for is a LATER season of a merged franchise: the show it belongs
    * to, and its season there. The item itself is still that one season
@@ -213,10 +238,40 @@ export interface PersonCreditsResult {
   creators: CatalogItem[]
 }
 
+/**
+ * The two orders an anime's page can list its franchise in. Release order is
+ * when each part came out; story order follows Kitsu's prequel and sequel
+ * links, with the air date between parts the links do not order (see
+ * core.ts's animeStoryOrder).
+ */
+export type AnimeStoryOrder = 'release' | 'story'
+
+/** One part of a franchise, as the anime page lists it in order. */
+export interface AnimeTimelineEntry {
+  item: CatalogItem
+  /** For a season of the show the page is about: its season there. */
+  season?: number
+  /** For a title outside the show: how Kitsu relates it to the show. */
+  relation?: AnimeStoryRelation
+}
+
 export interface AnimeStoryResult {
   links: AnimeStoryLink[]
   /** False only if the remote lookup failed without a cached answer. */
   checked: boolean
+  /**
+   * The franchise in the order asked for. In release order: a merged show's
+   * seasons, with the films, OVAs and specials filed with it between the
+   * seasons they came out between — absent when it has none, since the
+   * season tabs already list the seasons. In story order: those, and every
+   * title the show's parts link to, in story order.
+   */
+  timeline?: AnimeTimelineEntry[]
+  /**
+   * Story order only: false when a part's own links could not be looked up,
+   * so the order was built without them and may be incomplete.
+   */
+  timelineChecked?: boolean
 }
 
 /**
@@ -779,6 +834,10 @@ export interface PlannedSyncReport {
    *  them — only ever titles this app pulled in itself. See
    *  docs/WATCHLIST-SYNC.md rule 2. */
   removed: number
+  /** Watch-history changes (marks, un-marks) that failed to reach a service
+   *  and are waiting to be retried — see historyRetry.ts. Filled in when the
+   *  report is handed to the interface, not stored with it. */
+  historyPending?: number
 }
 
 /**
@@ -1039,6 +1098,9 @@ export interface ReconcileCheckResult {
    *  not "confirmed everything agrees." */
   ran: boolean
   discrepancies: WatchStatusDiscrepancy[]
+  /** The shows section: what was merged show by show and not reviewed yet.
+   *  Optional so an answer from an older backend still reads. */
+  shows?: ShowSyncRow[]
 }
 
 export type ReconcileResolution = 'use-local' | 'use-remote' | 'ignore'
@@ -1089,6 +1151,70 @@ export interface ReconcileSyncReport {
   /** Titles dropped after too many failed attempts — nothing retries these. */
   abandoned: string[]
   /** The most recent failure message, for the notification text. */
+  error?: string
+}
+
+/** The services whose watched episodes are compared show by show
+ *  (main/media-hub/episodeSync.ts). MyAnimeList keeps a count per entry,
+ *  not episodes, and is only sent the new count when a choice changes one. */
+export type EpisodeSyncService = 'simkl' | 'trakt'
+
+export interface SyncEpisode {
+  season: number
+  episode: number
+}
+
+/** What happened between this app and one service for one show. */
+export interface ShowSyncServiceRow {
+  /** Episodes the service held and this app did not, taken in here. */
+  arrived: SyncEpisode[]
+  /** Episodes held here that the service lacked, sent to it. */
+  sent: SyncEpisode[]
+  /** Episodes held here that the service lacks and that cannot be sent to
+   *  it: an anime season the placing rules name no entry for, or a title
+   *  the service has no id for. */
+  unsendable: SyncEpisode[]
+  /** Seasons in this row that nothing can be sent to the service for, so a
+   *  choice leaves the service as it is there. */
+  blockedSeasons: number[]
+}
+
+/** One show in the review panel's shows section: what the automatic step
+ *  merged for it, per service, since it was last reviewed. */
+export interface ShowSyncRow {
+  id: string
+  type: MediaKind
+  title: string
+  year: string
+  poster: string
+  /** When a pass last added to this row, ms. */
+  at: number
+  services: Partial<Record<EpisodeSyncService, ShowSyncServiceRow>>
+}
+
+/**
+ * The choices a show row offers. `keep` accepts the merge and drops the row;
+ * `undo` removes the episodes that arrived, here and where they came from;
+ * the other two name a `service`. See docs/WATCHLIST-SYNC.md, "Episodes,
+ * show by show".
+ */
+export type ShowSyncAction = 'keep' | 'undo' | 'service-match-here' | 'here-match-service'
+
+export interface ShowSyncDecision {
+  id: string
+  action: ShowSyncAction
+  service?: EpisodeSyncService
+}
+
+export interface ShowSyncDecisionResult {
+  /** False when the choice could not be recorded; nothing was changed. */
+  ok: boolean
+  /** True when changes for the services were queued. */
+  queued: boolean
+  /** Episodes removed here. */
+  removedHere: number
+  /** Seasons a choice could not reach a service for. */
+  cannotSend: Array<{ service: EpisodeSyncService; seasons: number[] }>
   error?: string
 }
 
@@ -1268,6 +1394,10 @@ export interface MediaHubPublicSettings {
   /** Whether watchlist changes travel both ways — see
    *  docs/WATCHLIST-SYNC.md. */
   watchlistTwoWay: boolean
+  /** Whether the player sends scrobbles (start, pause, stop) to Simkl and
+   *  Trakt. Off unless somebody turns it on; the watched mark at 80% is sent
+   *  either way. */
+  scrobbleEnabled: boolean
 }
 
 export type CacheMode = 'disk' | 'memory'
@@ -1965,6 +2095,16 @@ export interface CatalogFacets {
 export interface CatalogByIdsResult {
   items: CatalogItem[]
   completedIds: string[]
+}
+
+/** catalog:search's answer when it is asked with `report: true`. Without
+ *  that flag the handler answers with the bare list, as it always has. */
+export interface CatalogSearchResult {
+  items: CatalogItem[]
+  /** The online provider for this kind (Cinemeta, or Kitsu for anime)
+   *  failed or had not answered in time, so `items` holds only what was
+   *  already on this device. A screen says so instead of "no matches". */
+  providerUnreachable: boolean
 }
 
 export interface DeepScanReport {

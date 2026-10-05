@@ -6,6 +6,7 @@ import { useOverlayActions, useOverlayState } from '@renderer/context/OverlayCon
 import { Icon } from '@renderer/components/icons/Icon'
 import { positionFloatingPanel } from '@renderer/lib/floatingPanel'
 import { titleStatusOf, TITLE_STATUS_ACTION } from '@renderer/lib/mediaHub/titleStatus'
+import { dislikedToast } from '@renderer/lib/mediaHub/statusToasts'
 import styles from './Overlays.module.css'
 
 export function ContextMenu() {
@@ -22,7 +23,8 @@ export function ContextMenu() {
     markContinueWatching,
     setTitleStatus,
     pushNotification,
-    openDetail
+    openDetail,
+    activeProfileId
   } = useAppState()
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -104,12 +106,11 @@ export function ContextMenu() {
       label: disliked ? 'Remove dislike' : 'Not interested',
       onSelect: () => {
         toggleDisliked(media)
-        pushNotification({
-          tone: 'info',
-          message: disliked
-            ? `You'll see "${media.title}" again.`
-            : `Got it — "${media.title}" won't show up in recommendations, and you can hide it from browsing with the Hide Disliked filter.`
-        })
+        // The Undo takes exactly this dislike back, and does nothing if it
+        // has been taken back some other way since. See statusToasts.ts.
+        pushNotification(
+          dislikedToast(media, !disliked, activeProfileId, () => toggleDisliked(media, false))
+        )
       }
     },
     {

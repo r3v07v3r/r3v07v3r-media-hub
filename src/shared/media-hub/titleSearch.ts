@@ -128,3 +128,43 @@ export function mergeSearchResults(
     .slice(0, Math.max(0, limit))
     .map((entry) => entry.item)
 }
+
+/** What the provider half of one search came to. */
+export interface ProviderOutcome<T> {
+  items: T[]
+  /** It failed (offline, a 429 or 5xx, its own timeout), or had not
+   *  answered when it stopped being waited for. Either way the list the
+   *  person sees holds only what the local index found. */
+  unreachable: boolean
+}
+
+/**
+ * The provider's search, waited for at most `graceMs` when that is given
+ * (the index has already found something) and for its own timeout when it
+ * is not. A failure is reported rather than read as "no results": the two
+ * look the same in a list, and only one of them means the title does not
+ * exist. The request is not cancelled when the grace runs out, only no
+ * longer waited for; the timer is cleared on settle so a prompt answer
+ * leaves nothing running.
+ */
+export function settleProvider<T>(
+  pending: Promise<T[]>,
+  graceMs?: number
+): Promise<ProviderOutcome<T>> {
+  return new Promise((resolve) => {
+    const timer =
+      graceMs === undefined
+        ? undefined
+        : setTimeout(() => resolve({ items: [], unreachable: true }), graceMs)
+    pending.then(
+      (items) => {
+        clearTimeout(timer)
+        resolve({ items, unreachable: false })
+      },
+      () => {
+        clearTimeout(timer)
+        resolve({ items: [], unreachable: true })
+      }
+    )
+  })
+}

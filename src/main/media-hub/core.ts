@@ -11,6 +11,8 @@
 
 import {
   AnimeStoryLink,
+  AnimeStoryResult,
+  AnimeTimelineEntry,
   CacheSourceRef,
   CatalogItem,
   ContinueWatchingEntry,
@@ -894,10 +896,16 @@ export function normalizeKitsuAnime(record: RawApiPayload, lightweight = false):
   const english = String(a.titles?.en || a.titles?.en_us || '').trim()
   const canonical = String(a.canonicalTitle || '').trim()
   const original = english && canonical && canonical !== english ? canonical : ''
+  // What kind of entry it is: a TV season, a film, an OVA... See
+  // CatalogItem.subtype; the grouping reads it.
+  const subtype = String(a.subtype || a.showType || '')
+    .trim()
+    .toLowerCase()
   return {
     id,
     title: english || canonical || 'Untitled',
     ...(original ? { originalTitle: original } : {}),
+    ...(subtype ? { subtype } : {}),
     type: 'anime',
     poster: a.posterImage?.large || a.posterImage?.original || '',
     background: a.coverImage?.large || a.coverImage?.original || '',
@@ -1019,7 +1027,9 @@ export function animeStoryLinks(payload: RawApiPayload = {}): AnimeStoryLink[] {
  * dropped. `members` is the show's ids in season order, its own first.
  *
  * The seasons in between are not asked. A film that sits between two of
- * them is linked from the middle of the show, and is not listed here.
+ * them is linked from the middle of the show, and is not listed here: the
+ * films the grouping filed with the show are listed with its seasons
+ * instead (AnimeStoryResult.timeline), and story order asks every season.
  */
 export function mergedShowStoryLinks(
   members: readonly string[],
@@ -1034,6 +1044,137 @@ export function mergedShowStoryLinks(
     ...first.filter((link) => link.relation !== 'sequel' && outside(link)),
     ...last.filter((link) => link.relation === 'sequel' && outside(link))
   ]
+}
+
+/**
+ * A merged show's seasons, in their order, with the parts filed with it
+ * (groupedExtras: its films, OVAs, ONAs, specials and music entries) each
+ * placed after the last season that started on or before it came out — the
+ * seasons it came out between. One that came out before the first season
+ * goes first, and one with no date last. Parts in one gap are in date order.
+ *
+ * Release order, as the page lists it. The seasons keep the order the
+ * grouping gave them (their numbers on the page); only the extras move.
+ * Dates are Kitsu's start dates, YYYY-MM-DD, which compare as text.
+ */
+export function animeReleaseTimeline(
+  seasons: readonly AnimeTimelineEntry[],
+  extras: readonly AnimeTimelineEntry[]
+): AnimeTimelineEntry[] {
+  const dateOf = (entry: AnimeTimelineEntry): string => String(entry.item.releaseDate || '')
+  const first: AnimeTimelineEntry[] = []
+  const after: AnimeTimelineEntry[][] = seasons.map(() => [])
+  const last = extras.filter((extra) => !dateOf(extra))
+  const byDate = extras
+    .filter((extra) => dateOf(extra))
+    .sort((a, b) => dateOf(a).localeCompare(dateOf(b)))
+  for (const extra of byDate) {
+    const date = dateOf(extra)
+    let slot = -1
+    seasons.forEach((season, index) => {
+      const started = dateOf(season)
+      if (started && started <= date) slot = index
+    })
+    if (slot < 0) first.push(extra)
+    else after[slot].push(extra)
+  }
+  return [...first, ...seasons.flatMap((season, index) => [season, ...after[index]]), ...last]
+}
+
+/**
+ * Parts of a franchise in story order: a topological sort of the prequel
+ * and sequel links between them, `[before, after]` by key, with the air
+ * date deciding between parts the links leave unordered.
+ *
+ * At each step the next part is the earliest-dated one whose every prequel
+ * is already placed. So a part with no prequel or sequel link among these —
+ * a side story, a film between seasons, a recap — lands by its date between
+ * the parts around it. A prequel made later (Fate/Zero, linked as the
+ * prequel of a series that aired first) goes first, if Kitsu links it so.
+ *
+ * Undated parts come after dated ones when free to; links to a key not in
+ * `parts` are ignored. A cycle in the links (two parts each listed as the
+ * other's prequel) is broken at its earliest-dated part rather than
+ * dropping anything. Pure, so the order can be tested as it runs.
+ */
+export function animeStoryOrder<T>(
+  parts: readonly T[],
+  keyOf: (part: T) => string,
+  dateOf: (part: T) => string,
+  links: readonly (readonly [before: string, after: string])[]
+): T[] {
+  const index = new Map(parts.map((part, i) => [keyOf(part), i] as const))
+  const waitsOn = parts.map(() => new Set<number>())
+  const leadsTo = parts.map(() => new Set<number>())
+  for (const [before, after] of links) {
+    const from = index.get(before)
+    const to = index.get(after)
+    if (from === undefined || to === undefined || from === to) continue
+    waitsOn[to].add(from)
+    leadsTo[from].add(to)
+  }
+  const earlier = (a: number, b: number): boolean => {
+    const da = dateOf(parts[a]) || ''
+    const db = dateOf(parts[b]) || ''
+    if (da && !db) return true
+    if (db && !da) return false
+    if (da !== db) return da < db
+    return a < b
+  }
+  const left = new Set(parts.map((_part, i) => i))
+  const order: T[] = []
+  while (left.size) {
+    let next = -1
+    for (const i of left) {
+      if (waitsOn[i].size === 0 && (next < 0 || earlier(i, next))) next = i
+    }
+    if (next < 0) for (const i of left) if (next < 0 || earlier(i, next)) next = i
+    left.delete(next)
+    order.push(parts[next])
+    for (const to of leadsTo[next]) waitsOn[to].delete(next)
+  }
+  return order
+}
+
+/**
+ * A show's parts and every title they link to, in story order
+ * (animeStoryOrder). `stories[i]` is the story lookup of `parts[i]`, null
+ * where it failed outright: its prequel and sequel links order the parts and
+ * the titles they name, and a title outside the show is listed once, with
+ * the relation of the first part that names it.
+ *
+ * `timelineChecked` is false when any part's links could not be looked up:
+ * the order is then built without them, and the page says it may be
+ * incomplete rather than presenting it as the story's order.
+ */
+export function animeStoryTimeline(
+  parts: readonly AnimeTimelineEntry[],
+  stories: readonly (Pick<AnimeStoryResult, 'links' | 'checked'> | null)[]
+): Required<Pick<AnimeStoryResult, 'timeline' | 'timelineChecked'>> {
+  const entries: AnimeTimelineEntry[] = [...parts]
+  const known = new Set(parts.map((part) => String(part.item.id)))
+  const links: [string, string][] = []
+  parts.forEach((part, index) => {
+    const partId = String(part.item.id)
+    for (const link of stories[index]?.links ?? []) {
+      const linkId = String(link.item?.id ?? '')
+      if (!linkId) continue
+      if (link.relation === 'prequel') links.push([linkId, partId])
+      if (link.relation === 'sequel') links.push([partId, linkId])
+      if (known.has(linkId)) continue
+      known.add(linkId)
+      entries.push({ item: link.item, relation: link.relation })
+    }
+  })
+  return {
+    timeline: animeStoryOrder(
+      entries,
+      (entry) => String(entry.item.id),
+      (entry) => String(entry.item.releaseDate || ''),
+      links
+    ),
+    timelineChecked: parts.every((_part, index) => stories[index]?.checked === true)
+  }
 }
 
 export function filterAnimeRelationships(payload: RawApiPayload = {}): CatalogItem[] {

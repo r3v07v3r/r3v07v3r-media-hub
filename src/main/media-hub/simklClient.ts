@@ -151,6 +151,14 @@ export async function simklPublicRequest<T = unknown>(
 // can never satisfy the check below and are simply never read again; the
 // database's own prune reclaims them.
 const WATCHED_HISTORY_CACHE_KEY = 'simkl:watched:v2'
+/**
+ * The films alone, for the review panel's diff, which compares films and
+ * nothing else. Kept apart from the whole snapshot above so the MAL preview,
+ * which needs the shows too, never takes a films-only read for a whole one.
+ */
+const WATCHED_MOVIES_CACHE_KEY = 'simkl:watched-movies:v1'
+/** How long either snapshot is reused. */
+const WATCHED_CACHE_TTL_MS = 20 * 60 * 1000
 
 /** The cache payload: the history, and the account it belongs to. */
 interface CachedWatchedHistory {
@@ -170,11 +178,15 @@ interface CachedWatchedHistory {
  * request that was already in flight when the account changed. The stamp
  * covers all of those, because it is checked at the point of USE.
  */
-function cachedHistoryFor(account: string, allowExpired = false): HistoryEntry[] | null {
+function cachedHistoryFor(
+  account: string,
+  allowExpired = false,
+  key: string = WATCHED_HISTORY_CACHE_KEY
+): HistoryEntry[] | null {
   // No account connected matches no stamp — never the empty-string account
   // a malformed row might carry.
   if (!account) return null
-  const row = getDatabase().getCache<CachedWatchedHistory>(WATCHED_HISTORY_CACHE_KEY, {
+  const row = getDatabase().getCache<CachedWatchedHistory>(key, {
     allowExpired
   })
   return row?.account === account && Array.isArray(row.entries) ? row.entries : null
@@ -218,13 +230,15 @@ interface SimklWatchedSnapshot {
  * instead of posing as an account with nothing watched.
  */
 export async function simklWatchedSnapshot(
-  priority: TaskPriority = 'interactive'
+  priority: TaskPriority = 'interactive',
+  options: { moviesOnly?: boolean } = {}
 ): Promise<SimklWatchedSnapshot> {
   // Read once, up front: this is the account the whole call is about, and
   // everything below is checked against it rather than against whatever
   // happens to be connected by the time each step runs.
   const account = simklAccountMark()
   if (!account) return { entries: [], complete: true, fetched: false }
+  if (options.moviesOnly) return simklWatchedMovies(account, priority)
   const cached = cachedHistoryFor(account)
   if (cached) return { entries: cached, complete: true, fetched: false }
 
@@ -257,7 +271,7 @@ export async function simklWatchedSnapshot(
     getDatabase().putCache(
       WATCHED_HISTORY_CACHE_KEY,
       { account, entries } satisfies CachedWatchedHistory,
-      20 * 60 * 1000
+      WATCHED_CACHE_TTL_MS
     )
     return { entries, complete: true, fetched: true }
   } catch (error) {
@@ -269,6 +283,55 @@ export async function simklWatchedSnapshot(
     // whole point of keeping expired rows readable; anything else is a
     // real "we don't know."
     const stale = cachedHistoryFor(simklAccountMark(), true)
+    return stale
+      ? { entries: stale, complete: true, fetched: false }
+      : { entries: [], complete: false, fetched: false }
+  }
+}
+
+/**
+ * The films Simkl reports as watched, for the review panel's diff.
+ *
+ * That diff compares films and nothing else, and it used to pay for the
+ * whole snapshot: the shows library with every episode's date, the largest
+ * thing this app asks Simkl for, read and thrown away. This reads the films
+ * alone. A whole snapshot already in the cache answers for it (its films
+ * are as good), and a films-only read is kept under its own key, so the
+ * MyAnimeList preview, which needs the shows, never mistakes it for a whole
+ * one. Same account checks and the same stale fallback as above.
+ */
+async function simklWatchedMovies(
+  account: string,
+  priority: TaskPriority
+): Promise<SimklWatchedSnapshot> {
+  const films = (entries: HistoryEntry[]): HistoryEntry[] =>
+    entries.filter((entry) => entry.type === 'movie')
+  const whole = cachedHistoryFor(account)
+  if (whole) return { entries: films(whole), complete: true, fetched: false }
+  const cached = cachedHistoryFor(account, false, WATCHED_MOVIES_CACHE_KEY)
+  if (cached) return { entries: cached, complete: true, fetched: false }
+  try {
+    const movies = await simklRequest<SimklMoviesPayload>(
+      '/sync/all-items/movies/completed?extended=full',
+      {},
+      priority
+    )
+    if (simklAccountMark() !== account) return { entries: [], complete: false, fetched: false }
+    const entries = watchedFromAllItems(movies)
+    getDatabase().putCache(
+      WATCHED_MOVIES_CACHE_KEY,
+      { account, entries } satisfies CachedWatchedHistory,
+      WATCHED_CACHE_TTL_MS
+    )
+    return { entries, complete: true, fetched: true }
+  } catch (error) {
+    logError('simkl:watched-movies', error)
+    // As above: the account still connected, read again after the failure.
+    const now = simklAccountMark()
+    const staleWhole = cachedHistoryFor(now, true)
+    const stale =
+      cachedHistoryFor(now, true, WATCHED_MOVIES_CACHE_KEY) ??
+      (staleWhole ? films(staleWhole) : null)
     return stale
       ? { entries: stale, complete: true, fetched: false }
       : { entries: [], complete: false, fetched: false }
@@ -288,17 +351,18 @@ export async function simklWatchedSnapshot(
  */
 export function invalidateSimklWatchedCache(): void {
   const db = getDatabase()
-  const existing = db.getCache<CachedWatchedHistory>(WATCHED_HISTORY_CACHE_KEY, {
-    allowExpired: true
-  })
-  // Nothing cached means there is nothing to keep readable. Writing an
-  // empty payload here — which is what `existing ?? []` used to do — would
-  // MANUFACTURE the "Simkl has nothing watched" answer that `complete`
-  // exists to distinguish from "Simkl could not be reached", and a later
-  // failed refetch would fall back onto it and report every locally
-  // watched title as a discrepancy.
-  if (!existing) return
-  db.putCache(WATCHED_HISTORY_CACHE_KEY, existing, 0)
+  // Both snapshots: the films-only one is what the review panel's diff reads.
+  for (const key of [WATCHED_HISTORY_CACHE_KEY, WATCHED_MOVIES_CACHE_KEY]) {
+    const existing = db.getCache<CachedWatchedHistory>(key, { allowExpired: true })
+    // Nothing cached means there is nothing to keep readable. Writing an
+    // empty payload here — which is what `existing ?? []` used to do —
+    // would MANUFACTURE the "Simkl has nothing watched" answer that
+    // `complete` exists to distinguish from "Simkl could not be reached",
+    // and a later failed refetch would fall back onto it and report every
+    // locally watched title as a discrepancy.
+    if (!existing) continue
+    db.putCache(key, existing, 0)
+  }
 }
 
 /**
@@ -326,4 +390,5 @@ export function invalidateSimklWatchedCache(): void {
  */
 export function forgetSimklWatchedCache(): void {
   getDatabase().deleteCache(WATCHED_HISTORY_CACHE_KEY)
+  getDatabase().deleteCache(WATCHED_MOVIES_CACHE_KEY)
 }

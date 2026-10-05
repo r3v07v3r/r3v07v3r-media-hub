@@ -22,6 +22,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
+import { electronModule } from './electronModule'
 import { logError } from './logger'
 import { sendToRenderer } from './rendererBridge'
 import type { ProfileRecord } from './profiles'
@@ -37,6 +38,14 @@ export interface MediaHubRawSettings {
    * see docs/WATCHLIST-SYNC.md, which is the agreement this implements.
    */
   watchlistTwoWay?: boolean
+  /**
+   * Whether the player tells Simkl and Trakt what is playing as it plays
+   * (scrobble start, pause and stop). Absent means OFF: the history add at
+   * 80% is the record either way, and every scrobble is a request against
+   * Simkl's daily allowance, which a linked phone shares. See
+   * preferences.ts's scrobblingEnabled.
+   */
+  scrobbleEnabled?: boolean
   onboardingVersion?: number
   /** Whether the first-run welcome flow (name, playback source, storage,
    *  cache tuning) has been completed or skipped. Absent only before the
@@ -189,6 +198,9 @@ export interface MediaHubRawSettings {
   hideWatchedDefault?: boolean
   hideCompletedDefault?: boolean
   hideDislikedDefault?: boolean
+  /** Whether this install has had the one-time Hide Disliked upgrade: see
+   *  preferences.ts's upgradeHideDislikedDefault. Kept through a sign-out. */
+  hideDislikedDefaultMigrated?: boolean
   profiles?: ProfileRecord[]
   activeProfileId?: string
   [key: string]: unknown
@@ -207,11 +219,11 @@ export interface MediaHubRawSettings {
  * Every use below is inside a function that only runs in the real app,
  * where the binary is always present, so nothing changes for the packaged
  * build. See logger.ts, which carries the same pattern for the same
- * reason.
+ * reason. electronModule() throws outside Electron without loading the
+ * package, which from Electron 42 would download the binary.
  */
 function electron(): typeof import('electron') {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require('electron')
+  return electronModule()
 }
 
 function settingsPath(): string {

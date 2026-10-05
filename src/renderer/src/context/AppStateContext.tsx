@@ -33,6 +33,9 @@ import type {
   PartyStatusResult,
   ProfilePublic,
   ReconcileResolution,
+  EpisodeSyncService,
+  ShowSyncAction,
+  ShowSyncRow,
   WatchStatusDiscrepancy
 } from '@shared/media-hub/types'
 import type { ChangedEpisode, TitleStatus } from '@shared/media-hub/types'
@@ -53,6 +56,14 @@ import {
   forgetContinueWatching,
   rememberTrackedId
 } from '@renderer/lib/mediaHub/startupSnapshot'
+import {
+  planToastAfterStatus,
+  plannedToast,
+  toastAfterPlanToggle,
+  toggleApplies,
+  unplannedToast
+} from '@renderer/lib/mediaHub/statusToasts'
+import { heldPageAfterRoute, type HeldChange } from '@renderer/lib/mediaHub/heldFeed'
 import {
   startupContinueWatchingFallback,
   startupTrackedIdsFallback,
@@ -77,7 +88,7 @@ import {
   recentlyWatchedRefs,
   relatedToItem,
   resolveSimilarTitles,
-  searchAppCatalog
+  searchAppCatalogWithStatus
 } from '@renderer/lib/mediaHub/assistantSearch'
 import { buildMediaId } from '@renderer/lib/mediaHub/streamId'
 import {
@@ -180,7 +191,11 @@ interface AppStateValue {
   // optimistic local update on toggle so the UI doesn't wait on the IPC
   // round trip.
   myList: Set<string>
-  toggleMyList: (media: MediaItem) => void
+  /** Plans or un-plans a title. With `to`, a no-op when the title is
+   *  already there: what an Undo calls, so a late press cannot flip it the
+   *  other way. Putting a title on the plan, or taking it off, raises a
+   *  toast with an Undo. */
+  toggleMyList: (media: MediaItem, to?: boolean) => void
   /**
    * The one status a title has — not watched, plan to watch, watched —
    * set as a whole. Main decides what that takes (every aired episode of
@@ -240,7 +255,9 @@ interface AppStateValue {
    *  create/delete: a backup from another machine carries that machine's
    *  profile ids, and they are merged into settings by the import. */
   refreshProfiles: () => void
-  toggleDisliked: (media: MediaItem) => void
+  /** Same shape as toggleMyList, `to` included. The toast and its Undo are
+   *  raised by the caller, which knows which way the click went. */
+  toggleDisliked: (media: MediaItem, to?: boolean) => void
 
   // Continue Watching — seeded from the media-hub backend's
   // home:personalized (episode-level watch tracking, not a mock array —
@@ -274,6 +291,13 @@ interface AppStateValue {
     discrepancy: WatchStatusDiscrepancy,
     resolution: ReconcileResolution
   ) => void
+  /** The review panel's shows section: per show, the episodes that arrived
+   *  from each service and the ones sent to it, not reviewed yet — see
+   *  main/media-hub/episodeSync.ts. */
+  syncShows: ShowSyncRow[]
+  /** One choice on one show row. The row leaves at once; the changes for
+   *  the services go out a few seconds after the last choice. */
+  decideSyncShow: (row: ShowSyncRow, action: ShowSyncAction, service?: EpisodeSyncService) => void
 
   // The flat "browse everything" pool (movies + series + anime, real
   // catalog:list data when available, the previous session's remembered
@@ -357,6 +381,11 @@ interface AppStateValue {
    *  'processing', which covers the model — the results row and the prose
    *  arrive separately and each shows its own waiting state. */
   assistantSearching: boolean
+  /** One of the online catalogs could not be reached for the current
+   *  question, so assistantResults holds only titles already in the
+   *  library. The panel says so rather than letting a missing title read
+   *  as one that does not exist. */
+  assistantProviderUnreachable: boolean
   runAssistantQuery: (query: string) => void
   closeAssistant: () => void
 
@@ -376,6 +405,10 @@ interface AppStateValue {
     results: MediaItem[]
     loading: boolean
     error: boolean
+    /** The online catalog for this kind could not be reached, so `results`
+     *  holds only what the library already had (see catalog.ts's
+     *  searchCatalog). */
+    providerUnreachable: boolean
   }
   runCategorySearch: (kind: CategoryKind, query: string) => void
   clearCategorySearch: () => void
@@ -525,6 +558,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // neutral starting point: it renders saved titles as unsaved, and the
   // Add control it produces calls a toggle that removes them.
   const [myList, setMyList] = useState<Set<string>>(startupTrackedIdsFallback)
+  // What toggleMyList's `to` is checked against. An Undo runs seconds after
+  // the render that created it, so it reads the plan from here rather than
+  // from the closure.
+  const myListRef = useRef(myList)
+  useEffect(() => {
+    myListRef.current = myList
+  }, [myList])
   const [dislikedIds, setDislikedIds] = useState<Set<string>>(new Set())
   // Seeded from the same remembered feed useMediaHubHomeFeed falls back
   // to, so the row this component owns and the row that hook reports
@@ -545,7 +585,36 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [watchStatusVersion, setWatchStatusVersion] = useState(0)
   const reloadLibrary = useCallback(() => setLibraryEpoch((n) => n + 1), [])
 
-  const homeFeed = useMediaHubHomeFeed(libraryKey)
+  // Titles whose status was changed on the page now on screen, with what
+  // the change did to them. The home feed keeps them at their place until
+  // the route changes, so a card acted on from Home's Recommended row, a
+  // For You rail or the hero does not vanish under the click. Filled by
+  // holdInFeed below; see lib/mediaHub/heldFeed.ts.
+  const heldFeedRef = useRef<Map<string, HeldChange>>(new Map())
+  const holdInFeed = useCallback((id: string, change: HeldChange = {}) => {
+    const held = heldFeedRef.current
+    held.set(id, { ...held.get(id), ...change })
+  }, [])
+  const homeFeed = useMediaHubHomeFeed(libraryKey, heldFeedRef)
+  // Leaving the page for another top-level page lets them go: the set is
+  // cleared and the feed refetched, so the next page shows the ranking as
+  // it stands. A title's page opened on top of it, and the way back, keep
+  // them (heldPageAfterRoute). Keyed on the path alone, so a library page's
+  // filter changes, which only touch the query string, keep them too.
+  const heldPageRef = useRef<string | null>(null)
+  const refreshHomeFeedForHeld = homeFeed.refresh
+  useEffect(() => {
+    const { page, release } = heldPageAfterRoute(heldPageRef.current, location.pathname)
+    heldPageRef.current = page
+    if (!release || heldFeedRef.current.size === 0) return
+    heldFeedRef.current.clear()
+    refreshHomeFeedForHeld()
+  }, [location.pathname, refreshHomeFeedForHeld])
+  // Another profile's library is not this page's: drop them without the
+  // refetch, which the new library key brings anyway.
+  useEffect(() => {
+    heldFeedRef.current.clear()
+  }, [libraryKey])
   const watchedIdsResult = useMediaHubWatchedIds(libraryKey)
   const dislikedIdsResult = useMediaHubDislikedIds(libraryKey)
   // Ratings have no refresh() of their own (the hook adopts what the backend
@@ -587,6 +656,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     similar: CatalogItem[]
     similarSource: 'model' | 'catalog' | null
     searching: boolean
+    providerUnreachable?: boolean
   }>({ results: [], similar: [], similarSource: null, searching: false })
   // A STACK, not a slot. Opening a title from another title (the Rest of
   // the series / Similar / Story panels) pushes a second origin, and a
@@ -637,6 +707,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     items: CatalogItem[]
     loading: boolean
     error: boolean
+    /** Set only by an answered search; absent reads as reachable. */
+    providerUnreachable?: boolean
   }>({
     kind: null,
     query: '',
@@ -702,7 +774,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       query: categorySearchRaw.query,
       results: categorySearchRaw.items.map((item) => catalogItemToMediaItem(item, adapterContext)),
       loading: categorySearchRaw.loading,
-      error: categorySearchRaw.error
+      error: categorySearchRaw.error,
+      providerUnreachable: categorySearchRaw.providerUnreachable === true
     }),
     [categorySearchRaw, adapterContext]
   )
@@ -893,8 +966,15 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     })
   }, [refreshPartyStatus, pushNotification])
 
+  // The plan toasts' Undo calls toggleMyList from inside toggleMyList, so
+  // it goes through a ref, filled in once toggleMyList exists just below.
+  const toggleMyListRef = useRef<(media: MediaItem, to?: boolean, fromUndo?: boolean) => void>(
+    () => {}
+  )
   const toggleMyList = useCallback(
-    (media: MediaItem) => {
+    (media: MediaItem, to?: boolean, fromUndo = false) => {
+      if (!toggleApplies(myListRef.current.has(media.id), to)) return
+      holdInFeed(media.id)
       // This used to refuse the click outright when `media.id` was not
       // expressible to a tracking service, on the grounds that such an id
       // could only have come from mockData's demo pool (the source of the
@@ -925,9 +1005,16 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // here, same as the sibling mutations, ensures any such stale fetch
       // gets cancelled and a fresh one (reflecting this toggle's already-
       // completed, synchronous db write) supersedes it.
-      window.api?.mediaHub?.tracking
-        .toggle(mediaItemToTrackablePayload(media))
-        .then((result) => {
+      // The Undo on the "off your plan" toast puts back the row the removal
+      // took out (when it was planned, the episode count it runs from, its
+      // details) rather than planning the title afresh; it reaches the
+      // services as an add either way. Every other press is the toggle.
+      const tracking = window.api?.mediaHub?.tracking
+      const payload = mediaItemToTrackablePayload(media)
+      const write =
+        fromUndo && to === true ? tracking?.restorePlan(payload) : tracking?.toggle(payload)
+      write
+        ?.then((result) => {
           // Persisted from the toggle's own answer rather than waiting for
           // the refresh below to carry it. That refresh throws whenever
           // every catalog source is down — precisely when someone is most
@@ -946,6 +1033,24 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             forgetContinueWatching(media.id)
           }
           homeFeed.refresh()
+          // A plan is one click from a card's menu, and on a recommendation
+          // row it is also what takes the card out of the row; Remove from
+          // plan is one click too. Each toast's Undo is the one-click way
+          // back, and an Undo raises no toast of its own. See statusToasts.ts.
+          const toast = toastAfterPlanToggle(result?.tracked, fromUndo)
+          if (toast === 'planned') {
+            pushNotification(
+              plannedToast(media, activeProfileId, () =>
+                toggleMyListRef.current(media, false, true)
+              )
+            )
+          } else if (toast === 'unplanned') {
+            pushNotification(
+              unplannedToast(media, activeProfileId, () =>
+                toggleMyListRef.current(media, true, true)
+              )
+            )
+          }
         })
         .catch(() => {
           // Best-effort — the optimistic local toggle above already reflects
@@ -953,11 +1058,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // refresh, not a broken UI in the moment.
         })
     },
-    [homeFeed]
+    [homeFeed, pushNotification, activeProfileId, holdInFeed]
   )
+  useEffect(() => {
+    toggleMyListRef.current = toggleMyList
+  }, [toggleMyList])
 
   const toggleDisliked = useCallback(
-    (media: MediaItem) => {
+    (media: MediaItem, to?: boolean) => {
       const api = window.api?.mediaHub
       // The write goes out once the optimistic set is decided, then the hook
       // is re-read so its own copy — the one that reseeds this state on the
@@ -966,7 +1074,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       const settle = (write: Promise<unknown> | undefined): void => {
         void write?.then(() => dislikedIdsResult.refresh()).catch(() => {})
       }
+      holdInFeed(media.id)
       setDislikedIds((prev) => {
+        if (!toggleApplies(prev.has(media.id), to)) return prev
         const next = new Set(prev)
         if (next.has(media.id)) {
           next.delete(media.id)
@@ -983,7 +1093,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // out of the rail instead of lingering until some unrelated refetch.
       homeFeed.refresh()
     },
-    [homeFeed, dislikedIdsResult]
+    [homeFeed, dislikedIdsResult, holdInFeed]
   )
 
   const markContinueWatching = useCallback(
@@ -1117,6 +1227,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // run — repeatedly closing and reopening the app can't turn into
   // repeated Simkl requests.
   const [syncDiscrepancies, setSyncDiscrepancies] = useState<WatchStatusDiscrepancy[]>([])
+  const [syncShows, setSyncShows] = useState<ShowSyncRow[]>([])
   const [syncReviewOpen, setSyncReviewOpen] = useState(false)
   const [controlCentreOpen, setControlCentreOpen] = useState(false)
 
@@ -1130,6 +1241,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   if (discrepanciesFor !== libraryKey) {
     setDiscrepanciesFor(libraryKey)
     setSyncDiscrepancies([])
+    setSyncShows([])
     setSyncReviewOpen(false)
   }
 
@@ -1140,14 +1252,28 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       api
         .reconcileCheck()
         .then((result) => {
-          if (!result.discrepancies.length) return
+          const shows = result.shows ?? []
+          setSyncShows(shows)
+          if (!result.discrepancies.length && !shows.length) return
           setSyncDiscrepancies(result.discrepancies)
-          pushNotification({
-            tone: 'info',
-            message:
+          const said: string[] = []
+          if (result.discrepancies.length) {
+            said.push(
               result.discrepancies.length === 1
                 ? `"${result.discrepancies[0].title}" is out of sync with Simkl.`
-                : `${result.discrepancies.length} titles are out of sync with Simkl.`,
+                : `${result.discrepancies.length} titles are out of sync with Simkl.`
+            )
+          }
+          if (shows.length) {
+            said.push(
+              shows.length === 1
+                ? `Episodes of "${shows[0].title}" were synced with your tracking services.`
+                : `Episodes of ${shows.length} shows were synced with your tracking services.`
+            )
+          }
+          pushNotification({
+            tone: 'info',
+            message: said.join(' '),
             action: { label: 'Review', run: () => setSyncReviewOpen(true) }
           })
         })
@@ -1189,6 +1315,91 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           homeFeed.refresh()
         })
         .catch(() => {})
+    },
+    [watchedIdsResult, homeFeed, pushNotification]
+  )
+
+  // Rows a pass adds after the launch check (the catch-up on focus, the
+  // half-hourly job, or the launch check's own comparison, which it does
+  // not wait for) are pushed from main, so the top bar's button counts
+  // them even when launch found nothing.
+  useEffect(() => {
+    const api = window.api?.mediaHub?.tracking
+    if (!api?.onEpisodeReview) return
+    return api.onEpisodeReview((event) => setSyncShows(event.shows))
+  }, [])
+
+  // And read again whenever the panel opens.
+  useEffect(() => {
+    if (!syncReviewOpen) return
+    const api = window.api?.mediaHub?.tracking
+    if (!api?.episodeReview) return
+    let current = true
+    api
+      .episodeReview()
+      .then((result) => {
+        if (current) setSyncShows(result.shows)
+      })
+      .catch(() => {})
+    return () => {
+      current = false
+    }
+  }, [syncReviewOpen])
+
+  const decideSyncShow = useCallback(
+    (row: ShowSyncRow, action: ShowSyncAction, service?: EpisodeSyncService) => {
+      const api = window.api?.mediaHub?.tracking
+      if (!api?.episodeDecide) return
+      // Optimistic, like the film rows: the row leaves now. The choice is
+      // recorded in main before the call returns; one that could not be is
+      // put back below and said out loud.
+      setSyncShows((prev) => prev.filter((r) => r.id !== row.id))
+      const putBack = (error?: string): void => {
+        setSyncShows((prev) => (prev.some((r) => r.id === row.id) ? prev : [...prev, row]))
+        pushNotification({
+          tone: 'error',
+          message: `Could not keep your choice for "${row.title}". ${error ?? 'Nothing was changed.'}`
+        })
+      }
+      api
+        .episodeDecide({ id: row.id, action, ...(service ? { service } : {}) })
+        .then((result) => {
+          if (!result.ok) {
+            putBack(result.error)
+            return
+          }
+          for (const { service: blocked, seasons } of result.cannotSend) {
+            const name = blocked === 'simkl' ? 'Simkl' : 'Trakt'
+            pushNotification({
+              tone: 'info',
+              message: `"${row.title}": ${seasons.length === 1 ? `season ${seasons[0]}` : `seasons ${seasons.join(', ')}`} cannot be sent to ${name}, so it was left as it is there.`
+            })
+          }
+          // What is left of the row (another service's part) comes back.
+          void api
+            .episodeReview()
+            .then((next) => setSyncShows(next.shows))
+            .catch(() => {})
+          if (result.removedHere) {
+            watchedIdsResult.refresh()
+            homeFeed.refresh()
+          }
+        })
+        // A call that failed outright (a database error part way) is said,
+        // and the section is read again for where it now stands; the row
+        // comes back if even that cannot be read.
+        .catch(() => {
+          pushNotification({
+            tone: 'error',
+            message: `Something went wrong with your choice for "${row.title}".`
+          })
+          api
+            .episodeReview()
+            .then((next) => setSyncShows(next.shows))
+            .catch(() =>
+              setSyncShows((prev) => (prev.some((r) => r.id === row.id) ? prev : [...prev, row]))
+            )
+        })
     },
     [watchedIdsResult, homeFeed, pushNotification]
   )
@@ -1928,6 +2139,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       }
       const id = media.id
       const wasPlanned = myList.has(id)
+      // What the change does to the title's own flags, for its held copy
+      // in the home feed: watched is every aired episode, not watched is
+      // none, and a plan leaves them as they are.
+      holdInFeed(
+        id,
+        status === 'watched'
+          ? { watched: true, completed: true }
+          : status === 'unwatched'
+            ? { watched: false, completed: false }
+            : {}
+      )
       // Shown as where the write lands: clearing a planned title leaves
       // its plan (titleStatusRules.ts), so what comes back is Planned.
       setTitleStatusPending((prev) => ({
@@ -1975,6 +2197,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           if (status === 'watched') forgetContinueWatching(id)
           settle()
           clearPending()
+          // A plan from the pill gets the same toast and Undo as one from
+          // the card menu; planToastAfterStatus says when.
+          if (planToastAfterStatus(status, wasPlanned, episodes)) {
+            pushNotification(
+              plannedToast(media, result.profileId, () => toggleMyList(media, false, true))
+            )
+          }
           // A whole show in one click is worth a word, and a way back: the
           // undo replays exactly the rows this change reported, dates and
           // all, and touches nothing else. An undo itself (episodes given)
@@ -2045,6 +2274,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         })
         .catch((error: unknown) => {
           clearPending()
+          // Nothing changed, so the held copy keeps its own flags.
+          heldFeedRef.current.set(id, {})
           // Put the plan set back exactly; the watched sets never moved.
           if (status === 'planned' || (status === 'watched' && wasPlanned)) {
             setMyList((prev) => {
@@ -2061,7 +2292,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           })
         })
     },
-    [homeFeed, watchedIdsResult, pushNotification, myList]
+    [homeFeed, watchedIdsResult, pushNotification, myList, toggleMyList, holdInFeed]
   )
 
   const partyPanelReportedOpen = useRef<boolean | null>(null)
@@ -2652,9 +2883,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
       void (async () => {
         // --- 1. The app's own answer, with no model involved ------------
-        const found = await searchAppCatalog(question).catch((): CatalogItem[] => [])
+        const { items: found, providerUnreachable } = await searchAppCatalogWithStatus(
+          question
+        ).catch(() => ({ items: [] as CatalogItem[], providerUnreachable: false }))
         if (!current()) return
-        setAssistantFindings({ results: found, similar: [], similarSource: null, searching: false })
+        setAssistantFindings({
+          results: found,
+          similar: [],
+          similarSource: null,
+          searching: false,
+          providerUnreachable
+        })
 
         // --- 2. What the model makes of it ------------------------------
         // Asked unconditionally whenever the bridge exists, and NOT gated
@@ -2776,10 +3015,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       return
     }
     api.catalog
-      .search(kind, q)
-      .then((items) => {
+      .searchWithStatus(kind, q)
+      .then(({ items, providerUnreachable }) => {
         if (searchGeneration.current !== generation) return
-        setCategorySearchRaw({ kind, query, items, loading: false, error: false })
+        setCategorySearchRaw({
+          kind,
+          query,
+          items,
+          loading: false,
+          error: false,
+          providerUnreachable
+        })
       })
       .catch(() => {
         if (searchGeneration.current !== generation) return
@@ -2861,6 +3107,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       assistantSimilar,
       assistantSimilarSource: assistantFindings.similarSource,
       assistantSearching: assistantFindings.searching,
+      assistantProviderUnreachable: assistantFindings.providerUnreachable === true,
       runAssistantQuery,
       closeAssistant,
       categorySearch,
@@ -2897,7 +3144,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       controlCentreOpen,
       setSyncReviewOpen,
       setControlCentreOpen,
-      resolveSyncDiscrepancy
+      resolveSyncDiscrepancy,
+      syncShows,
+      decideSyncShow
     }),
     [
       profiles,
@@ -2957,6 +3206,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       assistantSimilar,
       assistantFindings.similarSource,
       assistantFindings.searching,
+      assistantFindings.providerUnreachable,
       runAssistantQuery,
       closeAssistant,
       categorySearch,
@@ -2990,7 +3240,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       syncDiscrepancies,
       syncReviewOpen,
       controlCentreOpen,
-      resolveSyncDiscrepancy
+      resolveSyncDiscrepancy,
+      syncShows,
+      decideSyncShow
     ]
   )
 

@@ -706,7 +706,7 @@ function MoreOptionsSection({
         icon="thumbs-down"
         title="Hide disliked by default"
         description="Anything marked “Not interested” (see a title's context menu) is hidden by default, everywhere it would otherwise appear."
-        checked={mediaHubSettings?.hideDislikedDefault ?? false}
+        checked={mediaHubSettings?.hideDislikedDefault ?? true}
         onChange={handleToggleHideDisliked}
       />
       {!quick && (

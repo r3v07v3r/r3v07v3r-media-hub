@@ -23,9 +23,10 @@
 //    backend whose interface has ever asked for that panel. The phone and
 //    TV app never do.
 //
-// What is OWED is not polling and is not gated: plan changes a service
-// refused are retried inside every pull, and queued history decisions are
-// flushed on every pass, whatever the gate said.
+// What is OWED is not polling and is not gated: history pushes that failed
+// when they were made are retried first, plan changes a service refused are
+// retried inside every pull, and queued history decisions are flushed on
+// every pass, whatever the gate said.
 //
 // The dependencies are injected, as in simklCatchUp.ts and for the same
 // reason: everything real reaches Electron, and the test drives a pass
@@ -280,12 +281,56 @@ export async function pullPlannedGated(
   return report
 }
 
+/**
+ * Whether the review panel's diff on record is still the answer: made
+ * against a library fetched from Simkl under this films stamp, with these
+ * films watched here (localFilmsSignature). The half-hourly pass below and
+ * the desktop's launch check (tracking.ts's reconcileCheck) both ask, so
+ * neither reads Simkl's films again when neither side has moved.
+ */
+export function filmDiffCurrent(
+  db: Pick<MediaHubDatabase, 'getCache'>,
+  profile: string,
+  account: string,
+  movies: string | null,
+  local: string
+): boolean {
+  const diffed = watchSyncStateFor(
+    db.getCache(stateKey(profile), { allowExpired: true }),
+    account
+  ).diffed
+  return Boolean(diffed && diffed.movies === movies && diffed.local === local)
+}
+
+/** Records a diff made against a library fetched from Simkl just now, under
+ *  the films stamp read before it and the local films as they were then. */
+export function recordFilmDiff(
+  db: Pick<MediaHubDatabase, 'getCache' | 'putCache'>,
+  profile: string,
+  account: string,
+  movies: string | null,
+  local: string,
+  now: number
+): void {
+  const key = stateKey(profile)
+  const state = watchSyncStateFor(db.getCache(key, { allowExpired: true }), account)
+  state.diffed = { movies, local, at: now }
+  db.putCache(key, state, STATE_TTL_MS, { durable: true })
+}
+
 export interface WatchSyncDeps extends GatedPullDeps {
   db: Pick<MediaHubDatabase, 'activeProfile' | 'getCache' | 'putCache' | 'history'>
   /** GET /sync/activities, raw. Throws an HttpError (with `status`) on failure. */
   activities(): Promise<unknown>
   /** Sends the history decisions still queued (tracking's flushPendingPushes). */
   flushPushes(): Promise<unknown>
+  /** Sends the history pushes that failed when they were made
+   *  (tracking's retryHistoryPushes, historyRetry.ts). Optional so a test
+   *  that is not about it can leave it out. */
+  retryHistory?(): Promise<unknown>
+  /** Brings in what Trakt says was watched since the last pull
+   *  (traktHistoryPull.ts), after the watchlists. Optional, as above. */
+  pullTraktHistory?(): Promise<unknown>
   /** Whether anything in this process has asked for the review panel's
    *  check. False for the whole life of a backend whose interface has no
    *  such panel, and the diff is then never made. */
@@ -360,13 +405,23 @@ async function readGate(
 /**
  * One pass of the recurring watch-sync job.
  *
- * In the order things have to happen: the gate; the watchlists (which is
- * also where plan changes a service refused are retried); the history
- * decisions still queued; and last, if this backend has a review panel and
- * the films on either side moved, the diff that panel shows.
+ * In the order things have to happen: the history pushes still owed; the
+ * gate; the watchlists (which is also where plan changes a service refused
+ * are retried); Trakt's history; the history decisions still queued; and
+ * last, if this backend has a review panel and the films on either side
+ * moved, the diff that panel shows.
  */
 export async function runWatchSync(deps: WatchSyncDeps, memory: WatchSyncMemory): Promise<void> {
   const { db } = deps
+  // Owed, like the flush below, and first: a push that failed half an hour
+  // ago has waited long enough, and needs no gate to be sent.
+  if (deps.retryHistory) {
+    try {
+      await deps.retryHistory()
+    } catch (error) {
+      deps.log('job:watch-sync:history-retry', error)
+    }
+  }
   // Who this pass is for, captured before the first wait. Switching profile
   // or Simkl account during it is ordinary, and the record written at the
   // end must not vouch for somebody else's library.
@@ -383,6 +438,17 @@ export async function runWatchSync(deps: WatchSyncDeps, memory: WatchSyncMemory)
   } catch (error) {
     deps.log('job:planned-sync', error)
   }
+  // Trakt's history after the watchlists, as the catch-up takes Simkl's:
+  // the pull refuses to plan anything with local history. Trakt has its own
+  // gate (/sync/last_activities), so this is one small request when nothing
+  // changed, and it does not need Simkl.
+  if (deps.pullTraktHistory) {
+    try {
+      await deps.pullTraktHistory()
+    } catch (error) {
+      deps.log('job:trakt-history', error)
+    }
+  }
   if (!deps.account()) return
 
   // Owed, not polled: a decision made in a previous session that never
@@ -394,14 +460,12 @@ export async function runWatchSync(deps: WatchSyncDeps, memory: WatchSyncMemory)
   // libraries fetched for nobody.
   if (!deps.reviewAsked() || !gate.stamps) return
   if (db.activeProfile() !== profile || deps.account() !== account) return
-  const key = stateKey(profile)
-  const diffed = watchSyncStateFor(db.getCache(key, { allowExpired: true }), account).diffed
   // Films only, because the diff is: it compares the films watched here
   // with the films watched there, and an episode watched moves neither.
   // Both sides, because either can move alone. Read before the diff, like
   // the stamp: a film marked while it runs is then seen by the next pass.
   const local = localFilmsSignature(db.history())
-  if (diffed && diffed.movies === gate.stamps.movies && diffed.local === local) return
+  if (filmDiffCurrent(db, profile, account, gate.stamps.movies, local)) return
   let fetched = false
   try {
     fetched = await deps.reconcile()
@@ -413,7 +477,5 @@ export async function runWatchSync(deps: WatchSyncDeps, memory: WatchSyncMemory)
   // pass asks again.
   if (!fetched) return
   if (db.activeProfile() !== profile || deps.account() !== account) return
-  const state = watchSyncStateFor(db.getCache(key, { allowExpired: true }), account)
-  state.diffed = { movies: gate.stamps.movies, local, at: deps.now() }
-  db.putCache(key, state, STATE_TTL_MS, { durable: true })
+  recordFilmDiff(db, profile, account, gate.stamps.movies, local, deps.now())
 }

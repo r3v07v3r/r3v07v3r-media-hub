@@ -56,9 +56,11 @@ import {
   cachedTvdbSeries,
   currentAnimeGroups,
   groupedIdsFor,
+  regroupPlaceIsSeason,
   resolveAnimeGroupTarget,
   seasonMatchesPage
 } from './animeSeasons'
+import { backupBeforeRewrite } from './autoBackup'
 import { getDatabase } from './dbState'
 import { logError } from './logger'
 import { requestRecommendationsRebuild } from './recommendations'
@@ -111,10 +113,19 @@ export function keepAnimeHistoryWithShows(): number {
     // And no catalog at all has no groups for the same wrong reason.
     const groups = currentAnimeGroups()
     if (!groups) return 0
+    const db = getDatabase()
     const result = followAnimeRegroup(
-      getDatabase(),
+      {
+        animeGroupLedger: () => db.animeGroupLedger(),
+        // A backup first whenever the regroup is about to move rows, not
+        // when it only records the grouping (autoBackup.ts).
+        moveAnimeHistory: (plan, ledger) => {
+          if (plan.moves.length || plan.ratings?.length) backupBeforeRewrite('anime-regroup')
+          return db.moveAnimeHistory(plan, ledger)
+        }
+      },
       animeGroupRecordsOf(groups, cachedTvdbSeries),
-      seasonMatchesPage
+      regroupPlaceIsSeason
     )
     for (const miss of result.left) {
       logError('anime:regroup', `${miss.id} left where it is: ${miss.why}`)
@@ -223,6 +234,8 @@ export function repairAnimeSyncIds(): { repaired: number; ran: boolean } {
       }
     }
 
+    // Both of these move history rows to other ids: a backup first.
+    if (mappings.size || stranded.length) backupBeforeRewrite('anime-repair')
     let repaired = mappings.size ? db.remapContentIds([...mappings.values()]) : 0
     if (stranded.length) repaired += db.moveAnimeHistory({ moves: stranded }).history
     const settings = readSettings()

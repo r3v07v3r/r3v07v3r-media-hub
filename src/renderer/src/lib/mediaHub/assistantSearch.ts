@@ -62,16 +62,40 @@ function dedupeById(items: CatalogItem[]): CatalogItem[] {
  * first.
  */
 export async function searchAppCatalog(query: string): Promise<CatalogItem[]> {
+  return (await searchAppCatalogWithStatus(query)).items
+}
+
+/**
+ * searchAppCatalog, plus whether any kind's online catalog could not be
+ * reached. When one could not, the list holds only what the library already
+ * had for that kind, and the answer panel says so: otherwise a title the
+ * provider alone knew would read as one the app does not have. A kind whose
+ * whole request failed counts the same way.
+ */
+export async function searchAppCatalogWithStatus(
+  query: string
+): Promise<{ items: CatalogItem[]; providerUnreachable: boolean }> {
   const q = query.trim()
-  if (q.length < MIN_QUERY_LENGTH) return []
+  if (q.length < MIN_QUERY_LENGTH) return { items: [], providerUnreachable: false }
   const api = window.api?.mediaHub?.catalog
-  if (!api) return []
+  if (!api) return { items: [], providerUnreachable: false }
 
   const perKind = await Promise.all(
-    KINDS.map((kind) => api.search(kind, q).catch((): CatalogItem[] => []))
+    KINDS.map((kind) =>
+      api
+        .searchWithStatus(kind, q)
+        .catch(() => ({ items: [] as CatalogItem[], providerUnreachable: true }))
+    )
   )
 
-  return mergeSearchResults(q, perKind, MAX_ASSISTANT_RESULTS)
+  return {
+    items: mergeSearchResults(
+      q,
+      perKind.map((answer) => answer.items),
+      MAX_ASSISTANT_RESULTS
+    ),
+    providerUnreachable: perKind.some((answer) => answer.providerUnreachable)
+  }
 }
 
 /**

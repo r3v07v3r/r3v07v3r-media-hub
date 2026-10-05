@@ -12,6 +12,10 @@
 // many were dropped for want of an id this app could file them under,
 // and the service's own error text when there was one. The counts are
 // the point; the button is a convenience.
+//
+// It is also where the rest of what this app sends the services is set and
+// reported: whether the player scrobbles, and how many watch-history pushes
+// failed and are waiting to be retried.
 
 import { useCallback, useEffect, useState } from 'react'
 import type { PlannedServiceReport, PlannedSyncReport } from '@shared/media-hub/types'
@@ -63,10 +67,18 @@ export function WatchlistSyncSection() {
   const [report, setReport] = useState<PlannedSyncReport | null>(null)
   const [busy, setBusy] = useState(false)
   const twoWay = mediaHubSettings?.watchlistTwoWay !== false
+  const scrobble = mediaHubSettings?.scrobbleEnabled === true
 
   const setTwoWay = (enabled: boolean): void => {
     void window.api?.mediaHub?.tracking
       ?.setWatchlistTwoWay?.(enabled)
+      .then(() => refreshMediaHubSettings())
+      .catch(() => {})
+  }
+
+  const setScrobble = (enabled: boolean): void => {
+    void window.api?.mediaHub?.tracking
+      ?.setScrobble?.(enabled)
       .then(() => refreshMediaHubSettings())
       .catch(() => {})
   }
@@ -146,6 +158,32 @@ export function WatchlistSyncSection() {
         </button>
       </div>
 
+      {/* Off by default. The watched mark at 80% reaches the services
+          whatever this says; scrobbles are the extra live updates, and they
+          are what spends Simkl's daily allowance fastest. */}
+      <div className={styles.row}>
+        <div className={styles.rowIcon} aria-hidden="true">
+          <Icon name="play" size={17} />
+        </div>
+        <div className={styles.rowText}>
+          <span className={styles.rowTitle}>Scrobble while playing</span>
+          <span className={styles.rowDescription}>
+            Tells Simkl and Trakt what is playing as you play, pause and stop it; a finished episode
+            or film is recorded either way. Simkl allows 500 requests a day per account, shared with
+            a phone linked to this computer, and every scrobble counts against it.
+          </span>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={scrobble}
+          className={styles.testButton}
+          onClick={() => setScrobble(!scrobble)}
+        >
+          {scrobble ? 'On' : 'Off'}
+        </button>
+      </div>
+
       {report && (
         <>
           <ul className={styles.watchlistReport}>
@@ -159,6 +197,15 @@ export function WatchlistSyncSection() {
           <span className={styles.statusMessage}>
             {summarise(report)} — {when(report.at)}.
           </span>
+          {/* Watch-history pushes that failed, kept and retried with each
+              sync (historyRetry.ts). Said only when there are some. */}
+          {Boolean(report.historyPending) && (
+            <span className={styles.statusMessage}>
+              {report.historyPending === 1
+                ? '1 watched change has not reached a service yet; it is retried with each sync.'
+                : `${report.historyPending} watched changes have not reached a service yet; they are retried with each sync.`}
+            </span>
+          )}
         </>
       )}
     </section>

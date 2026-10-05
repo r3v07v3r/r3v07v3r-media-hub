@@ -99,6 +99,19 @@ export interface AnimeRowsMoved {
 }
 
 /** Normalizes an arbitrary catalog-ish item into the shape we persist for tracked/watched rows. */
+/** One tracked row as stored, every column but the profile. What an Undo
+ *  of Remove from plan writes back (tracking.ts's restore-plan handler). */
+export interface TrackedRow {
+  id: string
+  type: string
+  title: string
+  poster: string | null
+  metadataJson: string
+  trackedAt: string
+  baselineSeason: number
+  baselineEpisode: number
+}
+
 function normalizeTitle(item: TrackInput): TrackedItem {
   return {
     id: String(item.id),
@@ -278,8 +291,13 @@ function splitGenres(value: SQLOutputValue | undefined): string[] {
  */
 function indexWhere(
   query: CatalogQuery,
-  profileId: string
-): { sql: string; values: Record<string, SQLInputValue>; usesProfile: boolean } {
+  profileId: string,
+  laterSeasons?: LaterSeasons
+): {
+  sql: string
+  values: Record<string, SQLInputValue>
+  usesProfile: boolean
+} {
   const clauses: string[] = ['kind = @kind']
   // Named rather than positional, because the watch-state clauses below
   // reference @profile from inside subqueries and the same value is needed
@@ -346,9 +364,24 @@ function indexWhere(
     }
   }
 
+  // A later season of a merged anime is not a title of its own on the
+  // grid: its show is, and the season is a tab on the show's page. Its row
+  // stays in the index (a plan card pulled under its id reads it through
+  // indexByIds), and is left out here, in the WHERE that both the count and
+  // the page are cut from. See LATER_SEASON_SQL.
+  const hideLaterSeasons = query.kind === 'anime' && Boolean(laterSeasons?.size)
+  if (hideLaterSeasons) {
+    clauses.push(LATER_SEASON_SQL)
+    values.laterSeasons = JSON.stringify([...laterSeasons!.keys()])
+  }
+
   // The watch-state exclusions run HERE, in the same query, not over the
   // returned page — see CatalogQuery's own note on why filtering afterwards
   // makes both the page size and `total` wrong once anything is paged.
+  //
+  // Every row they see is read by its own id. The rows that are not (a later
+  // season, whose viewings are kept under its show) are the ones left out
+  // above.
   if (query.hideWatched) {
     clauses.push(`NOT ${WATCHED_SQL}`)
     usesProfile = true
@@ -363,7 +396,11 @@ function indexWhere(
   }
   if (usesProfile) values.profile = profileId
 
-  return { sql: clauses.join(' AND '), values, usesProfile }
+  return {
+    sql: clauses.join(' AND '),
+    values,
+    usesProfile
+  }
 }
 
 /**
@@ -411,15 +448,45 @@ const COMPLETED_SQL =
 /**
  * Which anime rows are a later season of a merged show, and where: the show
  * its viewings are kept under and the season there (animeSeasons.ts's
- * laterSeasonLookup — the grouping is not something this file knows).
+ * laterSeasons — the grouping is not something this file knows).
  *
- * COMPLETED_SQL counts the rows under a row's own id, and such a row has
- * none, so asked that way it is never complete. indexByIds and indexQuery
- * take this to count its `completedIds` membership where the rows are. The
- * hideWatched/hideCompleted FILTERS are not corrected by it: they run inside
- * the query, still on the row's own id.
+ * WATCHED_SQL and COMPLETED_SQL read the rows under a row's own id, and such
+ * a row has none, so asked that way it is never watched and never complete.
+ * indexByIds takes this to count its `completedIds` membership where the
+ * rows are (rowCompleted). indexQuery and indexSearch take it to leave such
+ * a row out (LATER_SEASON_SQL below).
+ *
+ * The whole mapping rather than a lookup, because the clause runs inside the
+ * query and SQL cannot call back to ask about one id.
  */
-export type LaterSeasonLookup = (id: string) => { id: string; season: number } | null
+export type LaterSeasons = ReadonlyMap<string, { id: string; season: number }>
+
+/**
+ * Leaves out the later seasons of merged shows: the ids in LaterSeasons,
+ * bound as one JSON array parameter, @laterSeasons.
+ *
+ * Only those ids, not every member a show fronts. A member whose place in
+ * its group cannot be shown to be its season on the show's page (a film or
+ * an OVA filed among the seasons, a mapping nobody has looked up) opens and
+ * saves as itself (animeSeasons.ts's laterSeasonOf), so its row is the only
+ * way to reach it and stays.
+ *
+ * IN against the JSON list, never a join: SQLite builds an IN list into an
+ * index of its own once per statement, where a join against the mapping was
+ * planned as a scan of it per catalog row (see the measurements PR 189 took
+ * for the same mapping).
+ *
+ * Measured the way PR 189 measured the season-aware filters it replaces, on
+ * a generated library of the same size (5,965 anime rows, 290 of them later
+ * seasons, 8,793 history rows), the count and page statements together,
+ * median of 200, two runs: 2.7 ms more than the same query without it with
+ * no filter on (4.2 ms against 1.5), mostly the count testing every row; 1.3
+ * to 1.9 ms more with Hide watched, Hide completed or a genre on. The
+ * season-aware Hide watched and Hide completed cost 4.7 to 5.9 ms more on the
+ * same library, and with the later seasons left out there is nothing for
+ * them to read: every row that is left keeps its viewings under its own id.
+ */
+const LATER_SEASON_SQL = 'catalog_index.id NOT IN (SELECT value FROM json_each(@laterSeasons))'
 
 /**
  * The ORDER BY for one sort key.
@@ -606,6 +673,13 @@ export interface MediaHubDatabase {
   importBackup(filePath: string): RestoreSummary
   track(item: Partial<CatalogItem> & { id: unknown }, now?: Date): TrackedItem
   untrack(id: string | number): boolean
+  /** The active profile's tracked row for `id` as stored, every column,
+   *  or null. Read just before an untrack so the row can be put back. */
+  trackedRow(id: string | number): TrackedRow | null
+  /** Writes `row` back exactly as trackedRow read it, its tracked_at,
+   *  baseline and metadata included, into the active profile. Does nothing
+   *  when the title is tracked again already; whether it wrote. */
+  restoreTracked(row: TrackedRow): boolean
   isTracked(id: string | number): boolean
   tracked(): TrackedItem[]
   markWatched(
@@ -831,6 +905,17 @@ export interface MediaHubDatabase {
    *  than merely old, and must not be served again. */
   deleteCache(key: string): void
   /**
+   * Reclaims cache rows nothing has refreshed for a month past their expiry,
+   * and reports how many went. See the implementation for why the grace
+   * window is that long. Not run when the database opens: catalog_cache has
+   * no index on expires_at, and the column sits after payload_json, so the
+   * scan walks every large blob's overflow pages. createDatabase runs before
+   * the window exists, so that scan was on time to first paint; the
+   * background job registry runs this instead (see backgroundJobs.ts's
+   * catalog-cache-prune job).
+   */
+  pruneExpiredCache(now?: number): number
+  /**
    * Records what a crawl saw into the accumulating title index.
    *
    * ACCUMULATES — it never deletes, and `first_seen` is never overwritten.
@@ -899,13 +984,20 @@ export interface MediaHubDatabase {
   indexList(kind: MediaKind, limit: number, offset?: number): CatalogItem[]
   /** One filtered, sorted, paged slice of the library, plus how many titles
    *  match the filters in total. See indexWhere/indexOrderBy for how each
-   *  clause maps onto the in-memory filter it reproduces. */
-  indexQuery(query: CatalogQuery, seasonOf?: LaterSeasonLookup): CatalogQueryResult
+   *  clause maps onto the in-memory filter it reproduces. `laterSeasons`
+   *  is for an anime query: those rows are left out (see LaterSeasons). */
+  indexQuery(query: CatalogQuery, laterSeasons?: LaterSeasons): CatalogQueryResult
   /** Titles of one kind whose name contains every word of `query`, best
    *  match first — the local half of catalog:search. This is what makes a
    *  title the crawl has already seen findable with no request at all,
-   *  and findable offline. Empty for a query with no words in it. */
-  indexSearch(kind: MediaKind, query: string, limit?: number): CatalogItem[]
+   *  and findable offline. Empty for a query with no words in it.
+   *  `laterSeasons` leaves those anime rows out, as indexQuery does. */
+  indexSearch(
+    kind: MediaKind,
+    query: string,
+    limit?: number,
+    laterSeasons?: LaterSeasons
+  ): CatalogItem[]
   /** The genre/year/status values that actually occur for one kind — the
    *  filter bar's dropdown contents, over the whole library rather than
    *  over whatever slice happens to be loaded. */
@@ -919,7 +1011,7 @@ export interface MediaHubDatabase {
    *  candidate pool becomes and however deep the index grows. */
   indexByIds(
     ids: readonly string[],
-    seasonOf?: LaterSeasonLookup
+    laterSeasons?: LaterSeasons
   ): { items: CatalogItem[]; completedIds: string[] }
   /** Which of these ids the index already holds for one kind — the
    *  deep-scan skip set. A cheap id-only projection rather than
@@ -929,9 +1021,22 @@ export interface MediaHubDatabase {
    *  durable bookmark on this answer: claiming everything exists would
    *  make it add nothing AND move on, permanently skipping the chunk. */
   indexExistingIds(kind: MediaKind, ids: readonly string[]): Set<string> | null
+  /** Whether this kind has a row under this exact id, by primary key alone:
+   *  no grouped-sibling pass, so it costs one indexed lookup. Null when the
+   *  lookup failed. For callers on a hot path (indexTitleIfMissing runs on
+   *  every open and every watched mark) that only need indexExistingIds'
+   *  grouped pass when there is no direct row. */
+  indexHasRow(kind: MediaKind, id: string): boolean | null
   /** The highest rank any row of this kind holds — the floor above which
    *  deep-scanned rows must land to stay UNDER the curated ordering. */
   indexMaxRank(kind: MediaKind): number
+  /** Every id some profile has tracked, watched, rated or marked Not for
+   *  me that has no catalog_index row under that id, with the kind and
+   *  title its own rows carry (null for an id known only by its rating).
+   *  Across all profiles, unlike every other read here: it feeds the
+   *  one-time index backfill (indexBackfill.ts), which is once per
+   *  database. Null when the read failed. */
+  indexBackfillCandidates(): Array<{ id: string; type: string | null; title: string | null }> | null
   trackedUpdates(details: CatalogItem[], now?: Date): TrackedUpdate[]
   close(): void
   filename: string
@@ -995,6 +1100,8 @@ interface PreparedQueries {
   restampWatched: StatementSync
   playCounts: StatementSync
   untrack: StatementSync
+  trackedRow: StatementSync
+  restoreTracked: StatementSync
   isTracked: StatementSync
   tracked: StatementSync
   trackedRows: StatementSync
@@ -1131,37 +1238,6 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           AND (@onto=0 OR (season>=1 AND (@onlyFirst=0 OR season=1)
                            AND NOT (@from=@to AND season=@toSeason)))`
 
-  // Reclaims rows nothing has read in a long time. `catalog_cache` had no
-  // eviction at all before this — every distinct key (a stream resolution,
-  // a title's metadata, a TVDB mapping, ...) accumulated forever, for the
-  // life of the install; a real user's database, inspected for the anime
-  // catalog audit this fixes, already carried 298 expired rows with entire
-  // categories (every related:v1:anime:*, meta:v3:anime:*, tmdb:season:*
-  // entry) 100% expired and never reclaimed.
-  //
-  // NOT `WHERE expires_at < now` — getCache's `allowExpired: true` callers
-  // (catalogData, metadata, similarTitles, localSimilar, relatedAnime, the
-  // TorBox stream-resolve cache, Simkl's watched-history cache — eight
-  // sites in total) deliberately serve an EXPIRED row as an emergency
-  // fallback when a live refresh fails, e.g. the network is down right
-  // when the app starts. Deleting a row the instant it expires would
-  // quietly disarm that fallback for anyone who restarts between a normal
-  // TTL lapse and their next successful refresh — turning "offline, but
-  // here's the last good answer" into "offline, here's nothing." The grace
-  // window below is generous specifically so that still works: it only
-  // reclaims rows that have been unrefreshed for a full month, well past
-  // every TTL in this app (the longest, the Kitsu/TMDB id-mapping caches,
-  // is itself 30 days) and past any realistic length of time offline.
-  const CACHE_PRUNE_GRACE_MS = 30 * 24 * 60 * 60 * 1000
-  try {
-    sql
-      .prepare('DELETE FROM catalog_cache WHERE expires_at < ?')
-      .run(Date.now() - CACHE_PRUNE_GRACE_MS)
-  } catch {
-    // Best-effort, same convention as every other cache operation in this
-    // file — a failed prune must not stop the app from opening its database.
-  }
-
   // Every statement scoped to one profile. `profile_id` is bound at call time
   // from `currentProfileId` rather than baked in, so switching profiles is a
   // variable assignment and not a re-prepare of the whole set.
@@ -1172,6 +1248,14 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
        ON CONFLICT(profile_id,content_id) DO UPDATE SET type=excluded.type,title=excluded.title,poster=excluded.poster,metadata_json=excluded.metadata_json`
     ),
     untrack: sql.prepare('DELETE FROM tracked WHERE profile_id=? AND content_id=?'),
+    trackedRow: sql.prepare(
+      'SELECT content_id,type,title,poster,metadata_json,tracked_at,baseline_season,baseline_episode FROM tracked WHERE profile_id=? AND content_id=?'
+    ),
+    restoreTracked: sql.prepare(
+      `INSERT INTO tracked(profile_id,content_id,type,title,poster,metadata_json,tracked_at,baseline_season,baseline_episode)
+       VALUES(@profile,@id,@type,@title,@poster,@json,@trackedAt,@baselineSeason,@baselineEpisode)
+       ON CONFLICT(profile_id,content_id) DO NOTHING`
+    ),
     isTracked: sql.prepare('SELECT 1 FROM tracked WHERE profile_id=? AND content_id=?'),
     tracked: sql.prepare(
       'SELECT metadata_json FROM tracked WHERE profile_id=? ORDER BY tracked_at DESC'
@@ -1690,9 +1774,9 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
    *  `aired_episodes`) is complete — the SQL's own answer, except for a
    *  later season of a merged anime, which is counted where its viewings
    *  are: the same comparison against the same aired count, over that one
-   *  season of its show. See LaterSeasonLookup. */
-  function rowCompleted(row: Row, seasonOf: LaterSeasonLookup | undefined): boolean {
-    const part = seasonOf && row.kind === 'anime' ? seasonOf(String(row.id)) : null
+   *  season of its show. See LaterSeasons. */
+  function rowCompleted(row: Row, laterSeasons: LaterSeasons | undefined): boolean {
+    const part = row.kind === 'anime' ? laterSeasons?.get(String(row.id)) : undefined
     if (!part) return Number(row.completed) === 1
     const aired = Number(row.aired_episodes)
     if (!Number.isFinite(aired) || aired <= 0) return false
@@ -2132,6 +2216,46 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     untrack(id) {
       try {
         return durable(() => q.untrack.run(currentProfileId, String(id)).changes > 0)
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
+    trackedRow(id) {
+      try {
+        const row = q.trackedRow.get(currentProfileId, String(id)) as Row | undefined
+        if (!row) return null
+        return {
+          id: String(row.content_id),
+          type: String(row.type),
+          title: String(row.title),
+          poster: row.poster == null ? null : String(row.poster),
+          metadataJson: String(row.metadata_json),
+          trackedAt: String(row.tracked_at),
+          baselineSeason: Number(row.baseline_season) || 0,
+          baselineEpisode: Number(row.baseline_episode) || 0
+        }
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
+    restoreTracked(row) {
+      try {
+        return durable(
+          () =>
+            q.restoreTracked.run({
+              profile: currentProfileId,
+              id: row.id,
+              type: row.type,
+              title: row.title,
+              poster: row.poster,
+              json: row.metadataJson,
+              trackedAt: row.trackedAt,
+              baselineSeason: row.baselineSeason,
+              baselineEpisode: row.baselineEpisode
+            }).changes > 0
+        )
       } catch (error) {
         return fail(error as Error)
       }
@@ -2876,6 +3000,41 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       }
     },
 
+    pruneExpiredCache(now = Date.now()) {
+      // Reclaims rows nothing has read in a long time. `catalog_cache` had no
+      // eviction at all before this — every distinct key (a stream resolution,
+      // a title's metadata, a TVDB mapping, ...) accumulated forever, for the
+      // life of the install; a real user's database, inspected for the anime
+      // catalog audit this fixes, already carried 298 expired rows with entire
+      // categories (every related:v1:anime:*, meta:v3:anime:*, tmdb:season:*
+      // entry) 100% expired and never reclaimed.
+      //
+      // NOT `WHERE expires_at < now` — getCache's `allowExpired: true` callers
+      // (catalogData, metadata, similarTitles, localSimilar, relatedAnime, the
+      // TorBox stream-resolve cache, Simkl's watched-history cache — eight
+      // sites in total) deliberately serve an EXPIRED row as an emergency
+      // fallback when a live refresh fails, e.g. the network is down right
+      // when the app starts. Deleting a row the instant it expires would
+      // quietly disarm that fallback for anyone who restarts between a normal
+      // TTL lapse and their next successful refresh — turning "offline, but
+      // here's the last good answer" into "offline, here's nothing." The grace
+      // window below is generous specifically so that still works: it only
+      // reclaims rows that have been unrefreshed for a full month, well past
+      // every TTL in this app (the longest, the Kitsu/TMDB id-mapping caches,
+      // is itself 30 days) and past any realistic length of time offline.
+      const CACHE_PRUNE_GRACE_MS = 30 * 24 * 60 * 60 * 1000
+      try {
+        const result = sql
+          .prepare('DELETE FROM catalog_cache WHERE expires_at < ?')
+          .run(now - CACHE_PRUNE_GRACE_MS)
+        return Number(result.changes)
+      } catch {
+        // Best-effort, same convention as every other cache operation in this
+        // file — a failed prune costs disk space and nothing else.
+        return 0
+      }
+    },
+
     indexRefreshFromMetadata(kind, item, now = Date.now()) {
       const id = String(item?.id || '')
       if (!id) return
@@ -3007,7 +3166,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       }
     },
 
-    indexByIds(ids, seasonOf) {
+    indexByIds(ids, laterSeasons) {
       // Chunked: SQLite's bound-parameter ceiling is generous but a
       // watched-history id list is unbounded in principle, and 400 per
       // statement keeps every statement comfortably small.
@@ -3043,7 +3202,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
             .all(params) as Row[]
           for (const row of rows) {
             out.push(indexRowToItem(row, String(row.kind) as MediaKind, splitGenres(row.genres)))
-            if (rowCompleted(row, seasonOf)) completedIds.push(String(row.id))
+            if (rowCompleted(row, laterSeasons)) completedIds.push(String(row.id))
           }
         }
         return { items: out, completedIds }
@@ -3066,6 +3225,17 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         // Zero makes the caller fall back to its own offset-derived
         // floor — depth may interleave a little, nothing is lost.
         return 0
+      }
+    },
+
+    indexHasRow(kind, id) {
+      try {
+        return Boolean(
+          sql.prepare('SELECT 1 FROM catalog_index WHERE kind = ? AND id = ?').get(kind, id)
+        )
+      } catch (error) {
+        logError('catalog:index:has-row', error)
+        return null
       }
     },
 
@@ -3113,13 +3283,15 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       return found
     },
 
-    indexQuery(query, seasonOf) {
+    indexQuery(query, laterSeasons) {
       // Built and prepared per call rather than kept in `q`, because the
       // shape genuinely varies: eight optional filters is 256 combinations,
       // and precompiling them all to avoid one prepare on a keystroke-driven
       // path would be the wrong trade.
       try {
-        const where = indexWhere(query, currentProfileId)
+        // One `where` for both statements, so `total` counts exactly the rows
+        // the pages are cut from.
+        const where = indexWhere(query, currentProfileId, laterSeasons)
         const limit = Math.max(0, Math.min(query.limit ?? 60, 500))
         const offset = Math.max(0, query.offset ?? 0)
         const total = Number(
@@ -3144,7 +3316,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           items: rows.map((row) => indexRowToItem(row, query.kind, splitGenres(row.genres))),
           total,
           completedIds: rows
-            .filter((row) => rowCompleted(row, seasonOf))
+            .filter((row) => rowCompleted(row, laterSeasons))
             .map((row) => String(row.id))
         }
       } catch (error) {
@@ -3164,7 +3336,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       }
     },
 
-    indexSearch(kind, query, limit = 100) {
+    indexSearch(kind, query, limit = 100, laterSeasons) {
       // Matched against title_key, the title in the query's own form
       // (comparableTitle, migration 5): lowercased, diacritics folded,
       // punctuation flattened to spaces — so "amelie" finds "Amélie",
@@ -3196,6 +3368,13 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           values[`t${i}`] = `%${token}%`
           return `title_key LIKE @t${i}`
         })
+        // A later season is found as its show, not as a result of its own:
+        // the same rows the grid leaves out (LATER_SEASON_SQL), left out
+        // before the LIMIT so they take no place another title could have.
+        if (kind === 'anime' && laterSeasons?.size) {
+          clauses.push(LATER_SEASON_SQL)
+          values.laterSeasons = JSON.stringify([...laterSeasons.keys()])
+        }
         const rows = sql
           .prepare(
             `SELECT id,kind,title,year,rating,runtime_min,status,poster,background,logo,description,
@@ -3243,6 +3422,32 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         // has no genres", which is a claim, not an absence.
         logError('catalog:index:facets', error)
         return { genres: [], years: [], statuses: [] }
+      }
+    },
+
+    indexBackfillCandidates() {
+      try {
+        // MAX skips the NULLs a rating contributes, so an id that is also
+        // tracked or watched takes its kind and title from that row.
+        const rows = sql
+          .prepare(
+            `SELECT id, MAX(type) AS type, MAX(title) AS title FROM (
+               SELECT content_id AS id, type, title FROM tracked
+               UNION ALL SELECT content_id, type, title FROM watch_history
+               UNION ALL SELECT content_id, type, title FROM disliked
+               UNION ALL SELECT content_id, NULL, NULL FROM ratings
+             ) WHERE id NOT IN (SELECT id FROM catalog_index)
+             GROUP BY id ORDER BY id`
+          )
+          .all() as Row[]
+        return rows.map((row) => ({
+          id: String(row.id),
+          type: row.type == null ? null : String(row.type),
+          title: row.title == null ? null : String(row.title)
+        }))
+      } catch (error) {
+        logError('catalog:index:backfill-candidates', error)
+        return null
       }
     },
 

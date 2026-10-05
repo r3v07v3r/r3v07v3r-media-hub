@@ -53,6 +53,25 @@ export function parseRating(rating: string): number | undefined {
 }
 
 /**
+ * The chip a merged anime's card carries, "3 seasons" — or null for every
+ * other card.
+ *
+ * Kitsu has an entry per season, and the app merges a franchise's seasons
+ * into one show (animeSeasons.ts), so an anime card with more than one
+ * season is a merged show; the chip says the card stands for all of them.
+ * Series are left alone: every series has seasons, and saying so on each
+ * card would say nothing. Shared because the desktop card (from a MediaItem)
+ * and the phone's (from a CatalogItem) must agree on when it shows.
+ */
+export function mergedSeasonsLabel(
+  kind: string | undefined,
+  totalSeasons: number | undefined
+): string | null {
+  if (kind !== 'anime' || !totalSeasons || totalSeasons < 2) return null
+  return `${totalSeasons} seasons`
+}
+
+/**
  * The value `ORDER BY` uses for the "A–Z" sort.
  *
  * Two adjustments, both there to make SQLite's byte-order comparison land

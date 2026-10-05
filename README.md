@@ -55,14 +55,30 @@ trending feed (either one alone fills the grid), anime from Kitsu. No key is req
   rating, plus runtime for movies, number of seasons and episode length for series, episode count
   for anime, and status. Hide what you have started or watched, shows you are caught up on, and
   titles you marked **Not interested** (they collect under My Stuff → Not for me), in any
-  combination, and choose which of those start switched on
-  from the Settings page's Browsing card. Save any filter combination as a named view; it comes back as
+  combination, and choose which of those start switched on from the Settings page's Browsing card.
+  Hiding Not interested titles starts on. An install that had it saved as off before this default
+  (switched off in Settings, or stored by signing out on an earlier version) has it switched on
+  once, on the first launch of this version; switching it off after that sticks. A page's own toggle
+  shows them again, dimmed and marked. Save any filter combination as a named view; it comes back as
   a chip. **Scan deeper** on a category page pulls in more of the catalog than loaded by itself.
+  A title found only by search joins the library once you open or track it, and one pulled from a
+  service's plan-to-watch joins it when the pull brings it in, so it shows in the grids, My Stuff
+  and the Planned row like anything else (its poster arrives the first time it is opened). Titles
+  tracked, watched, rated or marked Not interested before this was the case are added once, in the
+  background, when the app is idle.
+  An anime whose seasons are merged into one show is one tile in the Anime library and in search,
+  on the desktop and the phone, with an "N seasons" chip on its poster; its rating is its first
+  season's. Its seasons are tabs on its page, and searching a later season's own name finds the
+  show.
 - **Recommendations that say why.** Home shows the top row; **For You** shows the whole ranking,
   shelved by reason: a franchise continuation, a director or actor who recurs in what you have watched, a genre
   match. After
   a film or anime, the next part of its series is offered first, and a rewatch counts. Your own
-  ratings steer it: a genre you watch often but enjoy little stops leading.
+  ratings steer it: a genre you watch often but enjoy little stops leading. An anime whose
+  seasons are merged into one show is suggested as that show, never as one of its later seasons.
+  A suggestion you plan, mark watched or mark Not interested from Home's row, a For You shelf or
+  the hero stays where it is, with its new badge, until you go to another page; opening a title and
+  coming back keeps it there.
 - **Cast and crew are clickable** once a TMDB key is connected: names open what else of theirs
   the catalog holds, and typing a director's name in search finds their films rather than films
   with their name in the title.
@@ -72,10 +88,16 @@ trending feed (either one alone fills the grid), anime from Kitsu. No key is req
 - **With a TMDB key** (optional): the age certificate for your region, cast and crew,
   the rest of a film's collection, better similar-title lists, and per-season episode data for
   grouped anime. **With an OMDb key**: the Rotten Tomatoes score.
-- **Anime franchises in story order.** An anime's page lays out its franchise (prequels, the main
-  or full story, side stories, spin-offs, recaps, sequels) from Kitsu, with no key needed. A show
-  merged from several seasons is treated as one title: what comes before it is what precedes its
-  first season, what comes after is what follows its last, and its own seasons are not listed.
+- **Anime franchises in release or story order.** An anime's page lays out its franchise
+  (prequels, the main or full story, side stories, spin-offs, recaps, sequels) from Kitsu, with no
+  key needed. A show merged from several seasons is treated as one title: what comes before it is
+  what precedes its first season, and what comes after is what follows its last. Only TV seasons
+  are merged: a film, OVA, ONA or special is a title of its own, listed on the show's page between
+  the seasons it came out between (on the phone and TV, in a Films and specials row under the
+  episodes, each saying which season it follows). On the desktop a Release order / Story order switch, remembered
+  on that computer, lists the whole franchise in story order instead: Kitsu's prequel and sequel
+  links decide, and air dates place what they leave unordered, so it is only as right as those
+  links. Film collections stay in release order.
 
 ### 2. Choose a source — needs TorBox or a Jellyfin server
 
@@ -93,6 +115,7 @@ limits:
    your resolution limit only. A partial download is resumed from the source it originally came
    from rather than restarted.
 2. **A paired [r3-cache](daemon/README.md) server on your LAN**, when it holds the title complete.
+   A server that has not answered within 3 seconds is treated as away, and the app moves on.
 3. **Your Jellyfin server.** On **Media server** a copy within your limits plays straight away and
    TorBox is never asked. On **Balanced**, the default, it also plays straight away unless a copy
    more than twice as sharp could exist within your limits: a 1080p copy always plays, a 720p copy
@@ -147,9 +170,13 @@ Playback is mpv, embedded inside the app's own window on Windows; there is no tr
 ### 4. Keep track — needs nothing
 
 - **One status per title:** not watched, planned, or watched. A pill on a title's page, in the
-  library side panel and on the Home hero cycles through the three; the right-click menu offers
-  **Plan to watch** and **Mark watched** (**Mark all watched** on a series) as separate items. Marking a whole series watched marks
-  every aired episode, and clearing it offers an undo. On the episode list, **Mark season watched**
+  library side panel and on the Home hero cycles through the three; the right-click menu (or the
+  **...** button on a card, in the Movies, Series and Anime grids too) offers
+  **Plan to watch** and **Mark watched** (**Mark all watched** on a series) as separate items, and
+  **Not interested**. A planned title can be taken off the plan from the same menu, or with
+  **Remove from plan** in the library side panel. Marking a whole series watched marks
+  every aired episode, and clearing it offers an undo. Plan to watch, Remove from plan and **Not
+  interested** each show a toast with an **Undo** for a few seconds. On the episode list, **Mark season watched**
   acts on a season's aired episodes, and <kbd>Ctrl</kbd>- or <kbd>Shift</kbd>-clicking episodes
   selects several to mark at once. Lists are separate from status.
 - **Rate what you have seen** out of 10 on a title's page. Each profile keeps its own scores, and
@@ -158,7 +185,8 @@ Playback is mpv, embedded inside the app's own window on Windows; there is no tr
   with anything not out yet pulled to the top), **In progress**, **Watched**, **Lists** (your named
   lists, plus any lists on a connected Trakt or Simkl account, read-only), **Rated**, **History**
   (the 500 most recent viewings; any single viewing can be removed without un-watching the
-  episode), **Stats**, and **Not for me**.
+  episode), **Stats**, and **Not for me**. Hide Disliked does not apply to Planned and Lists: a
+  title you planned and also marked Not interested stays there, marked.
 - **Profiles**, including PIN-protected ones. Each keeps its own list, history, ratings and resume
   points. A profile can be marked **Kids**, which today only shows a badge next to its name; it does
   not yet restrict what that profile can browse or play.
@@ -171,22 +199,40 @@ Each tracking service needs its own API application: create one on the service's
 enter the Client ID (and, for Trakt, the client secret; MyAnimeList's is optional) under
 **Control centre → Accounts**.
 
-| Service         | What it does                                                                                                                                                                                                                                     |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Simkl**       | Pushes watch history and live scrobbles; syncs the plan-to-watch list both ways; shows your Simkl lists. When a movie's watched state differs between this app and Simkl, an **Out of sync with Simkl** panel lets you pick which side is right. |
-| **Trakt**       | Pushes watch history, ratings and live scrobbles for movies and series (anime is not sent); reads your watchlist and lists; imports an existing account's history and ratings once, safely repeatable.                                           |
-| **MyAnimeList** | Pushes anime progress and syncs the plan-to-watch list; **Preview sync with MAL** shows what would change before you apply it.                                                                                                                   |
+| Service         | What it does                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Simkl**       | Pushes watch history (and live scrobbles, if turned on); takes in what was watched elsewhere (films, series and anime episodes) when the app opens and comes back to the front, adding only; syncs the plan-to-watch list both ways; shows your Simkl lists. When a movie's watched state differs between this app and Simkl, the **Sync review** panel lets you pick which side is right, and Trakt is given the same answer. |
+| **Trakt**       | Pushes watch history, ratings and (if turned on) live scrobbles for movies and series (anime is not sent); reads your watchlist and lists; imports an existing account's history and ratings once, safely repeatable, and from then on takes in what is watched there every half hour and when the app opens, adding only.                                                                                                     |
+| **MyAnimeList** | Pushes anime progress and syncs the plan-to-watch list; **Preview sync with MAL** shows what would change before you apply it.                                                                                                                                                                                                                                                                                                 |
 
 **Keep watchlists in sync** (under Accounts → Tracking) is the two-way rule: planning or un-planning
 here pushes out, and a title a service drops is removed here too, but only if this app pulled it in
 from that service originally. The rules are written down in [docs/WATCHLIST-SYNC.md](docs/WATCHLIST-SYNC.md).
 
-> Known limitation: a mark made while a service is unreachable is logged and dropped, not retried.
-> Only the Simkl movie comparison above catches the difference later.
+**Scrobble while playing** (same place) is off by default. A finished episode or film is sent to
+Simkl and Trakt either way; scrobbles add a request for every start, pause and stop, and Simkl
+allows an account 500 requests a day, shared with a linked phone.
+
+A mark, un-mark, season or whole title that does not reach a service (offline, an expired token, a
+rate limit) is kept and sent again with each sync, every half hour and on **Sync now**, up to ten
+times (a try made while offline does not count). The Watchlists panel under Accounts → Tracking says
+how many are still waiting.
+
+On the desktop, the watched episodes of each show are also compared with Simkl's and Trakt's whole
+record of that show whenever either changes, and the two are merged: episodes watched here that a
+service lacks are sent to it, with the date you watched them, and the first time a Trakt account is compared, its episodes of the
+shows you have here are taken in. Nothing is removed by this. The **Sync review** panel lists every
+show that was merged, season by season, with **Undo**, **Make Trakt match here** and **Make here
+match Trakt** (and the same for Simkl); those choices are the only way an episode is ever removed at
+a service, and always by naming the exact episodes. An anime season the app cannot match to an entry
+at a service is shown as one that cannot be sent there. The phone and TV app take in what the
+services hold, as before, and have no panel. The rules are in
+[docs/WATCHLIST-SYNC.md](docs/WATCHLIST-SYNC.md#episodes-show-by-show).
 
 - **Bring an existing history in** from **Control centre → General → Your library**: IMDb's ratings
   export (needs nothing) and a Letterboxd "Export Your Data" zip (needs TMDB connected, to match
-  titles). A connected Trakt account imports from **Accounts**. Viewings keep the dates you watched
+  titles). A connected Trakt account imports from **Accounts**, and is imported once by itself the
+  first time its history is pulled if you have not pressed Import. Viewings keep the dates you watched
   them; imported ratings keep the score but not the date. All three only fill in what is missing.
 - **Back up your library** to a single file and restore it on another machine, from the same card.
   Service credentials stay on the machine that holds them.
@@ -229,13 +275,19 @@ over to its second face. It is where the installation is configured and watched:
 | **AI**            | The local Ollama model behind the assistant and Recommend Next.                                                                                                                                                                                              |
 | **Community**     | The Watch Party relay, and profiles.                                                                                                                                                                                                                         |
 
+- **A backup is taken automatically** into the `backups` folder in the app's data folder before
+  anything rewrites watch history on its own: the anime regroup, a Trakt import or pull, and the
+  MyAnimeList apply. The newest five are kept; restore one from **Your library** like any other.
 - **Ask Sonarr or Radarr for a title** straight from its page, picking the quality profile and
   folder, with a search starting as soon as it is added. Movies and series only; anime is
   catalogued by Kitsu id, which neither service can look up.
 - **Search and ask in one field.** Press Enter in the top bar and it searches the movie, series and
   anime catalogs together and shows real titles you can open. With a local model connected its
   answer appears underneath: what the top result is, whether it fits what you have watched, and
-  other titles worth trying. On a category page the same field filters that page instead.
+  other titles worth trying. On a category page the same field filters that page instead. Every
+  search looks in the library on this device and asks the online catalog (Cinemeta, or Kitsu for
+  anime) at the same time; when the online catalog cannot be reached, the results say so and show
+  what the library already holds, rather than reporting that nothing matched.
 - **Run the AI locally.** The assistant and the Recommend Next buttons use an
   [Ollama](https://ollama.com) model on your own machine; nothing is sent to a hosted service. An
   Ollama at its usual `http://127.0.0.1:11434` is found on its own. Without one the search still
@@ -336,8 +388,8 @@ the control centre; API credentials are entered in the app, never in the source 
 | **Bazarr**          | No                              | Connection status only.                                                                                                                    | Media servers                      |
 | **TMDB**            | No (Letterboxd import needs it) | Age certificates, cast and crew, collections, better similar titles, grouped-anime episodes.                                               | Accounts → Artwork & metadata      |
 | **OMDb**            | No                              | Rotten Tomatoes scores.                                                                                                                    | Accounts → Artwork & metadata      |
-| **Simkl**           | No                              | History and scrobble push, two-way watchlist, your Simkl lists, the movie discrepancy review.                                              | Accounts → Tracking                |
-| **Trakt**           | No                              | History, ratings and scrobble push; watchlist and lists pull; one-off import.                                                              | Accounts → Tracking                |
+| **Simkl**           | No                              | History push (scrobbles if turned on), two-way watchlist, your Simkl lists, the movie discrepancy review.                                  | Accounts → Tracking                |
+| **Trakt**           | No                              | History, ratings and (if turned on) scrobble push; watchlist and lists pull; one-off import, then history pull.                            | Accounts → Tracking                |
 | **MyAnimeList**     | No                              | Anime progress push, two-way watchlist, preview-then-apply sync.                                                                           | Accounts → Tracking                |
 | **SubDL**           | No                              | Subtitle search with no daily limit.                                                                                                       | Accounts → Subtitles               |
 | **OpenSubtitles**   | No                              | A second subtitle catalogue with hash matching (a free account allows 5 downloads a day).                                                  | Accounts → Subtitles               |
@@ -366,6 +418,10 @@ npm install
 npm run dev
 ```
 
+`npm run dev` and `npm start` first run `scripts/ensure-electron.mjs`, which fetches the Electron
+binary with the electron package's own `install.js` when `node_modules/electron/path.txt` is
+missing, since Electron 42 and later no longer fetch it during `npm install`.
+
 ### Environment variables
 
 The desktop app reads one: `MPV_PATH`, the path to an mpv binary, which is also the only way to
@@ -382,7 +438,7 @@ variables are in [daemon/README.md](daemon/README.md).
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `npm run dev`              | Start Electron with the Vite development server and hot reload.                                                                 |
 | `npm start`                | Preview an already-built application.                                                                                           |
-| `npm test`                 | Run every registered test file (89 today, plain `tsx` scripts chained in `package.json`).                                       |
+| `npm test`                 | Run every registered test file (plain `tsx` scripts chained in `package.json`).                                                 |
 | `npm run lint`             | Check JavaScript and TypeScript with ESLint.                                                                                    |
 | `npm run typecheck`        | Type-check the Electron/Node and renderer projects. The daemon is a third project, checked separately.                          |
 | `npm run typecheck:daemon` | Type-check the r3-cache daemon (`daemon/`, `src/shared/`, `src/main/media-hub/`).                                               |
@@ -547,13 +603,13 @@ Use the full base URL, including `http://` or `https://` and a non-default port 
 
 Found by the 2026-09-27 audit and tracked in [docs/AUDIT-2026-09-27.md](docs/AUDIT-2026-09-27.md):
 
-- A watch mark made while a tracking service is unreachable is dropped rather than retried.
 - A partly downloaded title can only resume from the source it came from, so it still needs that
   source connected.
 
 Three problems the same audit found are fixed: anime is now served from the r3-cache tier, cached
 titles play without TorBox or Jellyfin, and plan-to-watch and history pushes for a title keep
-their order. The placeholder weather readout is gone, and the Simkl episode fallback now sends
+their order. A watch mark that fails to reach a tracking service is now kept and retried rather
+than dropped. The placeholder weather readout is gone, and the Simkl episode fallback now sends
 its client id.
 
 ## License

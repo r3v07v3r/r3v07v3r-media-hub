@@ -233,14 +233,27 @@ asks that one question first and reads only what moved:
   some things on this side change what a read would do without touching
   Simkl: a queued removal given up on (rule 6), sync switched back on, a
   title that came from Simkl and has since left Trakt as well.
-- **The watched library the desktop's review panel is compared against**
-  is fetched when the films stamp moved, or when the set of films watched
+- **The watched films the desktop's review panel is compared against**
+  are fetched when the films stamp moved, or when the set of films watched
   here changed (a film marked here whose push to Simkl failed moves only
   this side), and only if the app's interface has asked for that panel
-  since it started. The phone and TV app never do, so there it is never
-  fetched.
+  since it started. The phone and TV app never do, so there they are never
+  fetched. Films only: the panel compares nothing else, and the shows
+  library with every episode's date, the largest thing the app asks Simkl
+  for, is left to the MyAnimeList preview, which needs it. The desktop's
+  own check a few seconds after launch asks `/sync/activities` the same
+  way first, after the catch-up below has run (reusing the catch-up's
+  answer when it is under a minute old), and when neither side's
+  films moved since the last comparison it shows that one again rather
+  than reading Simkl's films (a comparison is kept for a day).
 - **Trakt and MyAnimeList** have no such question to ask, and are read
   every half hour as before.
+- **The whole shows and anime lists**, for the desktop's episode comparison
+  ("Episodes, show by show", below), are read when their own stamp moved
+  since the last comparison, and at most every six hours however often it
+  moves (half an hour after a comparison that left shows for the next).
+  The comparison goes by the answer the catch-up or this pass just read,
+  and asks no question of its own.
 
 On a day when nothing changes that is one Simkl request per half hour
 instead of five. What is **owed** is not gated: plan changes a service
@@ -260,6 +273,48 @@ The record of what was read is kept per profile and per Simkl account, and
 is shared with the phone and TV app's catch-up (below), so the two of them
 read Simkl's lists once per change between them rather than once each.
 
+**Rate limits on writes.** Trakt allows an account one write a second, so
+every Trakt request goes through a lane of its own in the request
+scheduler (`taskScheduler.ts`), one at a time and a second apart. When
+Trakt answers any write (history, a scrobble, a rating, a plan change)
+with 429, or Simkl answers a mark, un-mark, season or whole-title push
+with one, the request waits the time the service's `Retry-After` header
+asks for (a second when it gives none) and is sent once more; a second
+429, or a wait longer than a minute, is an ordinary failure
+(`retryOnceOn429` in `httpClient.ts`).
+
+**History pushes that fail are kept.** Marking an episode or a film,
+un-marking one, marking a season and setting a whole title's status each
+push the change to Simkl, Trakt and MyAnimeList after the local write. A
+push that fails (offline, an expired token, a 5xx, a second 429) is
+written down per service, title and episode (per season for MyAnimeList,
+which is sent a recount) in a durable record per profile
+(`historyRetry.ts`), stamped with the account it was owed to. It is sent
+again at the start of every half-hourly pass and every "Sync now", one
+request per service, title and direction, on the title's own push chain;
+ten failed tries and it is let go, and the log says so. A try that never
+reached the service (offline, a timeout) is not counted, though an entry
+is still let go 30 days after it was written; and a service that does not
+answer, or answers 429 or 5xx, is sent nothing more in that pass, so a
+service that is down holds up "Sync now" for one request, not one per
+title. A later push for the same episode replaces it, whichever way it
+went, and one that got through clears it. An owed change local has since
+moved away from (an add for an episode no longer watched here, a removal
+for one watched again) is dropped rather than replayed. A retried add
+carries no watched date, so the service records the viewing at the time of
+the retry rather than when it happened. While a removal is owed to Simkl
+or Trakt, or still on its way there, the catch-up and the Trakt history
+pull do not take that viewing back in from that service. The Watchlists
+panel (Settings → Accounts → Watchlists) shows how many changes are still
+owed.
+
+**Scrobbles are off unless turned on.** The player's start, pause and stop
+messages to Simkl and Trakt are sent only when "Scrobble while playing" is
+on (Settings → Accounts → Watchlists). Each is a request against Simkl's
+daily allowance, and a finished episode or film is sent as a history add
+at 80% whatever the setting says. The phone and TV player sends none
+either way.
+
 ## What this deliberately does not do
 
 - **No merging of what a "list" means.** Trakt's watchlist, Simkl's
@@ -270,29 +325,45 @@ read Simkl's lists once per change between them rather than once each.
   feature, read-only first.
 - **No history.** This is plan-to-watch only. Watch history has its own
   reconcile queue with its own review UI, and the two should not be
-  confused for each other. The one exception is the phone and TV app's
-  catch-up, below, which takes Simkl's history in without a review.
+  confused for each other. (In that review's films section: "Use Local"
+  sends the local value to Simkl and then Trakt; "Use Simkl" rewrites the
+  local record and sends Simkl's value on to Trakt. A Trakt failure is
+  logged and does not undo either choice. Its shows section is "Episodes,
+  show by show", below.) The exceptions are the catch-up, below, which
+  takes Simkl's history in without a review, Trakt's history pull
+  ("Trakt's history"), and the episode comparison; all three only add.
 
-## The catch-up on the phone and TV app
+## The catch-up
 
-The desktop settles disagreements with Simkl in a review panel. The phone
-and TV app have no panel and nobody to ask, so they run a **catch-up**
-(`src/main/media-hub/simklCatchUp.ts`; what it decides to write is in
-`simklCatchUpRules.ts`, which is tested directly).
+Every device runs a **catch-up** (`src/main/media-hub/simklCatchUp.ts`;
+what it decides to write is in `simklCatchUpRules.ts`, which is tested
+directly): what Simkl says was watched elsewhere, and this library does
+not have yet, is added without asking. It never removes anything, so it
+needs no review. On the desktop, what it cannot settle by adding (Simkl
+saying a film here is not watched, or a film it could not place) is still
+the films section of the "Sync review" panel, whose check runs after it.
+The phone and TV app have no panel, and the catch-up is all they have.
 
-**Who asks.** Only the phone and TV interface, through `tracking.catchUp`:
-when the app opens, when it comes back to the front, and straight after
-linking to a desktop. The desktop app never runs it. A call within two
-minutes of the last pass, or while one is running, is answered with that
-pass's report; nothing runs while something is playing; a fresh link skips
-the two-minute wait. All of that is per profile: a pass for one profile
-never answers for another, which gets its own.
+**Who asks.** Every interface, through `tracking.catchUp`. The phone and TV
+app ask when the app opens, when it comes back to the front, and straight
+after linking to a desktop. The desktop asks when its window opens and when
+it comes back to the front, but for focus at most every ten minutes
+(`useServiceCatchUp.ts`), because a desktop window gains focus far more
+often than a phone resumes and each pass that gets through is a Simkl
+request. A call within two minutes of the last pass, or while one is
+running, is answered with that pass's report; nothing runs while something
+is playing; a fresh link skips the two-minute wait. All of that is per
+profile: a pass for one profile never answers for another, which gets its
+own.
 
 **What it reads.** First the watchlist pull above, so the plan is settled
 before any history lands: the pull refuses to plan anything with local
 history, so the other order would refuse a title for a viewing the same
 pass wrote. Simkl's lists are skipped in that pull if they were already
 read under the same activity stamps ("When Simkl's lists are read", above).
+Trakt's and MyAnimeList's lists have no such gate, so on the phone they are
+read at most every ten minutes; on the desktop they are left to the
+half-hourly pass and read here only when Simkl's moved.
 Then Simkl's watched history, one kind at a time (films, shows, anime), but
 only for a kind whose activity stamp at `/sync/activities` has moved since
 it was last fully applied. A kind is fetched whole the first time and with
@@ -351,10 +422,9 @@ with viewings recorded here, the unscoped Simkl removal is not sent.
   holds without a usable date is left out. A finished film with no watched
   date is recorded at the date it was added to the list there, or failing
   that at the time of the catch-up.
-- One direction. The desktop still does not take in episodes watched on the
-  phone. Those reach Simkl through the ordinary history push; a film then
-  shows up in the desktop's review panel, and an episode does not reach the
-  desktop at all yet.
+- Through Simkl. An episode or film watched on the phone reaches Simkl
+  through the ordinary history push, and the desktop's next catch-up takes
+  it from there; with Simkl not connected nothing travels between the two.
 - Anime takes only each Simkl entry's own first-season numbering (its
   season 1, or none). It is filed under the season of the merged show that
   entry can be shown to be, and under the entry's own id where it cannot be
@@ -362,8 +432,225 @@ with viewings recorded here, the unscoped Simkl removal is not sent.
   skipped and counted. An episode Simkl files under season 0, or 2 and
   later, is refused. The next section has the mapping, and what became of
   later seasons pushed before it existed.
-- A local un-watch whose removal at Simkl failed can come back when that
-  title next has activity there.
+- A local un-watch is not taken back in while its removal at Simkl is
+  still on its way or owed after a failure (see "History pushes that fail
+  are kept"). Once it has been given up on after ten tries, it can come
+  back when that title next has activity there.
+- A film the review panel's "Use Local" ruled not watched is not taken
+  back in while that decision is still queued for Simkl, nor once the
+  queue has given up on it (90 days). Taken in, the next flush would find
+  both sides agreeing and pass "watched" on to Trakt, the opposite of what
+  was chosen.
+
+## Trakt's history
+
+The "Import my Trakt library" button reads a whole Trakt account once:
+every viewing with its date, and every rating. It is safe to press again.
+Somebody who connects Trakt and never presses it still gets their past:
+the pull below runs the same import once on its first pass (see "It
+starts with the account's past").
+
+After that, Trakt's history comes in by itself (`traktHistoryPull.ts`),
+in the half-hourly background sync and in every catch-up (desktop launch
+and focus; the phone and TV app hold no Trakt sign-in). Each pass asks
+Trakt's `/sync/last_activities` first, one small request, and reads
+`/sync/history` only when the films or episodes stamp there moved since
+the last pull, and then only from the last pull on (`start_at`), reaching
+back three days for a viewing that reached Trakt late. The record of where
+the pull is, and under which stamps, is kept per profile and per Trakt
+account, durably, like Simkl's stamps.
+
+- **It only adds**, and files every viewing where the import does: a film
+  or series under its IMDb id, an anime series under the merged show and
+  season it belongs to here (the same `imdbToAnimeTargets` the import
+  uses). While the anime catalog is still being organised it writes
+  nothing and tries the same rows again next time.
+- **A viewing already held here is skipped**, unlike the import. Every
+  episode played here is pushed to Trakt and comes back on the next pull
+  with Trakt's own time, and would otherwise be recorded as a second play.
+  A rewatch on Trakt of something already watched here therefore adds no
+  play here. A viewing un-marked here whose removal Trakt has not taken
+  yet (on its way, or owed after a failure) is skipped the same way.
+- **It starts with the account's past.** With nothing on record for the
+  profile and account (no import has been run for it, and no pull), the
+  first pass runs the import button's own code (`importTraktLibrary`,
+  history and ratings, with its backup) once, leaving out every viewing
+  already held here and every one whose removal Trakt has not taken, as
+  above. Then it records Trakt's stamps and the time, and later passes read
+  only what is new. If that import fails (the anime catalog still being
+  organised, a profile switch) nothing is recorded and the next pass runs
+  it again. An import pressed by hand records where the pull carries on
+  from, so the pull never reads the whole account after one. An import
+  made by a version that kept no such record is not known about, and the
+  first pass reads the account again; with held viewings left out, that
+  adds only what is missing.
+  On the desktop, the first episode comparison against the account then
+  takes in what Trakt holds of the shows held here ("Episodes, show by
+  show").
+- A viewing given to Trakt with a date older than three days before the
+  last pull (a backdated entry) is not seen by the pull; the import finds
+  it.
+- A backup is written before it writes rows, at most once a day (see
+  "When the grouping changes" for the backups).
+
+## Episodes, show by show
+
+Progress on a show is a set of watched episodes, here and at each service.
+"Here S1E8, Trakt S2E2" is not two positions to choose between: it is the
+episodes Trakt holds that this app does not (S1E9 to S2E2), and perhaps
+some the other way round. So shows are compared as sets, show by show, and
+nothing anywhere offers "keep S1E8 or S2E2".
+
+The pulls above only add, so every episode a service has told this app
+about is held here. What they cannot see is an episode held here that a
+service does not have: a push that failed for good, a service connected
+after the episode was marked. Nor could anybody see what a pull took in, to
+take it back out. This is both (`src/main/media-hub/episodeSync.ts`, tested
+in `tests/episodeSync.test.ts`).
+
+**When it runs.** On the desktop only, after the catch-up (launch, focus,
+and the launch check eight seconds after the window opens) and after the
+half-hourly pass. The launch check does not wait for it: the films answer
+first, and what the comparison adds reaches the panel and the top bar's
+button when it is done, as does what any later pass adds. A service is read only when its activity stamp moved
+since the last comparison under that account: Simkl's shows and anime
+stamps as the catch-up or the pass just read them (the comparison asks
+`/sync/activities` nothing of its own, and leaves Simkl alone when that
+answer is more than five minutes old), and Trakt's episodes stamp as the
+history pull recorded it. When one moved, that service's whole set is read
+once: Simkl's `shows/all` and `anime/all` lists, each behind its own stamp
+and at most every six hours (see "When Simkl's lists are read"), or Trakt's
+`/sync/watched/shows`, one request. A pass where nothing moved costs
+nothing beyond what the pulls already asked.
+
+**It takes the union, and only adds (rules 1 and 4).**
+
+- Episodes held here that the service lacks are sent to it as an add, on
+  the title's own push chain, so a failure is kept and retried like any
+  history push. Not an episode marked here in the last fifteen minutes (its
+  own push may still be on the way, and a second add is a second play at
+  Trakt), one with a change owed to that service, or one that arrived from
+  that service and has since gone from it: it was removed there, and
+  sending it back would undo that. Nor one already sent to that service
+  under the same account: still missing, it was either not taken (the
+  service files it under another id or number) or removed there since,
+  and sending it at every comparison would add a play at Trakt each time.
+  Each episode is sent with the time it was watched here, so a backlog
+  does not land in the service's history as watched today (a retry after
+  a failure goes without it, as any retried push does, and an anime at
+  Simkl is sent undated, since its numbers there are the entry's).
+- At most twenty shows per service per comparison. A comparison that left
+  shows over is recorded as partial: the service is read again on the next
+  moved stamp, but not within half an hour (not six hours, for Simkl), and
+  since the shows just sent are not sent again, the rest move up.
+- Episodes only the service holds are already here: the catch-up reads
+  each of Simkl's kinds whole the first time. The Trakt pull starts from
+  the moment it first runs, so the first comparison against a Trakt account
+  takes in what Trakt holds of the shows held here. Shows not held here at
+  all are the import button's. After the first, what arrives at Trakt comes
+  in through the pull.
+- Nothing is removed, here or at any service. A local removal still wins
+  (rule 4): an episode whose removal is owed or on its way is neither taken
+  back in nor counted against the service.
+
+**Rule 5 holds.** A read that failed, came back cut off, or (for anime)
+held an entry nobody could be asked to look up writes nothing and records
+nothing, and its stamp is left, so the next pass reads it again.
+
+**What is compared where.**
+
+- Series, at Simkl and Trakt, by IMDb id. A show a service holds with no
+  IMDb id cannot be matched: its episodes here are sent to it once, and
+  not again.
+- Anime at Simkl, entry by entry, placed by the rules every Simkl push uses
+  ("Anime: one show here, an entry per season at Simkl", below): a later
+  season only where `laterSeasonOf` can show its place is its season on the
+  page. A member that cannot be shown to be its season keeps its whole show
+  out of the comparison, since compared by position it would send the
+  wrong season or report one missing. A season the rules name no entry for
+  (`toSimklAnimeEpisode` gives none) is listed as **cannot be sent to
+  Simkl**, not sent. Specials are not compared.
+- Anime is not compared at Trakt. This app never sends anime there, and
+  Trakt keeps an anime under an IMDb series this app keeps under a Kitsu
+  id. An anime's row says **cannot be sent to Trakt** for its seasons.
+- MyAnimeList keeps a count per entry, not episodes, and is not read. When
+  a choice below removes anime episodes here, the seasons it touched are
+  recounted and sent (`planMalPushes`), as any change here is.
+
+**The record of what was merged.** Per show and per service: the episodes
+that arrived (from the catch-up, the Trakt pull or the comparison), the
+ones sent, and the ones that cannot be sent. One durable entry per profile
+(`episode-sync:merged:v1`), each service's part stamped with its account
+(rule 7) and inert under any other. A show leaves it when it is reviewed,
+or 90 days after a pass last added to it. The same unsendable episodes
+found again do not bring a reviewed row back; a different set does.
+Besides the rows, it keeps per show, service and account what arrived and
+what was sent, for a year after the last addition. A review does not clear
+this; it is what the comparison goes by when it leaves out what came from
+a service, or was already sent to it. The
+phone and TV app keep the add-only catch-up and have no panel, and their
+pulls write the record all the same. What the phone takes in reaches the
+desktop through the services, and the desktop's own pulls record it there.
+
+**The shows section of the review panel.** The desktop's **Sync review**
+panel lists each show in the record: how many episodes arrived from which
+service, how many were sent where, how many cannot be sent, and, opened,
+which, season by season. Merging both is what has already happened, so the
+choices are the ways back from it:
+
+- **Keep** (the x): the merge stands, and the row goes.
+- **Undo**: the episodes that arrived are removed here, at the service
+  they came from, and at any service the comparison passed them on to.
+- **Make _service_ match here**: the service ends up with what was held
+  here before the merge. What arrived from it is removed here and there
+  (and wherever it was passed on), and what it lacked is sent again.
+- **Make here match _service_**: this app ends up with that service's set.
+  What was held here and not there is removed here, taken back from the
+  service where the comparison had sent it, and removed at the other
+  service as well, except what this app saw arrive from that other
+  service. That one was recorded there by itself, not put there from here,
+  and like a planned title (rules 2 and 3) a removal only goes where this
+  app put the thing. What arrived from the service is sent on to the other
+  service (rule 1).
+
+These are the only way an episode is ever removed at a service, and each
+is somebody's decision about one show. Every removal names its episodes; a
+show reference never goes out without them (rule 3: at Simkl a bare one
+removes the show's whole history). What a choice cannot send, a season
+with no entry or anime to Trakt, is said, and left as it is there. Where
+that is an Undo of episodes that came from that service (Trakt's
+viewings the pull filed under an anime here), the service's pulls leave
+those episodes out for 30 days, long enough for the Trakt pull's three
+days of overlap to pass, so the Undo is not taken back in.
+
+**A choice stands once made.** It is written down before anything changes:
+the changes for the services go into the same durable record as a failed
+history push ("History pushes that fail are kept"), stamped with the
+account; then the row leaves; then the episodes are removed here, after a
+backup at most once a day. A choice that cannot be written down changes
+nothing and says so. The changes go out three seconds after the last
+choice with the other owed pushes, one request per service, title and
+direction, and again with every half-hourly pass and **Sync now** until
+they land, on that record's terms: ten tries, offline tries free, let go
+after 30 days. (The films section's "Use Local" queue gives up after five
+tries and keeps a decision 90 days; the shows' changes are history pushes
+and are kept like the others.) A push that fails does not bring the row
+back, or the episodes back here. While a removal is owed, the catch-up,
+the Trakt pull and the comparison do not take that episode back in from
+that service.
+
+**Known limits.**
+
+- Rows start from this change: what earlier pulls took in was never
+  recorded, so it cannot be undone from the panel.
+- An episode a second service already held before the merge stays there
+  after Undo: nothing recorded it as that service's. The comparison does
+  not take it back in, but the Simkl catch-up does the next time that show
+  changes at Simkl (rule 1), and it arrives as a new row.
+- A Trakt-only show is not taken in by the comparison; the import button
+  brings an account's past in.
+- "Make here match" cannot tell a viewing the other service recorded
+  before rows were kept from one this app put there, and removes it there.
 
 ## Anime: one show here, an entry per season at Simkl
 
@@ -426,11 +713,12 @@ page only when all of this holds (`animeSeasonMembers` in `serviceIds.ts`,
 read from the cached mappings with no request):
 
 - Its own TheTVDB season, in the show's series, is the place it sits at. A
-  film or an OVA among the seasons, or a later season Kitsu has no mapping
-  for, breaks it: My Hero Academia's fourth season is the group's seventh
-  member, and season 7 on its page is TMDB's seventh. A member of another
-  series never is one: Naruto is the second member of the Naruto: Shippuden
-  group.
+  later season Kitsu has no mapping for breaks it. So does a film or an OVA
+  among the seasons, in a catalog grouped before those stopped being
+  members ("Films, OVAs and specials are not seasons", below): My Hero
+  Academia's fourth season was the group's seventh member, and season 7 on
+  its page is TMDB's seventh. A member of another series never is one:
+  Naruto is the second member of the Naruto: Shippuden group.
 - No other member maps to that season. Two cours of one TheTVDB season
   share its episode numbers between them, and nothing says which cour has
   which.
@@ -470,10 +758,21 @@ member's place. What happens instead:
   is, and so is a rating of it. The show's own id is the show either way:
   Trakt numbers a show's seasons itself, and they are filed under the show
   as they came.
+- **The episode comparison on the desktop.** A Simkl entry that cannot be
+  placed is left out of the comparison, together with the show it would
+  have landed on: nothing is taken in or sent for either. That goes for a
+  show's own id that cannot be shown to be its first season as well.
 - **A page or a card opened by a later member's own id** opens and saves as
   itself, as it did before, and its rows are not moved under the show.
 - **Home.** A tracked later member that cannot be placed is counted from
   the rows under its own id, never from the show's rows at its place.
+
+One caller asks less, and sends nothing on the answer. When a show comes
+apart ("When the grouping changes", below), there is no grouping left to
+ask about a place in, so its rows go to the one former member whose own
+TheTVDB season they are filed at, wherever it sat (`animeTvdbSeasonIs`,
+through `regroupPlaceIsSeason`). Of the grouping that stands, the regroup
+asks the same rule as everything else.
 
 Kept under its own id is the safe choice wherever that id has a page of its
 own, which every later member that cannot be placed has: the viewing is
@@ -483,7 +782,9 @@ keep an entry that is not the show's first season, and it is left out.
 
 In one real library of 301 merged shows, 233 are numbered by TMDB. 286 of
 698 later seasons can be shown to be a season of their show, and 280 of the
-301 shows can be shown to be fronted by their first season.
+301 shows can be shown to be fronted by their first season. That was
+measured on a catalog grouped while films and OVAs were still members; with
+them out, fewer places are off.
 
 **What this leaves out.**
 
@@ -504,6 +805,41 @@ In one real library of 301 merged shows, 233 are numbered by TMDB. 286 of
 - An install with no TMDB key builds every page from its members. The rule
   still treats a show whose first member has a TheTVDB mapping as numbered
   by TMDB, so it places fewer members than it could there.
+
+### Films, OVAs and specials are not seasons
+
+Kitsu says what kind of entry each anime is: a TV series, a film, an OVA,
+an ONA (a web release), a special or a music video. The grouping reads it
+(`normalizeKitsuAnime` keeps it as `subtype`), and only TV entries become
+seasons of a merged show. Before, every entry the evidence linked was
+merged in as a numbered season: a film took a season's place, pushed the
+seasons after it one place along, and, since TheTVDB files films at season
+0, could sort first and front the show, leaving no later season provably
+at its place.
+
+- A film, OVA, ONA, special or music entry stays a title of its own, with
+  its own page, its own rows and its own Simkl and MyAnimeList entry. It is
+  still listed in the franchise guide, and the show's page lists it between
+  the seasons it came out between, by Kitsu's start dates (`groupedExtras`
+  and `seasonStarts` on the show's catalog entry).
+- It still links the seasons on either side of it. A first season whose
+  only recorded sequel is a film, and the film's own sequel the second
+  season, are one show of two seasons.
+- An entry whose kind is not known is grouped as before. A catalog cached
+  before this change has no kinds, so the change takes effect with the
+  next crawl, within six hours of the update.
+- A show whose real seasons Kitsu lists as ONAs comes apart: each such
+  season is a title of its own. Kitsu's kind is the only signal there is,
+  and telling which web releases are seasons would be a guess.
+
+The change reaches watch history the way any change of grouping does
+("When the grouping changes", below). On a show numbered by its members,
+the rows kept for a film at its season go back under the film's own id, and
+the seasons after it close the gap. On a show numbered by TMDB, the rows
+were TMDB's seasons and stay at their numbers; where the film fronted the
+show, they move to the id that fronts the series now. Where the film
+fronted a show of one season, there is no show left: that season's rows go
+to the season's own entry.
 
 ### A later season under its own id
 
@@ -529,15 +865,35 @@ behaves as a title of its own.
   none are kept under its own id: `tracking:list` answers with where each
   started later season's viewings are (`laterSeasons`), and the index counts
   a later season's completion there as well. On the desktop this covers
-  every grid such a card appears in — the plan, My Stuff, search results and
-  the Anime library, whose index keeps a row for every season. The side
-  panel names the episode Play will start, from the same viewings.
+  every grid such a card appears in — the plan, My Stuff and the lists. The
+  side panel names the episode Play will start, from the same viewings.
 
-One thing does not follow it yet. The library's Hide watched and Hide
-completed filters are applied inside the index query, by the row's own id,
-so a finished later season is marked as watched in the Anime library but is
-not filtered out of it. My Stuff filters after the badge is worked out, and
-does hide it.
+The Anime library and anime search do not list a later season at all. The
+index keeps a row for every season, so the grid used to show each one as a
+tile of its own; the library's query now leaves out every id that is a
+later season of a merged show, in the same statement that counts the
+total, on the desktop and on the phone. Search leaves those rows out of its
+index half, and a hit for a later season (from the index or from Kitsu) is
+answered with its show, in the place the season would have taken, so a
+season's own name still finds something. Only the seasons whose place is
+their season on the show's page are left out: any other member still opens
+as itself, and its tile is how it is reached. A plan card under a later
+season's id is read by id and still shows. With the later seasons gone,
+Hide watched and Hide completed read every tile that is left by its own id,
+which is where its viewings are kept.
+
+Recommendations go by membership, not by place. The suggestion row and the
+For You shelves draw on the index as well as the catalog, and the index
+keeps a row for every member of a merged show, so a later season used to be
+offered as a title of its own, including one already watched to the end
+(its viewings are under the show, not under the id that was checked). No
+member is offered now, and the show's own row is the one that competes for
+a place. A member is dropped as a candidate, dropped again when a stored
+list is read, and is not offered as what comes next either: the next season
+of a merged show is inside the show. This is every member, not only the
+ones whose place is their season, since nothing here acts on the place: a
+film or an OVA the grouping filed among the seasons is not suggested on its
+own either.
 
 Home follows the same split. A later season on the plan with nothing of it
 watched is in Plan to Watch as its own card. Once an episode of it has been
@@ -582,7 +938,23 @@ What moves depends on how the show's page numbers its seasons:
   is TMDB's season 3, whichever member sits third. A member changing place
   does not change what season 3 shows, so its rows stay at their numbers.
   Only a new id in front is followed, with the season numbers kept, and
-  only when both ids map to the same series.
+  only when both ids map to the same series. That includes a front that is
+  in no show any more (a film that used to sort first), when the rest of
+  its show is all fronted by one id of the same series. A front that was in
+  a show numbered by its members goes the same way for its specials and
+  its rating.
+- **A show with a TheTVDB mapping that comes apart**, every member standing
+  alone (one TV season left once a film or an OVA stops being one, or a
+  second season Kitsu calls an ONA): each TMDB season under the old front
+  goes to the one former member whose own TheTVDB season it is, as that
+  entry's own episodes, and the rating goes with season 1. Season 0, and a
+  season no member can be shown to be, stay where they are and the log
+  names the show.
+- **A later season whose place becomes its season** on a show numbered by
+  TMDB (a film before it left, so its place moved down to its TheTVDB
+  season) opened and saved as itself until then, so its rows are under its
+  own id. From now on it opens as the show and the library does not list
+  it, so those rows and its rating move to the show at its season.
 - **Anything else is left where it is**, and named in the log: a show that
   gained or lost its mapping between two runs, or one whose lookup has
   never answered. A wrong move puts rows on another season's, where the
@@ -604,6 +976,14 @@ A backup carries the ledger, and a restore puts it back with the rows, so
 rows restored after the grouping has moved on are brought to where it is
 now. A backup from before the ledger has none; its rows are taken to be
 filed the way the install's own are.
+
+Before the regroup or the repair moves any rows, the app writes a backup of
+the whole library into a `backups` folder in its data folder
+(`autoBackup.ts`). So do the Trakt import (and its half-hourly pull, at most
+once a day) and the MyAnimeList apply before they write. These are ordinary
+backups that **Restore** reads. The newest five are kept, and each one
+written is a line in the log. A backup that cannot be written is logged and
+does not stop the step.
 
 **Rows from before the ledger.** The first run only records the grouping;
 it has nothing to compare it with. An id that fronted its show before then
@@ -627,11 +1007,12 @@ What cannot be placed stays under the old id, and the log names it.
 
 **Not covered.** On a show numbered by TMDB, the page and the services
 disagree about a season number wherever the members are not exactly the TV
-seasons in order (a film or an OVA among them, or one TMDB season that
-Kitsu splits in two): the page shows TMDB's season, and the member at that
-position is something else. Such a season is not sent to Simkl or
-MyAnimeList at all ("When a member's place is not its season", above), and
-it is why such a show's rows are not moved by member.
+seasons in order (a TV entry with no TheTVDB mapping, or one TMDB season
+that Kitsu splits in two; a film or an OVA is no longer a member): the page
+shows TMDB's season, and the member at that position is something else.
+Such a season is not sent to Simkl or MyAnimeList at all ("When a member's
+place is not its season", above), and it is why such a show's rows are not
+moved by member.
 
 ### Pushes made before the mapping
 

@@ -24,7 +24,8 @@ import type {
   TraktStatusResult
 } from '../../shared/media-hub/types'
 import { animeGroupingReady, laterSeasonOf } from './animeSeasons'
-import { fetchJson } from './httpClient'
+import { backupBeforeRewrite } from './autoBackup'
+import { fetchJson, retryOnceOn429, type HttpError } from './httpClient'
 import { kitsuIdForExternal } from './idBridge'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
@@ -44,7 +45,21 @@ import {
   type TraktPlaybackPosition,
   type TraktPushItem
 } from './trakt'
-import { encrypt, readSettings, traktCredentials, writeSettings } from './settingsStore'
+import {
+  encrypt,
+  readSettings,
+  traktAccountMark,
+  traktCredentials,
+  writeSettings
+} from './settingsStore'
+import { notifyLibraryChanged } from './rendererBridge'
+import {
+  markTraktHistoryPulled,
+  playsNotHeld,
+  pullTraktHistory,
+  type TraktPullReport
+} from './traktHistoryPull'
+import { withWatchedAt } from './episodeSync'
 
 const API = 'https://api.trakt.tv'
 
@@ -237,11 +252,17 @@ export async function traktRequest<T = unknown>(
   await refreshIfDue()
   const { clientId, accessToken } = traktCredentials()
   if (!clientId || !accessToken) throw new Error('Trakt is not connected.')
-  return fetchJson<T>(
-    `${API}${pathname}`,
-    { ...options, headers: { ...headers(clientId, accessToken), ...options.headers } },
-    { priority, label: 'Trakt' }
-  )
+  const send = (): Promise<T> =>
+    fetchJson<T>(
+      `${API}${pathname}`,
+      { ...options, headers: { ...headers(clientId, accessToken), ...options.headers } },
+      { priority, label: 'Trakt' }
+    )
+  // A write is a push: Trakt allows one a second, and a burst that trips
+  // that gets one delayed retry rather than being lost (see retryOnceOn429).
+  // Reads are not retried here; a pull that fails is asked again next pass.
+  const writes = Boolean(options.method && options.method.toUpperCase() !== 'GET')
+  return writes ? retryOnceOn429(send) : send()
 }
 
 /** Who is signed in, for the Settings card. */
@@ -260,12 +281,48 @@ export async function traktStatus(): Promise<TraktStatus> {
 }
 
 // ---------------------------------------------------------------------------
-// Pushes. Every one is fire-and-forget and swallows its own failure.
+// Pushes. Every one is fire-and-forget and swallows its own failure; the
+// history pushes report it, so a failed one can be kept and retried.
 //
 // A tracking service is a courtesy: the local database is the record, and an
 // expired token or an outage must never turn "I finished this episode" into an
 // error over the video. Simkl's pushes already work this way; these match.
 // ---------------------------------------------------------------------------
+
+/**
+ * How a history push went: `sent` when Trakt took it, `error` when it was
+ * tried and failed. Neither is a push that was never made — Trakt is not
+ * connected, or the title is one it cannot identify — which is not a
+ * failure and is not retried (tracking.ts keeps the failures, see
+ * historyRetry.ts).
+ */
+export interface TraktPushResult {
+  sent: boolean
+  error?: string
+  /** The HTTP status of a failure, when Trakt answered at all. */
+  status?: number
+}
+
+/** Sends one history body, logging and reporting a failure rather than
+ *  throwing it. */
+async function sendTraktHistory(
+  pathname: string,
+  payload: object,
+  scope: string
+): Promise<TraktPushResult> {
+  try {
+    await traktRequest(pathname, { method: 'POST', body: JSON.stringify(payload) })
+    return { sent: true }
+  } catch (error) {
+    logError(scope, error)
+    const status = (error as HttpError)?.status
+    return {
+      sent: false,
+      error: (error as Error)?.message || String(error),
+      ...(typeof status === 'number' ? { status } : {})
+    }
+  }
+}
 
 /** Sends a watched (or un-watched) title. Silent when Trakt is not connected
  *  or the title is one Trakt cannot identify — see trakt.ts on anime. */
@@ -273,18 +330,15 @@ export async function pushTraktHistory(
   item: TraktPushItem,
   playback: TraktPlaybackPosition,
   action: 'add' | 'remove'
-): Promise<void> {
+): Promise<TraktPushResult> {
   const payload = historyPayload(item, playback)
-  if (!hasTraktContent(payload)) return
-  if (!traktCredentials().accessToken) return
-  try {
-    await traktRequest(action === 'add' ? '/sync/history' : '/sync/history/remove', {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    })
-  } catch (error) {
-    logError('trakt:history', error)
-  }
+  if (!hasTraktContent(payload)) return { sent: false }
+  if (!traktCredentials().accessToken) return { sent: false }
+  return sendTraktHistory(
+    action === 'add' ? '/sync/history' : '/sync/history/remove',
+    payload,
+    'trakt:history'
+  )
 }
 
 /** Same as pushTraktHistory, but for a whole season's episodes in one
@@ -294,37 +348,33 @@ export async function pushTraktSeasonHistory(
   item: TraktPushItem,
   season: number | undefined,
   episodeNumbers: number[]
-): Promise<void> {
+): Promise<TraktPushResult> {
   const payload = seasonHistoryPayload(item, season, episodeNumbers)
-  if (!hasTraktContent(payload)) return
-  if (!traktCredentials().accessToken) return
-  try {
-    await traktRequest('/sync/history', { method: 'POST', body: JSON.stringify(payload) })
-  } catch (error) {
-    logError('trakt:season-history', error)
-  }
+  if (!hasTraktContent(payload)) return { sent: false }
+  if (!traktCredentials().accessToken) return { sent: false }
+  return sendTraktHistory('/sync/history', payload, 'trakt:season-history')
 }
 
 /** Every named episode of a series, added or removed in one request — the
  *  whole-title mark and unmark. Movies are pushTraktHistory's; see
  *  trakt.ts's titleHistoryPayload for why a series entry always names its
- *  seasons. */
+ *  seasons. `watchedAt` dates each episode (`season:episode` to a time),
+ *  for the episode comparison's adds (episodeSync.ts's withWatchedAt). */
 export async function pushTraktTitleHistory(
   item: TraktPushItem,
   seasons: readonly { season: number; episodes: readonly number[] }[],
-  action: 'add' | 'remove'
-): Promise<void> {
-  const payload = titleHistoryPayload(item, seasons)
-  if (!hasTraktContent(payload)) return
-  if (!traktCredentials().accessToken) return
-  try {
-    await traktRequest(action === 'add' ? '/sync/history' : '/sync/history/remove', {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    })
-  } catch (error) {
-    logError('trakt:title-history', error)
-  }
+  action: 'add' | 'remove',
+  watchedAt?: ReadonlyMap<string, string>
+): Promise<TraktPushResult> {
+  const plain = titleHistoryPayload(item, seasons)
+  const payload = watchedAt ? withWatchedAt(plain, watchedAt) : plain
+  if (!hasTraktContent(payload)) return { sent: false }
+  if (!traktCredentials().accessToken) return { sent: false }
+  return sendTraktHistory(
+    action === 'add' ? '/sync/history' : '/sync/history/remove',
+    payload,
+    'trakt:title-history'
+  )
 }
 
 /** Sends a rating, or removes it when the score is this app's "cleared" 0. */
@@ -514,6 +564,19 @@ function remapAnimePlays(
   })
 }
 
+/**
+ * Where Trakt's plays are filed here: the import's rule (imdbToAnimeTargets
+ * then remapAnimePlays), for the half-hourly pull to share rather than
+ * repeat. Throws, as the import does, while the anime catalog is still being
+ * organised and something in `rows` is anime.
+ */
+export async function fileTraktPlays(rows: ImportedPlay[]): Promise<ImportedPlay[]> {
+  const seriesImdbIds = [
+    ...new Set(rows.filter((row) => row.type === 'series').map((row) => row.id))
+  ]
+  return remapAnimePlays(rows, await imdbToAnimeTargets(seriesImdbIds))
+}
+
 /** Same remap as remapAnimePlays, for rating rows — a rating belongs to the
  *  whole show, so only the id moves, never the (irrelevant here) season. */
 function remapAnimeRatings<T extends { id: string; type: 'movie' | 'series' }>(
@@ -528,14 +591,23 @@ function remapAnimeRatings<T extends { id: string; type: 'movie' | 'series' }>(
   })
 }
 
+export interface TraktImportOptions {
+  /** Viewings to leave out, in db.history()'s `id:season:episode` form, read
+   *  just before the write. The history pull's first pass passes what is
+   *  held here (traktHistoryPull.ts), so a viewing played here and echoed
+   *  back by Trakt is not a second play; the Import button passes nothing. */
+  skipHeld?: () => ReadonlySet<string>
+}
+
 /**
  * Brings a Trakt account's watched history and ratings into this profile.
  *
  * Gap-filling, never overwriting, and repeatable — see db.importWatched.
  * Pressing Import twice does nothing the second time, which matters because
- * the honest thing to do about a partial import is to run it again.
+ * the honest thing to do about a partial import is to run it again. Also
+ * the history pull's first pass for an account with nothing on record.
  */
-export async function importTraktLibrary(): Promise<ImportSummary> {
+export async function importTraktLibrary(options: TraktImportOptions = {}): Promise<ImportSummary> {
   const db = getDatabase()
   // The profile this import is FOR, captured before the first request. Every
   // page below is an await, and a switch mid-import would otherwise pour one
@@ -543,6 +615,10 @@ export async function importTraktLibrary(): Promise<ImportSummary> {
   // the same failure the stored recommendations and the reconcile results
   // each had to be taught about.
   const profile = db.activeProfile()
+  // Where the half-hourly pull carries on from once this has written: the
+  // moment before the first page was asked for.
+  const startedAt = Date.now()
+  const account = traktAccountMark()
 
   const history = await readAllPages('/sync/history')
   const movieRatings = await readAllPages('/sync/ratings/movies')
@@ -578,14 +654,21 @@ export async function importTraktLibrary(): Promise<ImportSummary> {
     throw new Error('Profile changed while importing — nothing was written.')
   }
 
-  const remappedPlays = remapAnimePlays(plays.rows, animeTargets)
+  const filedPlays = remapAnimePlays(plays.rows, animeTargets)
+  const remappedPlays = options.skipHeld ? playsNotHeld(filedPlays, options.skipHeld()) : filedPlays
   const remappedRatings = rated.flatMap((parsed) => remapAnimeRatings(parsed.rows, animeTargets))
+
+  // A whole account's history is about to be written into this one: a
+  // backup first (autoBackup.ts).
+  if (remappedPlays.length || remappedRatings.length) backupBeforeRewrite('trakt-import')
 
   const summary: ImportSummary = {
     plays: db.importWatched(remappedPlays),
     ratings: db.importRatings(remappedRatings),
     skipped: plays.skipped + rated.reduce((total, parsed) => total + parsed.skipped, 0)
   }
+  // The account's past is in; the pull takes it from here.
+  if (traktAccountMark() === account) markTraktHistoryPulled(db, profile, account, startedAt)
 
   // Not silent. See IMPORT_MAX_PAGES — a truncated read that reports success
   // tells somebody their history is imported when part of it is not.
@@ -601,6 +684,47 @@ export async function importTraktLibrary(): Promise<ImportSummary> {
   // happened to this person's history.
   requestRecommendationsRebuild()
   return summary
+}
+
+let pullInFlight: Promise<TraktPullReport> | null = null
+
+/**
+ * The incremental history pull (traktHistoryPull.ts) against the real Trakt
+ * and database. Run by the half-hourly watch-sync job and by every
+ * catch-up; one at a time, a second caller sharing the first.
+ * `removalsOwed` is tracking.ts's removalsHeldBack('trakt'), and `merged`
+ * its noteEpisodeArrivals('trakt', …), handed in by the caller because
+ * tracking.ts imports this module.
+ */
+export function pullTraktHistoryNow(
+  priority: TaskPriority = 'background',
+  removalsOwed?: () => ReadonlySet<string>,
+  merged?: (rows: ImportedPlay[]) => void
+): Promise<TraktPullReport> {
+  if (pullInFlight) return pullInFlight
+  const run = pullTraktHistory({
+    db: getDatabase(),
+    account: traktAccountMark,
+    lastActivities: () => traktRequest('/sync/last_activities', {}, priority),
+    history: (startAt) => readAllPages(`/sync/history?start_at=${encodeURIComponent(startAt)}`),
+    removalsOwed,
+    fullImport: (held) => importTraktLibrary({ skipHeld: held }),
+    merged,
+    file: fileTraktPlays,
+    // At most once a day: this runs every half hour, and its backups must
+    // not push the ones taken before a regroup out of the rotation.
+    backup: () => backupBeforeRewrite('trakt-pull', { notWithinMs: 24 * 60 * 60 * 1000 }),
+    announce: (scopes) => {
+      requestRecommendationsRebuild()
+      notifyLibraryChanged('trakt-pull', ...scopes)
+    },
+    now: () => Date.now(),
+    log: logError
+  }).finally(() => {
+    pullInFlight = null
+  })
+  pullInFlight = run
+  return run
 }
 
 export function registerTraktIpc(): void {

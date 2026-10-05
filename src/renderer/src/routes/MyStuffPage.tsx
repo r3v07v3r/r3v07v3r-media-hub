@@ -695,6 +695,10 @@ export default function MyStuffPage() {
   useRestoreBrowsingOrigin(true)
 
   // Global defaults only, no per-page override — same as the Mood Browser.
+  // Except Hide Disliked, which never applies here: these tabs are the
+  // person's own plan and lists, and a title they planned and also marked
+  // Not interested stays on them, marked, rather than vanishing from a list
+  // they put it on.
   // Memoised because this page subscribes to the whole app context: without
   // it, a full pass over a catalog well past a thousand entries re-ran on
   // every unrelated state change, a toast appearing included.
@@ -702,7 +706,7 @@ export default function MyStuffPage() {
     () => ({
       hideWatched: mediaHubSettings?.hideWatchedDefault ?? false,
       hideCompleted: mediaHubSettings?.hideCompletedDefault ?? false,
-      hideDisliked: mediaHubSettings?.hideDislikedDefault ?? false
+      hideDisliked: false
     }),
     [mediaHubSettings]
   )

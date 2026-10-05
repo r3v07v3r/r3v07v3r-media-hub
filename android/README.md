@@ -3,13 +3,13 @@
 One APK for phones and Android TV / Google TV. It is the desktop app's own
 service layer, run on the device, behind the simple phone/TV UI:
 
-| Part | What it is | Where it comes from |
-|---|---|---|
-| Backend | `dist-headless/backend.cjs` — the desktop's `src/main`, headless | `npm run build:headless` |
-| Page | `dist-app/` — the phone/TV UI | `npm run build:app` (`src/app-ui`) |
-| Runtime | Node 24 built for Android (Termux's `nodejs-lts`) | `scripts/android-node-payload.mjs` |
-| Player | libmpv under the WebView, driven by the backend over mpv's IPC socket | `PlayerHost.kt`, `src/main/media-hub/hostPlayer.ts` |
-| Shell | This Kotlin app: starts the backend, shows the page, updates itself | `android/app` |
+| Part    | What it is                                                            | Where it comes from                                 |
+| ------- | --------------------------------------------------------------------- | --------------------------------------------------- |
+| Backend | `dist-headless/backend.cjs` — the desktop's `src/main`, headless      | `npm run build:headless`                            |
+| Page    | `dist-app/` — the phone/TV UI                                         | `npm run build:app` (`src/app-ui`)                  |
+| Runtime | Node 24 built for Android (Termux's `nodejs-lts`)                     | `scripts/android-node-payload.mjs`                  |
+| Player  | libmpv under the WebView, driven by the backend over mpv's IPC socket | `PlayerHost.kt`, `src/main/media-hub/hostPlayer.ts` |
+| Shell   | This Kotlin app: starts the backend, shows the page, updates itself   | `android/app`                                       |
 
 The backend runs as a child process on `127.0.0.1:47310`; the page reaches it
 over the same bridge a browser would (`src/headless/bridge.ts`). Stored
@@ -73,12 +73,12 @@ APK** step ends with a line saying which key signed the build.
 3. On GitHub: the repository's **Settings → Secrets and variables → Actions →
    New repository secret**, one for each:
 
-   | Secret | Value |
-   |---|---|
-   | `ANDROID_KEYSTORE_BASE64` | the base64 text from step 2 |
-   | `ANDROID_KEYSTORE_PASSWORD` | the keystore password |
-   | `ANDROID_KEY_ALIAS` | `r3-release` (the `-alias` above) |
-   | `ANDROID_KEY_PASSWORD` | the same password again |
+   | Secret                      | Value                             |
+   | --------------------------- | --------------------------------- |
+   | `ANDROID_KEYSTORE_BASE64`   | the base64 text from step 2       |
+   | `ANDROID_KEYSTORE_PASSWORD` | the keystore password             |
+   | `ANDROID_KEY_ALIAS`         | `r3-release` (the `-alias` above) |
+   | `ANDROID_KEY_PASSWORD`      | the same password again           |
 
    Set all four. With the keystore set but any of the other three missing,
    the release build stops rather than fall back to the debug key.
@@ -108,7 +108,14 @@ history from the services themselves, not from the desktop. Home then shows
 Continue Watching and Plan to Watch, and a title's Play starts at the next
 episode you have not watched. Shows Simkl lists as watching, and shows you
 play on the phone, are added to the phone's own list. It only adds; see
-`docs/WATCHLIST-SYNC.md`.
+`docs/WATCHLIST-SYNC.md`. The desktop runs the same catch-up when it opens
+and when its window comes back to the front, so what the phone pushed to
+Simkl reaches the desktop's history too.
+
+A title's page has **My List** and **Not interested** beside Play. Not
+interested keeps the title out of the phone's recommendations, and offers an
+Undo for a few seconds; press it again to take it back. It is kept on the
+phone only, like the desktop's.
 
 ## Debugging
 
@@ -120,6 +127,6 @@ play on the phone, are added to the phone's own list. It only adds; see
 - Party sync, chapters, subtitle search and the other desktop player extras
   on the phone player screen: the backend supports them, the screen does not
   show them yet.
-- Episodes watched on the phone reaching the desktop's own history: the catch-up
-  runs from Simkl into the phone only.
+- Not interested marks shared between the phone and the desktop: each keeps its
+  own, and neither is sent to the tracking services.
 - 32-bit devices (`armeabi-v7a`): needs Termux's `arm` Node staged the same way.

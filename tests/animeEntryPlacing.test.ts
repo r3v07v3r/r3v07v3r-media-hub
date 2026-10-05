@@ -7,7 +7,7 @@
 // the catalog has been grouped. The catch-up and the MyAnimeList import ask
 // placeAnimeEntry, the pushes ask animeSeasonMembersWhenGrouped and
 // animeEntriesFor, the Trakt import, the pages and the cards ask
-// laterSeasonOf.
+// laterSeasonOf, and the library's filters and Home ask laterSeasons.
 //
 // The groups are shapes from a real library: My Hero Academia (an OVA among
 // the seasons, later seasons Kitsu maps to nothing), Naruto behind Naruto:
@@ -26,9 +26,10 @@ import {
   animeEntriesFor,
   animeSeasonMembersWhenGrouped,
   invalidateAnimeGroupIndex,
-  laterSeasonLookup,
   laterSeasonOf,
+  laterSeasons,
   placeAnimeEntry,
+  regroupPlaceIsSeason,
   seasonMatchesPage
 } from '../src/main/media-hub/animeSeasons'
 import { createDatabase } from '../src/main/media-hub/database'
@@ -74,6 +75,10 @@ const SOLO_2 = 'kitsu:48671'
 // A recap in front of the show it recaps.
 const RECAP = 'kitsu:8574'
 const PSYCHO_PASS = 'kitsu:7000'
+// Two cours Kitsu maps to one TheTVDB season, behind the first season.
+const JOJO = 'kitsu:7158'
+const JOJO_2B = 'kitsu:8743'
+const JOJO_2A = 'kitsu:8063'
 // A title that was never merged.
 const FRIEREN = 'kitsu:46474'
 
@@ -86,6 +91,7 @@ function seed(grouped: boolean): void {
       { id: BLEACH, groupedIds: [BLEACH_FILM, BLEACH_TYBW] },
       { id: SOLO, groupedIds: [SOLO_2] },
       { id: RECAP, groupedIds: [PSYCHO_PASS] },
+      { id: JOJO, groupedIds: [JOJO_2B, JOJO_2A] },
       { id: FRIEREN }
     ],
     DAY
@@ -94,13 +100,20 @@ function seed(grouped: boolean): void {
   invalidateAnimeGroupIndex()
 }
 
-/** What kitsuTvdbMapping caches: the mapping, or its "Kitsu has none" mark. */
-function mapping(id: string, seriesId: string, season: number): void {
-  db.putCache(`kitsu:tvdb:${id.replace(/^kitsu:/, '')}`, { seriesId, season }, 30 * DAY)
+/** What kitsuTvdbMapping caches: the mapping, or its "Kitsu has none" mark.
+ *  Like it, each write drops what was worked out from the old one. */
+function mapping(id: string, seriesId: string, season: number, ttl = 30 * DAY): void {
+  db.putCache(`kitsu:tvdb:${id.replace(/^kitsu:/, '')}`, { seriesId, season }, ttl)
+  invalidateAnimeGroupIndex()
 }
 const NONE = { seriesId: '', season: -1 }
 function unmapped(id: string): void {
   db.putCache(`kitsu:tvdb:${id.replace(/^kitsu:/, '')}`, NONE, 30 * DAY)
+  invalidateAnimeGroupIndex()
+}
+function neverAsked(id: string): void {
+  db.deleteCache(`kitsu:tvdb:${id.replace(/^kitsu:/, '')}`)
+  invalidateAnimeGroupIndex()
 }
 
 seed(true)
@@ -117,6 +130,9 @@ unmapped(BLEACH_TYBW)
 unmapped(SOLO)
 mapping(RECAP, '262090', 0)
 mapping(PSYCHO_PASS, '262090', 1)
+mapping(JOJO, '262954', 1)
+mapping(JOJO_2B, '262954', 2)
+mapping(JOJO_2A, '262954', 2)
 // SOLO_2 is left never asked about: on a show built from its members that
 // changes nothing.
 
@@ -130,6 +146,7 @@ check('a well-ordered season is its season; an OVA and an unmapped season are no
   assert.deepEqual(seasons(BLEACH), [BLEACH, null, null])
   assert.deepEqual(seasons(SOLO), [SOLO, SOLO_2])
   assert.deepEqual(seasons(RECAP), [null, null])
+  assert.deepEqual(seasons(JOJO), [JOJO, null, null])
   // Only an id that fronts a group has seasons to name.
   assert.equal(seasons(MHA_3), undefined)
   assert.equal(seasons(FRIEREN), undefined)
@@ -175,16 +192,43 @@ check('laterSeasonOf: the show for a season of it, nothing for anything else', (
   for (const id of [MHA_4, MHA_OVA, NARUTO, BLEACH_TYBW, PSYCHO_PASS, MHA, RECAP, FRIEREN]) {
     assert.equal(laterSeasonOf(id), null, id)
   }
-  const lookup = laterSeasonLookup()
-  assert.ok(lookup)
-  assert.deepEqual(lookup(MHA_2), { id: MHA, season: 2 })
-  assert.deepEqual(lookup(MHA_3), { id: MHA, season: 3 })
-  assert.equal(lookup(MHA_4), null)
-  assert.equal(lookup(NARUTO), null)
-  assert.equal(lookup('tt0903747'), null)
+  // The whole catalog at once is the same answer, id by id.
+  const later = laterSeasons()
+  assert.ok(later)
+  assert.deepEqual(
+    [...later].sort(([a], [b]) => (a < b ? -1 : 1)),
+    [
+      [MHA_2, { id: MHA, season: 2 }],
+      [MHA_3, { id: MHA, season: 3 }],
+      [SOLO_2, { id: SOLO, season: 2 }]
+    ]
+  )
 })
 
 console.log('\nwhat the MyAnimeList push asks')
+
+check(
+  'the regroup: the rule for the grouping that stands, the mappings for one that is gone',
+  () => {
+    // At a member's place in today's grouping it is seasonMatchesPage's
+    // answer, so rows move under a show exactly where laterSeasonOf opens it.
+    assert.equal(regroupPlaceIsSeason(MHA, MHA_3, 3), true)
+    assert.equal(regroupPlaceIsSeason(MHA, MHA_4, 5), false)
+    assert.equal(regroupPlaceIsSeason(SOLO, SOLO_2, 2), true)
+    // The cour at place 2 maps to season 2, and so does another member.
+    assert.equal(regroupPlaceIsSeason(JOJO, JOJO_2B, 2), false)
+    assert.equal(seasonMatchesPage(JOJO, JOJO_2B, 2), false)
+    // Asked of a season that is not the member's place — which season of the
+    // page a member WAS, once its show has come apart — only the mappings can
+    // answer. Psycho-Pass sits second behind a recap and is TheTVDB's season 1.
+    assert.equal(regroupPlaceIsSeason(RECAP, PSYCHO_PASS, 1), true)
+    assert.equal(seasonMatchesPage(RECAP, PSYCHO_PASS, 1), false)
+    assert.equal(regroupPlaceIsSeason(RECAP, PSYCHO_PASS, 2), false)
+    assert.equal(regroupPlaceIsSeason(RECAP, RECAP, 1), false)
+    // A member with no mapping was no season of a page numbered by TMDB.
+    assert.equal(regroupPlaceIsSeason(MHA, MHA_4, 4), false)
+  }
+)
 
 const watched = (id: string, season: number, episode: number) => ({
   id,
@@ -235,7 +279,7 @@ check('a first season the show cannot be shown to be is not sent', () => {
 console.log('\nwhat is known and what is not')
 
 check('a member nobody has looked up holds the whole show back', () => {
-  db.deleteCache('kitsu:tvdb:12511')
+  neverAsked(MHA_OVA)
   const seasons = animeSeasonMembersWhenGrouped()
   assert.deepEqual(seasons?.(MHA), [null, null, null, null, null])
   assert.equal(laterSeasonOf(MHA_3), null)
@@ -246,7 +290,7 @@ check('a member nobody has looked up holds the whole show back', () => {
 })
 
 check('an expired mapping still counts: it is the one the page was built from', () => {
-  db.putCache('kitsu:tvdb:13881', { seriesId: '305074', season: 3 }, -DAY)
+  mapping(MHA_3, '305074', 3, -DAY)
   assert.deepEqual(placeAnimeEntry(MHA_3), { id: MHA, season: 3 })
   mapping(MHA_3, '305074', 3)
 })
@@ -254,7 +298,7 @@ check('an expired mapping still counts: it is the one the page was built from', 
 check('until the catalog is grouped nothing is a season of anything', () => {
   seed(false)
   assert.equal(animeSeasonMembersWhenGrouped(), undefined)
-  assert.equal(laterSeasonLookup(), undefined)
+  assert.equal(laterSeasons(), undefined)
   assert.equal(laterSeasonOf(MHA_3), null)
   assert.deepEqual(animeEntriesFor(MHA_3), { id: MHA_3, season: 1 })
   assert.deepEqual(animeEntriesFor(MHA), { id: MHA, season: 1 })

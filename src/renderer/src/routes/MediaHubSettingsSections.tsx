@@ -1562,7 +1562,8 @@ export function TraktSection() {
           <span className={styles.rowDescription}>
             Brings your watched history and ratings here, keeping their original dates. Safe to run
             more than once — it only fills in what is missing and never changes what is already
-            here.
+            here. What you watch on Trakt from then on comes in by itself, every half hour and when
+            the app opens.
           </span>
           <StatusLine status={importStatus} />
         </div>

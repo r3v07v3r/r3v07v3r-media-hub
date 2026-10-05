@@ -5,21 +5,53 @@
 // reads, and a grouped multi-season anime's browse-grid badge silently
 // under-reported to just its first season's own count.
 //
+// Also the anime page's franchise guide: the story links, the kind of entry
+// the grouping reads, and the two orders the page can list a franchise in —
+// release order (the films between the seasons they came out between) and
+// story order (core.ts's animeStoryOrder).
+//
 // Run with: npx tsx tests/animeCatalogStorage.test.ts   (or npm.cmd test)
 
 import assert from 'node:assert'
-import type { AnimeStoryLink, CatalogItem, Episode } from '../src/shared/media-hub/types'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import type {
+  AnimeStoryLink,
+  AnimeTimelineEntry,
+  CatalogItem,
+  Episode
+} from '../src/shared/media-hub/types'
+import { createDatabase } from '../src/main/media-hub/database'
+import { setDatabase } from '../src/main/media-hub/dbState'
 import {
+  animeReleaseTimeline,
   animeStoryLinks,
+  animeStoryOrder,
+  animeStoryTimeline,
   mergedShowStoryLinks,
   normalizeKitsuAnime
 } from '../src/main/media-hub/core'
 import {
+  ANIME_GROUPED_KEY,
+  animeShowTimelineParts,
   combineGroupEpisodeCounts,
-  groupedVideosAreComplete
+  groupedVideosAreComplete,
+  invalidateAnimeGroupIndex,
+  isSeasonEntry
 } from '../src/main/media-hub/animeSeasons'
 
 let pass = 0
+async function checkAsync(name: string, fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn()
+    pass++
+    console.log(`  ok  ${name}`)
+  } catch (error) {
+    console.log(`FAIL  ${name}\n      ${(error as Error).message}`)
+    process.exitCode = 1
+  }
+}
 function check(name: string, fn: () => void): void {
   try {
     fn()
@@ -309,4 +341,230 @@ check(
   }
 )
 
-console.log(`\n${pass} passed`)
+// The kind of entry decides whether the grouping may make it a season
+// (animeSeasons.ts's isSeasonEntry): only a TV entry is one.
+check("normalizeKitsuAnime keeps Kitsu's kind of entry, lowercased", () => {
+  const kind = (attributes: Record<string, unknown>): string | undefined =>
+    normalizeKitsuAnime({ id: '1', attributes: { canonicalTitle: 'x', ...attributes } }).subtype
+  assert.equal(kind({ subtype: 'TV' }), 'tv')
+  assert.equal(kind({ subtype: 'movie' }), 'movie')
+  assert.equal(kind({ subtype: 'OVA', showType: 'OVA' }), 'ova')
+  assert.equal(kind({ showType: 'ONA' }), 'ona')
+  assert.equal(kind({}), undefined, 'none given: the key is absent, not empty')
+  assert.equal(isSeasonEntry({ subtype: 'tv' }), true)
+  assert.equal(isSeasonEntry({}), true, 'unknown is grouped as it always was')
+  for (const subtype of ['movie', 'ova', 'ona', 'special', 'music']) {
+    assert.equal(isSeasonEntry({ subtype }), false, subtype)
+  }
+})
+
+console.log('\nrelease order and story order')
+
+// A franchise to put in order: a show of three seasons, a film that came
+// out between its second and third, an OVA after the third, a prequel made
+// years later and a side story with no prequel or sequel link at all.
+function dated(id: string, releaseDate: string, subtype = 'tv'): CatalogItem {
+  return { ...anime(id, []), releaseDate, subtype }
+}
+const S1 = dated('kitsu:1', '2013-04-07')
+const S2 = dated('kitsu:2', '2017-04-01')
+const S3 = dated('kitsu:3', '2019-04-29')
+const FILM = dated('kitsu:4', '2018-07-20', 'movie')
+const OVA = dated('kitsu:5', '2020-01-10', 'ova')
+const EARLY = dated('kitsu:6', '2012-12-01', 'special')
+const UNDATED = dated('kitsu:7', '', 'ova')
+const ids = (entries: { item: CatalogItem }[]): string[] => entries.map((entry) => entry.item.id)
+const storyLinkTo = (relation: AnimeStoryLink['relation'], item: CatalogItem): AnimeStoryLink => ({
+  relation,
+  item
+})
+const seasons = [S1, S2, S3].map((item, i) => ({ item, season: i + 1 }))
+
+check('release order: each film between the seasons it came out between', () => {
+  const timeline = animeReleaseTimeline(
+    seasons,
+    [OVA, UNDATED, FILM, EARLY].map((item) => ({ item }))
+  )
+  assert.deepEqual(
+    ids(timeline),
+    [EARLY, S1, S2, FILM, S3, OVA, UNDATED].map((item) => item.id)
+  )
+  // The seasons keep their numbers and their order.
+  assert.deepEqual(
+    timeline
+      .filter((entry) => 'season' in entry)
+      .map((entry) => (entry as { season: number }).season),
+    [1, 2, 3]
+  )
+})
+
+check('release order: a season with no date does not place anything', () => {
+  const undatedSecond = [S1, { ...S2, releaseDate: '' }, S3].map((item, i) => ({
+    item,
+    season: i + 1
+  }))
+  // Measured from the first season, the last that started before it.
+  assert.deepEqual(ids(animeReleaseTimeline(undatedSecond, [{ item: FILM }])), [
+    S1.id,
+    FILM.id,
+    S2.id,
+    S3.id
+  ])
+})
+
+const key = (item: CatalogItem): string => item.id
+const date = (item: CatalogItem): string => String(item.releaseDate || '')
+
+check('story order follows the prequel and sequel links, not the air dates', () => {
+  // A prequel made later (the Fate/Zero shape): linked as the prequel of
+  // the first season, it goes first though it aired last.
+  const PREQUEL = dated('kitsu:8', '2021-10-01')
+  const order = animeStoryOrder([S1, S2, S3, PREQUEL], key, date, [
+    [PREQUEL.id, S1.id],
+    [S1.id, S2.id],
+    [S2.id, S3.id]
+  ])
+  assert.deepEqual(order.map(key), [PREQUEL, S1, S2, S3].map(key))
+})
+
+check('story order places what the links leave unordered by its date', () => {
+  // The film and the OVA have no link among these: each lands between the
+  // parts around its date. The undated one comes last.
+  const order = animeStoryOrder([S3, OVA, UNDATED, FILM, S2, S1], key, date, [
+    [S1.id, S2.id],
+    [S2.id, S3.id]
+  ])
+  assert.deepEqual(order.map(key), [S1, S2, FILM, S3, OVA, UNDATED].map(key))
+})
+
+check('story order: a link the dates disagree with wins, and a cycle loses nothing', () => {
+  // The film is linked as the third season's sequel, though it aired first.
+  const order = animeStoryOrder([S1, S2, S3, FILM], key, date, [
+    [S1.id, S2.id],
+    [S2.id, S3.id],
+    [S3.id, FILM.id]
+  ])
+  assert.deepEqual(order.map(key), [S1, S2, S3, FILM].map(key))
+  // Each listed as the other's prequel: broken at the earlier one.
+  const cycle = animeStoryOrder([S2, S1], key, date, [
+    [S1.id, S2.id],
+    [S2.id, S1.id]
+  ])
+  assert.deepEqual(cycle.map(key), [S1, S2].map(key))
+  // Links to anything not in the list, and to itself, are ignored.
+  assert.deepEqual(
+    animeStoryOrder([S2, S1], key, date, [
+      ['kitsu:404', S1.id],
+      [S2.id, S2.id]
+    ]).map(key),
+    [S1, S2].map(key)
+  )
+})
+
+// What the page's catalog:story is answered from (animeStory.ts's
+// storyForShow, which adds only the IPC handler and the requests): the
+// show's parts from the grouped catalog and the index, put in release order,
+// or with each part's story links in story order. Everything is cached here
+// first, so nothing is asked of Kitsu.
+async function pageChecks(): Promise<void> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-anime-story-'))
+  const db = createDatabase(path.join(dir, 'test.sqlite'), 'profile')
+  setDatabase(db)
+  const PREQUEL = dated('kitsu:20', '2010-01-01')
+  const SIDE = dated('kitsu:21', '2018-01-05', 'ova')
+  const NEXT = dated('kitsu:22', '2022-04-01')
+  const show: CatalogItem = {
+    ...S1,
+    groupedIds: [S2.id, S3.id],
+    groupedExtras: [FILM.id],
+    seasonStarts: [S1.releaseDate!, S2.releaseDate!, S3.releaseDate!]
+  }
+  db.putCache('catalog:v2:anime', [show, FILM, NEXT], 60_000)
+  db.putCache(ANIME_GROUPED_KEY, true, 60_000)
+  invalidateAnimeGroupIndex()
+  // The index rows carry a year and no date, as indexRowToItem gives them.
+  db.indexUpsert('anime', [S1, S2, S3, FILM, NEXT])
+  const story: Record<string, AnimeStoryLink[]> = {
+    [S1.id]: [storyLinkTo('prequel', PREQUEL), storyLinkTo('sequel', S2)],
+    [S2.id]: [
+      storyLinkTo('prequel', S1),
+      storyLinkTo('side_story', SIDE),
+      storyLinkTo('sequel', S3)
+    ],
+    [S3.id]: [storyLinkTo('prequel', S2), storyLinkTo('sequel', NEXT)],
+    [FILM.id]: [storyLinkTo('parent_story', S2)]
+  }
+  const shape = (entries: AnimeTimelineEntry[]): string[] =>
+    entries.map((entry) =>
+      entry.season !== undefined
+        ? `season ${entry.season}`
+        : `${entry.relation ?? entry.item.subtype}:${entry.item.id}`
+    )
+
+  await checkAsync('the show’s parts: its seasons, named and dated, then its films', async () => {
+    const parts = animeShowTimelineParts(S1.id)
+    assert.deepEqual(shape(parts), ['season 1', 'season 2', 'season 3', `movie:${FILM.id}`])
+    assert.equal(parts[1].item.title, S2.title, 'a season is named by its own entry')
+    assert.equal(parts[1].item.releaseDate, S2.releaseDate, 'and dated by the grouping')
+    // A title that is not a merged show is its one part.
+    assert.deepEqual(
+      animeShowTimelineParts(NEXT.id).map((part) => [part.item.id, part.season]),
+      [[NEXT.id, undefined]]
+    )
+  })
+
+  await checkAsync('release order lists the film between the seasons, as released', async () => {
+    const parts = animeShowTimelineParts(S1.id)
+    const timeline = animeReleaseTimeline(
+      parts.filter((part) => part.season !== undefined),
+      parts.filter((part) => part.season === undefined)
+    )
+    assert.deepEqual(shape(timeline), ['season 1', 'season 2', `movie:${FILM.id}`, 'season 3'])
+  })
+
+  await checkAsync('story order lists every part and every link, in story order', async () => {
+    const parts = animeShowTimelineParts(S1.id)
+    const { timeline, timelineChecked } = animeStoryTimeline(
+      parts,
+      parts.map((part) => ({ links: story[part.item.id] ?? [], checked: true }))
+    )
+    assert.equal(timelineChecked, true)
+    assert.deepEqual(shape(timeline), [
+      `prequel:${PREQUEL.id}`,
+      'season 1',
+      'season 2',
+      `side_story:${SIDE.id}`,
+      `movie:${FILM.id}`,
+      'season 3',
+      `sequel:${NEXT.id}`
+    ])
+  })
+
+  await checkAsync('story order says so when a part’s links could not be looked up', async () => {
+    const parts = animeShowTimelineParts(S1.id)
+    // The film's lookup failed with nothing cached, and the third season's
+    // failed outright: the order is built from what answered.
+    const { timeline, timelineChecked } = animeStoryTimeline(
+      parts,
+      parts.map((part) =>
+        part.item.id === FILM.id
+          ? { links: [], checked: false }
+          : part.item.id === S3.id
+            ? null
+            : { links: story[part.item.id] ?? [], checked: true }
+      )
+    )
+    assert.equal(timelineChecked, false)
+    assert.deepEqual(shape(timeline), [
+      `prequel:${PREQUEL.id}`,
+      'season 1',
+      'season 2',
+      `side_story:${SIDE.id}`,
+      `movie:${FILM.id}`,
+      'season 3'
+    ])
+  })
+  db.close()
+}
+
+void pageChecks().then(() => console.log(`\n${pass} passed`))

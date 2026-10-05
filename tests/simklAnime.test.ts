@@ -18,7 +18,7 @@
 
 import assert from 'node:assert/strict'
 
-import { animeGroupIndexesOf } from '../src/main/media-hub/animeSeasons'
+import { animeGroupIndexesOf, laterSeasonsOf } from '../src/main/media-hub/animeSeasons'
 import {
   batchHistoryPayload,
   hasSimklContent,
@@ -41,6 +41,7 @@ import {
   animeSeasonMembers,
   animeSeasonOf,
   animeSeasonOfMember,
+  animeTvdbSeasonIs,
   fromSimklAnimeEpisode,
   toSimklAnimeEpisode,
   type AnimeGroupOf,
@@ -428,6 +429,24 @@ check('season -> member -> season, and member -> season -> member, round trip', 
   assert.equal(animeSeasonOfMember(MHA, 'kitsu:404', tvdbOf), null, 'not a member at all')
 })
 
+check('the mappings alone say less than the rule, and are not the rule', () => {
+  // What the regroup asks of a grouping that is gone (animeTvdbSeasonIs):
+  // the member's own TheTVDB season, with no place and no other member in
+  // it. Psycho-Pass is TheTVDB's season 1 and sits second behind a recap;
+  // both cours are TheTVDB's season 2.
+  assert.equal(animeTvdbSeasonIs('kitsu:8574', 'kitsu:7000', 1, tvdbOf), true)
+  assert.equal(animeSeasonOfMember(RECAP_FIRST, 'kitsu:7000', tvdbOf), null)
+  assert.equal(animeTvdbSeasonIs('kitsu:7158', 'kitsu:8743', 2, tvdbOf), true)
+  assert.equal(animeTvdbSeasonIs('kitsu:7158', 'kitsu:8063', 2, tvdbOf), true)
+  assert.deepEqual(animeSeasonMembers(TWO_COURS, tvdbOf).slice(1), [null, null])
+  // No mapping, another series, a show nobody has looked up: no.
+  assert.equal(animeTvdbSeasonIs(TMDB_SHOW, 'kitsu:41971', 5, tvdbOf), false)
+  assert.equal(animeTvdbSeasonIs('kitsu:1555', 'kitsu:11', 1, tvdbOf), false)
+  assert.equal(animeTvdbSeasonIs('kitsu:1', 'kitsu:2', 2, tvdbOf), false)
+  // A show built from its members has no mappings to disagree with.
+  assert.equal(animeTvdbSeasonIs(SHOW, SEASON_3, 3, tvdbOf), true)
+})
+
 // What animeSeasons.ts builds from the grouped catalog: the group an id
 // belongs to, and the seasons of a show an id fronts.
 const groupOf: AnimeGroupOf = (id) => GROUPS.find((group) => group.includes(id))
@@ -459,6 +478,38 @@ check("where a service's entry is kept", () => {
 })
 
 const mha = { id: TMDB_SHOW, type: 'anime' as const, title: 'My Hero Academia', year: '2016' }
+
+check(
+  'the later seasons of the whole catalog are the members that are a season of their show',
+  () => {
+    // What the library's filters are handed (animeSeasons.ts's laterSeasons):
+    // the same answer for every id that laterSeasonOf gives one at a time.
+    const grouped = animeGroupIndexesOf([
+      { id: SHOW, groupedIds: [SEASON_2, SEASON_3] },
+      { id: TMDB_SHOW, groupedIds: ['kitsu:12268', 'kitsu:13881', 'kitsu:12511', 'kitsu:41971'] },
+      { id: ALONE }
+    ])
+    const laterSeasons = laterSeasonsOf(
+      grouped.positions,
+      (showId, member, season) =>
+        animeSeasonMembers([showId, ...(grouped.siblings.get(showId) ?? [])], tvdbOf)[
+          season - 1
+        ] === member
+    )
+    assert.deepEqual(
+      [...laterSeasons],
+      [
+        [SEASON_2, { id: SHOW, season: 2 }],
+        [SEASON_3, { id: SHOW, season: 3 }],
+        ['kitsu:12268', { id: TMDB_SHOW, season: 2 }],
+        ['kitsu:13881', { id: TMDB_SHOW, season: 3 }]
+      ],
+      'the OVA at place 4 and the unmapped season at place 5 keep their own rows'
+    )
+    // A show is not its own later season, and neither is a title in no group.
+    for (const id of [SHOW, TMDB_SHOW, ALONE]) assert.equal(laterSeasons.has(id), false, id)
+  }
+)
 
 check('a season whose member cannot be shown to be it is not sent to Simkl', () => {
   assert.deepEqual(historyPayload(mha, { season: 3, episode: 5 }, seasonsOf), {
@@ -533,6 +584,57 @@ check('Simkl -> local -> Simkl is the identity for every entry that is kept', ()
       else assert.equal(placeOf(id), null)
     }
   }
+})
+
+check('a film is not a season: out of the show, each season reaches its own entry', () => {
+  // TheTVDB files a film at season 0 of its series, so the grouping sorted
+  // it first and it fronted the show. Every place was then one off its
+  // season, and no member could be shown to be any season of the page: not
+  // the film at season 1 either, which is the show's first season there.
+  // groupAnimeCatalog now keeps the film out of the show (it is not a TV
+  // entry) and names it in groupedExtras instead.
+  const tvdb: Record<string, { seriesId: string; season: number }> = {
+    'kitsu:7001': { seriesId: '371028', season: 0 },
+    'kitsu:7002': { seriesId: '371028', season: 1 },
+    'kitsu:7003': { seriesId: '371028', season: 2 }
+  }
+  const tvdbFor: AnimeTvdbSeason = (id) => tvdb[id] ?? null
+  const seasonsWith = (front: string, later: string[]): AnimeSeasonMembers => {
+    return (id) => (id === front ? animeSeasonMembers([front, ...later], tvdbFor) : undefined)
+  }
+  const before = seasonsWith('kitsu:7001', ['kitsu:7002', 'kitsu:7003'])
+  const filmFront = { id: 'kitsu:7001', type: 'anime' as const, title: 'Show', year: '2019' }
+  assert.deepEqual(historyPayload(filmFront, { season: 1, episode: 5 }, before), {})
+  assert.deepEqual(historyPayload(filmFront, { season: 2, episode: 5 }, before), {})
+
+  const after = seasonsWith('kitsu:7002', ['kitsu:7003'])
+  const showNow = { id: 'kitsu:7002', type: 'anime' as const, title: 'Show', year: '2019' }
+  assert.deepEqual(historyPayload(showNow, { season: 1, episode: 5 }, after), {
+    anime: [{ title: 'Show', year: 2019, ids: { kitsu: 7002 }, episodes: [{ number: 5 }] }]
+  })
+  assert.deepEqual(historyPayload(showNow, { season: 2, episode: 5 }, after), {
+    anime: [{ ids: { kitsu: 7003 }, episodes: [{ number: 5 }] }]
+  })
+  // The film is a title of its own: its one episode is its own entry's.
+  const film = { id: 'kitsu:7001', type: 'anime' as const, title: 'Show: The Movie', year: '2020' }
+  assert.deepEqual(historyPayload(film, { season: 1, episode: 1 }, after), {
+    anime: [
+      { title: 'Show: The Movie', year: 2020, ids: { kitsu: 7001 }, episodes: [{ number: 1 }] }
+    ]
+  })
+  // And a later season's own id is the show's at its season, the film's is
+  // nobody's.
+  const grouped = animeGroupIndexesOf([
+    { id: 'kitsu:7002', groupedIds: ['kitsu:7003'] },
+    { id: 'kitsu:7001' }
+  ])
+  const later = laterSeasonsOf(
+    grouped.positions,
+    (showId, member, season) =>
+      animeSeasonMembers([showId, ...(grouped.siblings.get(showId) ?? [])], tvdbFor)[season - 1] ===
+      member
+  )
+  assert.deepEqual([...later], [['kitsu:7003', { id: 'kitsu:7002', season: 2 }]])
 })
 
 // ---------------------------------------------------------------------------
