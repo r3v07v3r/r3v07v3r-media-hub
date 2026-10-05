@@ -762,6 +762,30 @@ export async function fillTrackedArtwork(profile: string, deps: ArtworkDeps): Pr
 // The real thing.
 
 const memory = newCatchUpMemory()
+
+/** The last /sync/activities answer a real pass read, and for whom. */
+let lastActivities: { account: string; at: number; payload: unknown } | null = null
+
+/**
+ * The /sync/activities answer the catch-up read for `account` within the
+ * last `maxAgeMs`, if there is one. The desktop's launch check runs right
+ * after the catch-up and asks the same question; reusing the answer saves
+ * one of the 500 requests a day a linked phone shares.
+ */
+export function recentSimklActivities(
+  account: string,
+  maxAgeMs: number,
+  now: number = Date.now()
+): unknown {
+  if (!lastActivities || !account || lastActivities.account !== account) return undefined
+  return now - lastActivities.at <= maxAgeMs ? lastActivities.payload : undefined
+}
+
+/** Records an answer for recentSimklActivities. */
+export function noteSimklActivities(account: string, payload: unknown, at: number): void {
+  lastActivities = { account, at, payload }
+}
+
 const artworkTried = new Set<string>()
 const artworkFailures = new Map<string, number>()
 
@@ -807,7 +831,12 @@ export async function catchUpFromServices(options: CatchUpOptions = {}): Promise
     // first catalog crawl, a minute or more of it, so a phone that had just
     // been linked sat on "Updating…" until the crawl was done. They are a
     // handful of requests, and nothing runs at all while something plays.
-    activities: () => simkl.simklActivities('visible'),
+    activities: async () => {
+      const account = settings.simklAccountMark()
+      const payload = await simkl.simklActivities('visible')
+      noteSimklActivities(account, payload, Date.now())
+      return payload
+    },
     library: (kind, since) => simkl.simklLibrary(kind, 'visible', since),
     // Through the same record the half-hourly job keeps, so the two of
     // them read Simkl's lists once per change, not once each.

@@ -9,7 +9,8 @@
 // second pass over the same library changes nothing — is a property of the
 // rules and importWatched together. Then the pass that carries them out
 // (simklCatchUp.ts), with the services faked: what it asks Simkl for, and
-// what it refuses to write when something moves underneath it.
+// what it refuses to write when something moves underneath it. Last, the
+// activities answer the desktop's launch check borrows from the catch-up.
 //
 // Run with: npx tsx tests/simklCatchUp.test.ts
 
@@ -23,6 +24,8 @@ import { continueWatchingList } from '../src/main/media-hub/core'
 import {
   fillTrackedArtwork,
   newCatchUpMemory,
+  noteSimklActivities,
+  recentSimklActivities,
   runCatchUp,
   type CatchUpDeps,
   type CatchUpMemory
@@ -1866,6 +1869,23 @@ async function passes(): Promise<void> {
     assert.equal(await fillTrackedArtwork(PASS_PROFILE, deps), 1)
     assert.deepEqual(asked, ['tt0000001'])
     assert.equal(db.tracked()[0]?.poster, 'https://p/x.jpg')
+  })
+
+  console.log('recentSimklActivities')
+
+  await checkAsync('the launch check reuses the activities the catch-up just read', async () => {
+    // The desktop's launch check runs right after the catch-up and asks
+    // Simkl the same question; a minute-old answer for the same account is
+    // the same answer, and saves a request of the 500 a day.
+    const at = Date.parse('2026-10-05T12:00:00Z')
+    assert.equal(recentSimklActivities('simkl-1', 60_000, at), undefined, 'nothing read yet')
+    noteSimklActivities('simkl-1', { movies: { all: 'm1' } }, at)
+    assert.deepEqual(recentSimklActivities('simkl-1', 60_000, at + 30_000), {
+      movies: { all: 'm1' }
+    })
+    assert.equal(recentSimklActivities('simkl-1', 60_000, at + 61_000), undefined, 'too old')
+    assert.equal(recentSimklActivities('simkl-2', 60_000, at + 1), undefined, 'another account')
+    assert.equal(recentSimklActivities('', 60_000, at + 1), undefined, 'not connected')
   })
 }
 

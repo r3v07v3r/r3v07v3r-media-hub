@@ -89,7 +89,7 @@ import {
   laterSeasonOf,
   resolveAnimeGroupTarget
 } from './animeSeasons'
-import { catchUpFromServices } from './simklCatchUp'
+import { catchUpFromServices, recentSimklActivities } from './simklCatchUp'
 import { getDatabase } from './dbState'
 import {
   applyLocalPlanChange,
@@ -2368,9 +2368,13 @@ export function registerTrackingIpc(): void {
     // Simkl's one small question before its films library, the same gate
     // the half-hourly pass reads (watchSync.ts). Unanswered, the films are
     // not read: fetching them without it is what Simkl suspends clients for.
+    // The catch-up just above has usually read it moments ago; a minute-old
+    // answer is the same answer.
     let movies: string | null
     try {
-      movies = parseSimklActivities(await simklActivities('visible')).movies
+      const payload =
+        recentSimklActivities(account, 60 * 1000) ?? (await simklActivities('visible'))
+      movies = parseSimklActivities(payload).movies
     } catch (error) {
       logError('tracking:reconcile:activities', error)
       return { ran: false, discrepancies: cachedReconcileResult() }

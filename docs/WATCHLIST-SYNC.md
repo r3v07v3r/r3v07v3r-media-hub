@@ -242,7 +242,8 @@ asks that one question first and reads only what moved:
   library with every episode's date, the largest thing the app asks Simkl
   for, is left to the MyAnimeList preview, which needs it. The desktop's
   own check a few seconds after launch asks `/sync/activities` the same
-  way first, after the catch-up below has run, and when neither side's
+  way first, after the catch-up below has run (reusing the catch-up's
+  answer when it is under a minute old), and when neither side's
   films moved since the last comparison it shows that one again rather
   than reading Simkl's films (a comparison is kept for a day).
 - **Trakt and MyAnimeList** have no such question to ask, and are read
