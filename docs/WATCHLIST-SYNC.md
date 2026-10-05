@@ -378,8 +378,7 @@ whole title, a scrobble) is translated first, by `toSimklAnimeEpisode` in
   group's _s_-th member, under that member's own Kitsu id and with no
   season number. A change that spans seasons is one entry per season, the
   same split `planMalPushes` makes for MAL.
-- A title that was never merged is its own entry. So is a later season
-  opened and watched under its own id.
+- A title that was never merged is its own entry.
 - Specials (season 0) are not sent. They are TMDB's list for the whole
   franchise and belong to no entry this app can name.
 - A season the group has no member for is not sent.
@@ -402,6 +401,46 @@ guide gives for an anime id: an `anime` entry with a flat `episodes` list.
 The tests model an account that behaves as that guide says. No request has
 been made to the live API from a development machine, so whether Simkl
 files these as described is still to be confirmed on a real account.
+
+### A later season under its own id
+
+A later season of a merged show still has an id of its own. One thing
+keeps using it, and nothing else does.
+
+- **The plan uses it.** A service lists a season under that season's id,
+  so a watchlist pull plans it under that id, as its own card. That is on
+  purpose: the id names the entry at the service, so taking the card off
+  the plan can only ever remove that entry. MAL deletes the entry it is
+  asked about when its status is still plan to watch; planned under the
+  show's id, the same removal would be aimed at the first season's entry.
+- **Nothing else does.** Opening such a card opens the show's page at that
+  season, on the desktop and on the phone: a merged season has no page of
+  its own. Play on the card plays the show from that season. An episode
+  marked, a bookmark saved or a scrobble sent under a later season's id is
+  kept under the show, at the season that id is there. The card's watched
+  and not watched act on that one season of the show.
+
+Home follows the same split. A later season on the plan with nothing of it
+watched is in Plan to Watch as its own card. Once an episode of it has been
+watched, the show takes its place in Continue Watching.
+
+Before this, a later season opened by its own id was a separate one-season
+title. What was watched there was saved under that id, where the show's
+page never read it and the count sent to MyAnimeList (read from the show's
+rows) left it out. Rows already saved that way are moved under the show
+once, in the background, after the anime catalog has been organised
+(`animeSyncRepair.ts`). Nothing is sent to a service when they move;
+MyAnimeList hears the right count the next time that season changes here.
+
+One kind of row is left where it is. When the grouping changes which
+season fronts a show, the id that used to front it becomes a later season,
+and the rows under it are the whole show's in the old season order, which
+nothing records. Its own season can still be placed and is moved; the rest
+cannot be, and stay under that id rather than be guessed onto one season.
+
+Until the catalog has been organised into its seasons nothing can tell a
+later season from a title that stands alone, so in that window a later
+season still opens, and saves, as itself.
 
 ### Pushes made before the mapping
 

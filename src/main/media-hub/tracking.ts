@@ -80,6 +80,7 @@ import { catalogData, metadata } from './catalog'
 import {
   animeGroupingReady,
   animeSiblingsWhenGrouped,
+  laterSeasonOf,
   resolveAnimeGroupTarget
 } from './animeSeasons'
 import { catchUpFromServices } from './simklCatchUp'
@@ -1224,6 +1225,27 @@ function canonicalWriteId(item: { id: unknown; type?: unknown }): string {
   return imdb
 }
 
+/**
+ * An episode's coordinates as history keeps them.
+ *
+ * A later season of a merged anime has an id of its own — a plan card a
+ * watchlist pull added carries it — and whatever is played or ticked from
+ * such a card arrives named by that id. Kept that way it is a second copy
+ * of the show's season under an id the show's page never reads, and the
+ * count MyAnimeList is sent (read from the show's rows) leaves it out. So
+ * it is kept under the show, at the season that id is there; see
+ * animeHistoryCoordinates in serviceIds.ts for why the season it arrived
+ * with is not carried over. Everything else comes back as it went in.
+ */
+function underShow<T extends { id: string }>(
+  item: T,
+  playback: PlaybackPosition
+): { item: T; playback: PlaybackPosition } {
+  const show = playback.episode == null ? null : laterSeasonOf(String(item.id))
+  if (!show) return { item, playback }
+  return { item: { ...item, id: show.id }, playback: { ...playback, season: show.season } }
+}
+
 interface MovieDiff {
   discrepancies: WatchStatusDiscrepancy[]
   /** Whether Simkl's library was read from Simkl for this diff — not from
@@ -1504,7 +1526,7 @@ export function registerTrackingIpc(): void {
 
   handle<MarkWatchedPayload, MarkWatchedResult>(
     MEDIA_HUB_CHANNELS.trackingMarkWatched,
-    async (_e, { item, playback, follow }) => {
+    async (_e, { item, playback: asked, follow }) => {
       // This handler used to refuse any id no tracking service can
       // express, on the grounds that only mockData's m-* demo pool could
       // produce one — the write that put three demo-id duplicates into
@@ -1517,8 +1539,13 @@ export function registerTrackingIpc(): void {
       // hasExpressibleSimklId in reconcileCheck).
       //
       item = { ...item, id: canonicalWriteId(item) }
+      // A later season of a merged anime, played from its own card, is kept
+      // under the show — see underShow.
+      const kept = underShow(item, asked || {})
+      item = kept.item
+      const playback = kept.playback
       const db = getDatabase()
-      db.markWatched(item, playback || {})
+      db.markWatched(item, playback)
       // A show played on the phone or TV is followed, so it reaches
       // Continue Watching there — the lite UI has no My List button on the
       // player to do it by hand. Local only, never pushLocalPlanChange: a
@@ -1537,10 +1564,10 @@ export function registerTrackingIpc(): void {
       queueRemotePushes(item, () => [
         syncSimklHistory(
           '/sync/history',
-          historyPayload(item, playback || {}, animeSiblingsWhenGrouped())
+          historyPayload(item, playback, animeSiblingsWhenGrouped())
         ),
-        pushTraktHistory(item, playback || {}, 'add'),
-        pushMalProgress(item, { season: playback?.season ?? undefined, profile })
+        pushTraktHistory(item, playback, 'add'),
+        pushMalProgress(item, { season: playback.season ?? undefined, profile })
       ])
       return { ok: true, simklSynced: false, malSynced: false }
     }
@@ -1549,10 +1576,12 @@ export function registerTrackingIpc(): void {
   handle<MarkWatchedPayload, MarkWatchedResult>(
     MEDIA_HUB_CHANNELS.trackingUnmarkWatched,
     async (_e, { item, playback }) => {
-      const p = playback || {}
       // The same id the mark went under, so an unmark of a Simkl-keyed
-      // card deletes the row the mark wrote and queues behind its push.
-      item = { ...item, id: canonicalWriteId(item) }
+      // card deletes the row the mark wrote and queues behind its push —
+      // and, for a later season of a merged anime, the same show.
+      const kept = underShow({ ...item, id: canonicalWriteId(item) }, playback || {})
+      item = kept.item
+      const p = kept.playback
       getDatabase().unmarkWatched(item.id, p.season, p.episode)
       requestRecommendationsRebuild()
       // Detached as above, and queued behind any push still in flight for
@@ -1573,11 +1602,19 @@ export function registerTrackingIpc(): void {
 
   handle<MarkSeasonWatchedPayload, MarkWatchedResult>(
     MEDIA_HUB_CHANNELS.trackingMarkSeasonWatched,
-    async (_e, { item, season, episodes }) => {
-      const list = Array.isArray(episodes) ? episodes : []
+    async (_e, { item, season: askedSeason, episodes }) => {
+      item = { ...item, id: canonicalWriteId(item) }
+      // One season at a time (the renderer's selection never spans two), so
+      // a later season of a merged anime moves under its show as a whole —
+      // see underShow.
+      const show = laterSeasonOf(String(item.id))
+      if (show) item = { ...item, id: show.id }
+      const season = show ? show.season : askedSeason
+      const list = (Array.isArray(episodes) ? episodes : []).map((p) =>
+        show ? { ...p, season: show.season } : p
+      )
       const episodeNumbers = list.map((p) => p.episode)
       const db = getDatabase()
-      item = { ...item, id: canonicalWriteId(item) }
       for (const playback of list) db.markWatched(item, playback)
       requestRecommendationsRebuild()
       // Detached and ordered per title, as the single-episode handler above.
@@ -1638,6 +1675,17 @@ export function registerTrackingIpc(): void {
       const id = canonicalWriteId(item)
       const type = (item.type ?? 'movie') as MediaKind
       const episodic = type !== 'movie'
+      // A later season of a merged anime, named by its own id — the card a
+      // watchlist pull added. Its PLAN is its own: that id names the entry
+      // at the service, which is what a removal has to be aimed at. Its
+      // VIEWINGS are the show's, at the season it is there. So the status
+      // of such a card is read and written over that one season of the
+      // show: "watched" marks that season, "not watched" clears it, and
+      // the rest of the show is not touched.
+      const part = type === 'anime' ? laterSeasonOf(id) : null
+      const historyId = part?.id ?? id
+      const inPart = (row: { season: number | null }): boolean =>
+        !part || row.season === part.season
       const pushItem: SimklPushItem & { totalEpisodes?: number } = {
         ...item,
         id,
@@ -1645,6 +1693,11 @@ export function registerTrackingIpc(): void {
         title: String(item.title ?? ''),
         year: item.year ? String(item.year) : ''
       }
+      /** What a history push is made for: the title, or the show a later
+       *  season's viewings are kept under. Built when asked, because the
+       *  year and the episode total are filled in below. */
+      const historyItem = (): SimklPushItem & { totalEpisodes?: number } =>
+        part ? { ...pushItem, id: historyId } : pushItem
       const plan = { id, type, title: pushItem.title, year: pushItem.year || undefined }
       const changed: ChangedEpisode[] = []
       // The whole push item, not a hand-built subset: what is spread here
@@ -1653,7 +1706,7 @@ export function registerTrackingIpc(): void {
       const importRows = (rows: ChangedEpisode[], fallbackAt: string): ImportedPlay[] =>
         rows.map((row) => ({
           ...pushItem,
-          id,
+          id: historyId,
           type,
           title: pushItem.title,
           year: pushItem.year || undefined,
@@ -1686,15 +1739,15 @@ export function registerTrackingIpc(): void {
           // is already there is left alone rather than re-stamped.
           db.importWatched(importRows(episodes, now))
           changed.push(...episodes)
-          pushTitleHistory(pushItem, episodes, 'add')
+          pushTitleHistory(historyItem(), episodes, 'add')
         } else {
           // One transaction, like the mark it undoes — and only the
           // viewings that mark recorded: an episode watched again since
           // stays watched (see unmarkEpisodes), and the services hear of
           // the episodes that are gone, not of one still standing.
-          const gone = db.unmarkEpisodes(id, episodes)
+          const gone = db.unmarkEpisodes(historyId, episodes)
           changed.push(...gone)
-          if (gone.length) pushTitleHistory(pushItem, gone, 'remove')
+          if (gone.length) pushTitleHistory(historyItem(), gone, 'remove')
         }
         settle()
         return result()
@@ -1707,7 +1760,7 @@ export function registerTrackingIpc(): void {
       if (episodic && status === 'watched') {
         let detail: CatalogItem
         try {
-          detail = await metadata(type, id, 'interactive')
+          detail = await metadata(type, historyId, 'interactive')
         } catch (error) {
           logError('tracking:set-title-status:meta', error)
           throw new Error(
@@ -1719,7 +1772,7 @@ export function registerTrackingIpc(): void {
             'The profile changed while this title was loading, so nothing was changed.'
           )
         }
-        aired = airedRegularEpisodes(detail.videos, Date.now())
+        aired = airedRegularEpisodes(detail.videos, Date.now()).filter(inPart)
         if (!pushItem.year && detail.year) pushItem.year = detail.year
         // MAL's status is decided against a total — see
         // malStatusForProgress — and a card rarely carries one. Per season
@@ -1739,7 +1792,7 @@ export function registerTrackingIpc(): void {
 
       // Read after the wait, not before it: the change is decided against
       // what is watched now, which is also what its undo has to reverse.
-      const own = db.watchedEpisodesOf(id)
+      const own = db.watchedEpisodesOf(historyId).filter(inPart)
       const state = {
         planned: db.isTracked(id),
         movieWatched: own.length > 0,
@@ -1790,15 +1843,29 @@ export function registerTrackingIpc(): void {
             // and one fsync per row held the main process for seconds.
             db.importWatched(importRows(rows, now))
             changed.push(...rows)
-            pushTitleHistory(pushItem, rows, 'add', { seasonTotals })
+            pushTitleHistory(historyItem(), rows, 'add', { seasonTotals })
             break
           }
           case 'unmark-title': {
-            const removed = db.unmarkTitle(id)
+            let removed: ChangedEpisode[]
+            if (part) {
+              // Only this season of the show: every viewing of it read
+              // above goes, and is what an undo puts back.
+              const refs = new Map(
+                own.map((row) => [
+                  `${row.season}:${row.episode}`,
+                  { season: row.season, episode: row.episode }
+                ])
+              )
+              db.unmarkEpisodes(historyId, [...refs.values()])
+              removed = own
+            } else {
+              removed = db.unmarkTitle(id)
+            }
             changed.push(...removed)
             // A planned anime cleared to not watched is, on MAL, plan to
             // watch at zero — said explicitly, never inferred from the count.
-            pushTitleHistory(pushItem, removed, 'remove', {
+            pushTitleHistory(historyItem(), removed, 'remove', {
               malStatus: state.planned ? 'plan_to_watch' : undefined
             })
             break
@@ -1818,13 +1885,24 @@ export function registerTrackingIpc(): void {
   // API surface for what's meant to be entirely local.
   handle<GetPositionPayload, PlaybackPositionResult | null>(
     MEDIA_HUB_CHANNELS.trackingGetPosition,
-    (_e, { id, playback }) => getDatabase().getPlaybackPosition(id, playback)
+    (_e, { id, playback }) => {
+      // Kept where the viewing is kept — see underShow.
+      const kept = underShow({ id }, playback || {})
+      return getDatabase().getPlaybackPosition(kept.item.id, kept.playback)
+    }
   )
 
   handle<SavePositionPayload, { ok: true }>(
     MEDIA_HUB_CHANNELS.trackingSavePosition,
     (_e, { id, playback, positionSeconds, durationSeconds, volume }) => {
-      getDatabase().savePlaybackPosition(id, playback, positionSeconds, durationSeconds, volume)
+      const kept = underShow({ id }, playback || {})
+      getDatabase().savePlaybackPosition(
+        kept.item.id,
+        kept.playback,
+        positionSeconds,
+        durationSeconds,
+        volume
+      )
       return { ok: true }
     }
   )
@@ -2360,17 +2438,15 @@ export function registerTrackingIpc(): void {
       // Simkl request always was, so the error below still reaches the
       // main window.
       let simklError: string | undefined
-      await titlePushQueue.run(titlePushKey(payload.item), async () => {
-        const trakt = pushTraktScrobble(payload.item, payload.playback || {}, action, progress)
+      // The same show, and so the same chain, as the mark that follows a
+      // stop — see underShow.
+      const { item: subject, playback: at } = underShow(payload.item, payload.playback || {})
+      await titlePushQueue.run(titlePushKey(subject), async () => {
+        const trakt = pushTraktScrobble(subject, at, action, progress)
         // Null for a title Simkl has no id for — the same refusal to guess
         // by title/year that syncSimklHistory makes above — and for an anime
         // episode with no entry of its own there (see scrobblePayload).
-        const scrobble = scrobblePayload(
-          payload.item,
-          payload.playback || {},
-          progress,
-          animeSiblingsWhenGrouped()
-        )
+        const scrobble = scrobblePayload(subject, at, progress, animeSiblingsWhenGrouped())
         if (simklConnected && scrobble) {
           try {
             await simklRequest(`/scrobble/${action}`, {

@@ -1,5 +1,14 @@
-// Repairs anime watch history left behind by the sync bug that idBridge.ts
-// and resolveAnimeGroupTarget fix going forward.
+// Repairs anime watch history filed under a merged franchise's later
+// season instead of under the show.
+//
+// Two things wrote such rows. The first is described below. The second went
+// on after it was fixed: a later season opened by its own id (a plan card a
+// watchlist pull added) had a page of its own, and whatever was watched
+// from that page was written under that id — at whatever season Kitsu
+// labels the entry, which is not always 1. Such a page no longer exists
+// (see CatalogItem.seasonOf) and a write under such an id is kept under the
+// show (tracking.ts's underShow); version 2 of this repair moves the rows
+// already written.
 //
 // WHAT WENT WRONG. Until those landed, MAL's reconcile-apply wrote every
 // episode it pulled down under whichever Kitsu id MAL itself had matched,
@@ -40,8 +49,11 @@ import { readSettings, writeSettings } from './settingsStore'
  * Stored rather than inferred: once the rows are moved there is nothing
  * left to detect, and re-deriving "has this been done" from the data would
  * mean walking the whole history on every launch forever.
+ *
+ * 2: rows written from a later season's own page, which went on being
+ * written after version 1 ran.
  */
-const REPAIR_VERSION = 1
+const REPAIR_VERSION = 2
 
 function animeRepairDone(): boolean {
   return Number(readSettings().animeIdRepairVersion || 0) >= REPAIR_VERSION
@@ -78,11 +90,14 @@ export function repairAnimeSyncIds(): { repaired: number; ran: boolean } {
       // Same id back means this title is not a merged sibling — either the
       // canonical show itself or an ungrouped title, both already correct.
       if (target.id === id) continue
-      // The old writer always used season 1, so the sibling's real season
-      // IS the offset. Expressed as an offset rather than an assignment so
-      // a row that somehow carries a different season keeps its ordering
-      // instead of being flattened onto one.
-      mappings.set(id, { fromId: id, toId: target.id, seasonOffset: target.season - 1 })
+      // Every row of a later season is that one season of the show,
+      // whatever season the row carries: the old sync wrote a 1, but a row
+      // written from the season's own page carries Kitsu's label for the
+      // entry, which for a second season is often already 2. The episode
+      // number is the entry's own either way. remapContentIds holds back
+      // the one kind of row this cannot be said of — an id that once
+      // fronted the whole show — rather than guess where it goes.
+      mappings.set(id, { fromId: id, toId: target.id, season: target.season })
     }
 
     const repaired = mappings.size ? db.remapContentIds([...mappings.values()]) : 0

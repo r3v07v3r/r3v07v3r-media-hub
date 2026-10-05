@@ -13,7 +13,7 @@
 // count continueWatchingEntryToItem synthesizes progress bars from).
 
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { airedEpisodes, catalogItemToMediaItem } from '@renderer/lib/mediaHub/adapters'
 import { DETAIL_CONFIGS } from '@renderer/lib/mediaHub/detailAdapters'
@@ -125,6 +125,13 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   // if `nextEpisode` itself changes later (e.g. after marking an episode
   // watched) without needing to explicitly reset anything.
   const [selectedSeasonOverride, setSelectedSeasonOverride] = useState<number | null>(null)
+  // The season a link to a LATER season of a merged anime asked for — the
+  // primary fetch below sends such a link on to the show's page and leaves
+  // this behind in the navigation state. It ranks under an explicit pick
+  // and over the next-to-play default, and only while it names a season
+  // this title really has.
+  const location = useLocation()
+  const openedSeason = (location.state as { season?: number } | null)?.season ?? null
 
   // Primary fetch — the one thing the page genuinely can't render without.
   useEffect(() => {
@@ -152,6 +159,18 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
       .meta(kind, id)
       .then((item) => {
         if (cancelled) return
+        // A later season of a merged anime, opened by its own id (a plan
+        // card pulled from a service, a sequel link): the show's page, at
+        // that season. A merged season has no page of its own — anything
+        // watched from one was saved under an id the show never read. In
+        // place of this entry, so Back still leaves the title.
+        if (item.seasonOf) {
+          navigate(`/${config.path}/${item.seasonOf.id}`, {
+            replace: true,
+            state: { season: item.seasonOf.season }
+          })
+          return
+        }
         setCatalogItem(item)
         setMetaStatus('ready')
       })
@@ -162,6 +181,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     return () => {
       cancelled = true
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- config.path follows kind, and navigate's identity changes with the location: as a dep it would refetch the title on every navigation that keeps this page
   }, [kind, id])
 
   // Finished describes this release. A direct story lookup makes the
@@ -458,6 +478,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   // on season 1 rather than on the OVAs.
   const selectedSeason =
     selectedSeasonOverride ??
+    (openedSeason != null && seasons.includes(openedSeason) ? openedSeason : null) ??
     (seasons.length
       ? ((nextEpisode ?? playableInOrder[0] ?? episodes[0])?.season ?? seasons[0])
       : null)

@@ -47,14 +47,14 @@ check('moves a sibling’s episodes onto the canonical show at its real season',
   db.markWatched(sibling, { season: 1, episode: 1 })
   db.markWatched(sibling, { season: 1, episode: 2 })
 
-  const moved = db.remapContentIds([{ fromId: 'kitsu:sennen', toId: canonical, seasonOffset: 1 }])
+  const moved = db.remapContentIds([{ fromId: 'kitsu:sennen', toId: canonical, season: 2 }])
 
   assert.equal(moved, 2)
   const history = db.history()
   assert.equal(history.filter((h) => h.id === 'kitsu:sennen').length, 0)
   const repaired = history.filter((h) => h.id === canonical)
   assert.equal(repaired.length, 2)
-  // seasonOffset 1 means "this sibling is really season 2 of the group".
+  // Season 2 is where this sibling really sits in the group.
   assert.deepEqual(repaired.map((h) => h.season).sort(), [2, 2])
   assert.deepEqual(
     repaired.map((h) => h.episode).sort((a, b) => Number(a) - Number(b)),
@@ -71,7 +71,7 @@ check('keeps the row already at the destination rather than overwriting it', () 
   const before = db.history().find((h) => h.id === canonical && h.episode === 1)
   db.markWatched(sibling, { season: 1, episode: 1 })
 
-  db.remapContentIds([{ fromId: 'kitsu:sennen', toId: canonical, seasonOffset: 1 }])
+  db.remapContentIds([{ fromId: 'kitsu:sennen', toId: canonical, season: 2 }])
 
   const history = db.history()
   // The colliding source row is dropped, not duplicated and not merged.
@@ -94,7 +94,7 @@ check('preserves the original watched date — the ids were wrong, the viewings 
     }
   ])
 
-  db.remapContentIds([{ fromId: 'kitsu:sennen', toId: canonical, seasonOffset: 1 }])
+  db.remapContentIds([{ fromId: 'kitsu:sennen', toId: canonical, season: 2 }])
 
   const moved = db.history().find((h) => h.id === canonical && h.episode === 3)
   assert.equal(moved?.watchedAt, '2021-06-01T12:00:00.000Z')
@@ -104,7 +104,7 @@ check('carries a rating across, since a rating belongs to the whole show', () =>
   const db = tempDb()
   db.rate('kitsu:sennen', 9)
 
-  db.remapContentIds([{ fromId: 'kitsu:sennen', toId: canonical, seasonOffset: 1 }])
+  db.remapContentIds([{ fromId: 'kitsu:sennen', toId: canonical, season: 2 }])
 
   const ratings = db.ratings()
   assert.equal(ratings.get('kitsu:sennen'), undefined)
@@ -116,19 +116,9 @@ check('never overwrites a rating already given to the canonical show', () => {
   db.rate(canonical, 6)
   db.rate('kitsu:sennen', 9)
 
-  db.remapContentIds([{ fromId: 'kitsu:sennen', toId: canonical, seasonOffset: 1 }])
+  db.remapContentIds([{ fromId: 'kitsu:sennen', toId: canonical, season: 2 }])
 
   assert.equal(db.ratings().get(canonical), 6)
-})
-
-check('a zero offset leaves seasons alone, for an ungrouped id that still moved', () => {
-  const db = tempDb()
-  db.markWatched(sibling, { season: 1, episode: 4 })
-
-  db.remapContentIds([{ fromId: 'kitsu:sennen', toId: canonical, seasonOffset: 0 }])
-
-  const moved = db.history().find((h) => h.id === canonical)
-  assert.equal(moved?.season, 1)
 })
 
 // The rebuilt watch_key is the easiest thing to get subtly wrong — the
@@ -138,10 +128,78 @@ check('a zero offset leaves seasons alone, for an ungrouped id that still moved'
 check('a repaired row is reachable by the normal watch_key lookup', () => {
   const db = tempDb()
   db.markWatched(sibling, { season: 1, episode: 1 })
-  db.remapContentIds([{ fromId: 'kitsu:sennen', toId: canonical, seasonOffset: 1 }])
+  db.remapContentIds([{ fromId: 'kitsu:sennen', toId: canonical, season: 2 }])
 
   assert.equal(db.unmarkWatched(canonical, 2, 1), true)
   assert.equal(db.history().length, 0)
+})
+
+const keys = (db: ReturnType<typeof tempDb>, id: string): string[] =>
+  db
+    .history()
+    .filter((h) => h.id === id)
+    .map((h) => `${h.season}:${h.episode}`)
+    .sort()
+
+// A row written from the season's own page carries Kitsu's label for the
+// entry — often already 2 for a second season, sometimes several labels
+// inside one long entry — with the episode numbered across the whole entry.
+// Shifted by an offset it would land a season too far.
+check('every row of one entry lands on the season, whatever season it carried', () => {
+  const db = tempDb()
+  db.markWatched(sibling, { season: 1, episode: 1 })
+  db.markWatched(sibling, { season: 2, episode: 2 })
+  db.markWatched(sibling, { season: 3, episode: 3 })
+  db.markWatched({ id: canonical, type: 'anime', title: 'Bleach' }, { season: 1, episode: 1 })
+
+  const moved = db.remapContentIds([{ fromId: 'kitsu:sennen', toId: canonical, season: 2 }])
+
+  assert.equal(moved, 3)
+  assert.deepEqual(keys(db, 'kitsu:sennen'), [])
+  assert.deepEqual(keys(db, canonical), ['1:1', '2:1', '2:2', '2:3'])
+  // Reachable by the key the normal lookup builds — see the test above.
+  assert.equal(db.unmarkWatched(canonical, 2, 3), true)
+})
+
+// Found in a real library: an id that used to FRONT the show, before the
+// grouping changed which member does. Its rows are the whole show's, season
+// by season in the old order, so the same episode numbers repeat. Put on
+// one season they would collide and most would be dropped.
+check('an id that once held the whole show gives up only its own season 1', () => {
+  const db = tempDb()
+  for (const episode of [1, 2, 3]) db.markWatched(sibling, { season: 1, episode })
+  for (const episode of [1, 2]) db.markWatched(sibling, { season: 2, episode })
+
+  const moved = db.remapContentIds([{ fromId: 'kitsu:sennen', toId: canonical, season: 2 }])
+
+  assert.equal(moved, 3)
+  assert.deepEqual(keys(db, canonical), ['2:1', '2:2', '2:3'], "the id's own entry")
+  assert.deepEqual(
+    keys(db, 'kitsu:sennen'),
+    ['2:1', '2:2'],
+    'a season of the old order cannot be placed, so it is left, not guessed'
+  )
+})
+
+check('a row with no episode stays where it is', () => {
+  const db = tempDb()
+  db.markWatched(sibling)
+  db.markWatched(sibling, { season: 1, episode: 1 })
+
+  db.remapContentIds([{ fromId: 'kitsu:sennen', toId: canonical, season: 2 }])
+
+  assert.deepEqual(keys(db, canonical), ['2:1'])
+  assert.deepEqual(keys(db, 'kitsu:sennen'), ['null:null'])
+})
+
+check('a mapping with no usable season moves nothing', () => {
+  const db = tempDb()
+  db.markWatched(sibling, { season: 1, episode: 1 })
+
+  for (const season of [0, 1.5, Number.NaN]) {
+    assert.equal(db.remapContentIds([{ fromId: 'kitsu:sennen', toId: canonical, season }]), 0)
+  }
+  assert.deepEqual(keys(db, 'kitsu:sennen'), ['1:1'])
 })
 
 check('an empty or self-referential mapping changes nothing', () => {
@@ -149,7 +207,7 @@ check('an empty or self-referential mapping changes nothing', () => {
   db.markWatched(sibling, { season: 1, episode: 1 })
 
   assert.equal(db.remapContentIds([]), 0)
-  assert.equal(db.remapContentIds([{ fromId: canonical, toId: canonical, seasonOffset: 1 }]), 0)
+  assert.equal(db.remapContentIds([{ fromId: canonical, toId: canonical, season: 2 }]), 0)
   assert.equal(db.history().filter((h) => h.id === 'kitsu:sennen').length, 1)
 })
 
