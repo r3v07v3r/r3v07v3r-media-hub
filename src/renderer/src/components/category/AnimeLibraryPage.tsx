@@ -181,8 +181,6 @@ function LibraryTile({
   // interested), on right-click and on the "..." button. These grids are
   // where most browsing happens, and without it un-planning a title from
   // here meant marking the whole title watched with the side panel's pill.
-  // From the overlay context rather than the app-wide one: it never
-  // changes, so a grid of tiles is not re-rendered by it.
   const { openContextMenu } = useOverlayActions()
   // Marked Not interested. Hide Disliked (on by default) keeps these out of
   // the grid; with it switched off on the page they stay, dimmed and named,
@@ -210,6 +208,10 @@ function LibraryTile({
           openContextMenu(event.clientX, event.clientY, media)
         }}
         onKeyDown={(event) => {
+          // Only a key pressed on the tile itself. Enter or Space on the
+          // play or "..." button bubbles up here, and handling it would
+          // cancel that button's click and select the tile instead.
+          if (event.target !== event.currentTarget) return
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault()
             onSelect(media)

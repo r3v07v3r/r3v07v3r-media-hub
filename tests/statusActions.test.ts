@@ -9,7 +9,8 @@
 //
 // The Movies, Series and Anime grids (LibraryTile in AnimeLibraryPage.tsx)
 // open the same card menu as MediaCard, on right-click and on a "..."
-// button, and a right-click does not also select the tile; the side panel
+// button that also works from the keyboard, and a right-click does not
+// also select the tile; the side panel
 // can take a title off the plan without the pill's trip through watched.
 // Those are read from the source: the components need the CSS-module
 // build to render, and what matters is which handler each event reaches.
@@ -150,6 +151,21 @@ check('a library tile has a "..." button that opens the menu without selecting',
   assert.ok(at >= 0, 'no "..." button on the tile')
   const button = tile.slice(tile.lastIndexOf('<button', at), at)
   assert.match(button, /stopPropagation\(\)[\s\S]*openContextMenu\(/)
+})
+
+check('Enter or Space on a tile button reaches the button, and a focused button is shown', () => {
+  const tile = functionSource(libraryPage, 'LibraryTile')
+  const keys = handlerSource(tile, 'onKeyDown')
+  // The tile's own handler steps aside for a key pressed on a child, before
+  // it would cancel that key's click and select the tile.
+  const guard = keys.indexOf('if (event.target !== event.currentTarget) return')
+  assert.ok(guard >= 0, 'the tile handles keys pressed on its buttons')
+  assert.ok(guard < keys.indexOf('onSelect(media)'))
+  const css = fs.readFileSync(
+    path.resolve(__dirname, '../src/renderer/src/components/category/AnimeLibraryPage.module.css'),
+    'utf8'
+  )
+  assert.match(css, /\.tile:has\(\.tileOpen:focus-visible\) \.tileOpen \{\s*opacity: 1;/)
 })
 
 check('the library side panel can take a title off the plan on its own', () => {

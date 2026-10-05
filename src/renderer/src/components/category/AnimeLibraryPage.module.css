@@ -364,7 +364,8 @@
 /* .tileOpen takes this corner on hover — two marks stacked on top of each
    other would be neither. */
 .tile:hover .tileState,
-.tile:focus-visible .tileState {
+.tile:focus-visible .tileState,
+.tile:has(.tileOpen:focus-visible) .tileState {
   opacity: 0;
 }
 .tileState svg {
@@ -425,8 +426,11 @@
     transform var(--transition-fast),
     background var(--transition-fast);
 }
+/* And while one of the buttons has keyboard focus: the tile itself is not
+   :focus-visible then, and a focused button that cannot be seen is no use. */
 .tile:hover .tileOpen,
-.tile:focus-visible .tileOpen {
+.tile:focus-visible .tileOpen,
+.tile:has(.tileOpen:focus-visible) .tileOpen {
   opacity: 1;
   transform: scale(1);
 }
