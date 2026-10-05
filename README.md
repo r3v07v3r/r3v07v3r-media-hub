@@ -183,7 +183,8 @@ Playback is mpv, embedded inside the app's own window on Windows; there is no tr
   with anything not out yet pulled to the top), **In progress**, **Watched**, **Lists** (your named
   lists, plus any lists on a connected Trakt or Simkl account, read-only), **Rated**, **History**
   (the 500 most recent viewings; any single viewing can be removed without un-watching the
-  episode), **Stats**, and **Not for me**.
+  episode), **Stats**, and **Not for me**. Hide Disliked does not apply to Planned and Lists: a
+  title you planned and also marked Not interested stays there, marked.
 - **Profiles**, including PIN-protected ones. Each keeps its own list, history, ratings and resume
   points. A profile can be marked **Kids**, which today only shows a badge next to its name; it does
   not yet restrict what that profile can browse or play.

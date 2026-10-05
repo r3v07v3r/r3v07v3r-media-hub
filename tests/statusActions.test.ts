@@ -21,7 +21,9 @@
 // Disliked off (preferences.ts's hideDislikedDefault), a page can still
 // show them with its own toggle, and a disliked card is marked wherever it
 // is shown: MediaCard, a library tile, the detail page's More like this
-// cards, the hero and the assistant's title tiles.
+// cards, the hero and the assistant's title tiles. My Stuff's Planned and
+// Lists tabs never hide one: a title planned and also disliked stays there,
+// marked.
 //
 // A card acted on from Home's Recommended row, a For You rail or the hero
 // keeps its slot, with its new state, until the route changes
@@ -264,6 +266,28 @@ check('a browse page starts from the default and its own toggle can show dislike
     ['b']
   )
   assert.equal(applyWatchStateFilters(items as never[], shown).length, 2)
+})
+
+check('My Stuff keeps a disliked title on the Planned and Lists tabs', () => {
+  const myStuff = fs.readFileSync(
+    path.resolve(__dirname, '../src/renderer/src/routes/MyStuffPage.tsx'),
+    'utf8'
+  )
+  // The one filter those two tabs read, with Hide Disliked off whatever the
+  // setting says; the cards they draw are MediaCard, which marks it.
+  const filters = myStuff.match(/const hideFilters = useMemo\([\s\S]*?\n {2}\)/)?.[0] ?? ''
+  assert.match(filters, /hideDisliked: false/)
+  assert.doesNotMatch(filters, /hideDislikedDefault/)
+  assert.match(myStuff, /applyWatchStateFilters\(listRows, hideFilters\)/)
+  assert.match(myStuff, /tab === 'planned' && <ListsView watchlist=\{listItems\}/)
+  assert.match(myStuff, /tab === 'list' && <ListsView watchlist=\{listItems\}/)
+  // Not for me lists them all, unfiltered.
+  assert.match(myStuff, /useCatalogByIds\(dislikedIds, adaptCatalogItems, indexRevision\)/)
+  // The Mood pages keep the setting.
+  for (const file of ['components/home/MoodBrowser.tsx', 'routes/MoodExplorePage.tsx']) {
+    const source = fs.readFileSync(path.resolve(__dirname, '../src/renderer/src', file), 'utf8')
+    assert.match(source, /hideDisliked: mediaHubSettings\?\.hideDislikedDefault \?\? true/, file)
+  }
 })
 
 check('every renderer reader of the setting falls back to on', () => {
