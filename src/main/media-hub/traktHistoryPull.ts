@@ -1,0 +1,186 @@
+// Trakt's watch history, brought in on its own as it changes.
+//
+// The "Import my Trakt library" button reads a whole account once: every
+// page of /sync/history, every rating. That stays the way an account's past
+// comes in. This is what comes after it: every half hour (the watch-sync
+// job) and with every catch-up (launch, resume, focus), one small request
+// to /sync/last_activities, and only when Trakt says a film or an episode
+// was watched since the last pull, /sync/history from that pull onwards.
+// Like the import it only adds, and files each viewing exactly where the
+// import does (traktClient.ts's fileTraktPlays: an anime series under its
+// merged show, at its season there).
+//
+// Two things it does that the import does not:
+//
+//  - A viewing already held here is skipped, not written again. Every
+//    episode played here is pushed to Trakt and comes back on the next pull
+//    stamped with Trakt's own time, which the import would record as a
+//    second play. The catch-up skips Simkl's echo the same way
+//    (simklCatchUpRules.ts).
+//  - With nothing on record for this profile and account, the first pass
+//    pulls nothing. It records Trakt's stamps and the time, and history
+//    from then on arrives by itself; the account's past is the import
+//    button's, as before. An import that finishes records its own start as
+//    where the pull carries on from.
+//
+// Each pull reaches back a few days before the last one (OVERLAP_MS), for
+// a viewing that reached Trakt late with an earlier date; a row already
+// here costs nothing. A viewing Trakt is given with a date older than that
+// (a history entry backdated by hand) is the import's to find.
+//
+// The dependencies are injected, as in simklCatchUp.ts and watchSync.ts,
+// so the test drives a real temporary database with Trakt faked.
+
+import type { ImportedPlay } from '../../shared/media-hub/types'
+import type { MediaHubDatabase } from './database'
+import { parseTraktActivities, parseTraktHistory, type TraktWatchedStamps } from './trakt'
+
+const DAY = 24 * 60 * 60 * 1000
+
+/** How far before the last pull each pull reaches back. */
+export const OVERLAP_MS = 3 * DAY
+
+/** The record of where the pull is; losing it costs a fresh start from now. */
+const STATE_TTL_MS = 400 * DAY
+
+export interface TraktPullState {
+  /** settingsStore's Trakt account mark when written. */
+  account: string
+  /** The stamps the last pull was made under. Null after an import, which
+   *  read no stamps: the next pass then always pulls. */
+  stamps: TraktWatchedStamps | null
+  /** ISO time the next pull reads from (Trakt's start_at). */
+  since: string
+}
+
+export function traktPullKey(profile: string): string {
+  return `trakt:history-pull:v1:${profile}`
+}
+
+/** The stored state, if it is a well-formed one for this account. */
+export function traktPullStateFor(stored: unknown, account: string): TraktPullState | null {
+  const value = stored as TraktPullState | null
+  if (!value || typeof value !== 'object' || value.account !== account) return null
+  if (typeof value.since !== 'string' || Number.isNaN(Date.parse(value.since))) return null
+  const stamps = value.stamps
+  const valid =
+    stamps === null ||
+    (stamps &&
+      typeof stamps === 'object' &&
+      (stamps.movies === null || typeof stamps.movies === 'string') &&
+      (stamps.episodes === null || typeof stamps.episodes === 'string'))
+  return valid ? { account, stamps, since: value.since } : null
+}
+
+function writeState(
+  db: Pick<MediaHubDatabase, 'putCache'>,
+  profile: string,
+  state: TraktPullState
+): void {
+  db.putCache(traktPullKey(profile), state, STATE_TTL_MS, { durable: true })
+}
+
+/**
+ * Records that this profile's history is in step with Trakt up to `atMs` —
+ * called by the import once it has written, so the pull carries on from
+ * there rather than from whenever it first ran.
+ */
+export function markTraktHistoryPulled(
+  db: Pick<MediaHubDatabase, 'putCache'>,
+  profile: string,
+  account: string,
+  atMs: number
+): void {
+  if (!account) return
+  writeState(db, profile, { account, stamps: null, since: new Date(atMs).toISOString() })
+}
+
+export interface TraktPullDeps {
+  db: Pick<
+    MediaHubDatabase,
+    'activeProfile' | 'getCache' | 'putCache' | 'history' | 'importWatched'
+  >
+  /** settingsStore's Trakt account mark. Empty when Trakt is not connected. */
+  account(): string
+  /** GET /sync/last_activities, raw. */
+  lastActivities(): Promise<unknown>
+  /** Every page of /sync/history from `startAt` (Trakt's start_at), raw rows. */
+  history(startAt: string): Promise<{ rows: unknown[]; truncated: boolean }>
+  /** Where the import files Trakt's plays (traktClient.ts's fileTraktPlays). */
+  file(rows: ImportedPlay[]): Promise<ImportedPlay[]>
+  /** The backup before history rows are written (autoBackup.ts). */
+  backup(): void
+  /** Tell every open surface and the ranking that history moved. */
+  announce(): void
+  now(): number
+  log(scope: string, error: unknown): void
+}
+
+export interface TraktPullReport {
+  /** New viewings written. */
+  plays: number
+  /** Whether Trakt's history was read. */
+  read: boolean
+  error?: string
+}
+
+function sameStamps(a: TraktWatchedStamps | null, b: TraktWatchedStamps): boolean {
+  return Boolean(a && a.movies === b.movies && a.episodes === b.episodes)
+}
+
+/**
+ * One pull. Never throws; a failure is in the report and in the log, and
+ * leaves the record where it was so the next pass asks again.
+ */
+export async function pullTraktHistory(deps: TraktPullDeps): Promise<TraktPullReport> {
+  const { db } = deps
+  // Whose history and whose Trakt this is, captured before the first wait
+  // and checked after every one, as the import does.
+  const profile = db.activeProfile()
+  const account = deps.account()
+  if (!account) return { plays: 0, read: false }
+  const moved = (): boolean => db.activeProfile() !== profile || deps.account() !== account
+  try {
+    const startedAt = deps.now()
+    const stamps = parseTraktActivities(await deps.lastActivities())
+    if (moved()) return { plays: 0, read: false }
+    const state = traktPullStateFor(
+      db.getCache(traktPullKey(profile), { allowExpired: true }),
+      account
+    )
+    if (!state) {
+      // Nothing on record: start from now. See the header.
+      writeState(db, profile, { account, stamps, since: new Date(startedAt).toISOString() })
+      return { plays: 0, read: false }
+    }
+    if (sameStamps(state.stamps, stamps)) return { plays: 0, read: false }
+
+    const since = new Date(Date.parse(state.since) - OVERLAP_MS).toISOString()
+    const page = await deps.history(since)
+    if (moved()) return { plays: 0, read: true }
+    if (page.truncated) deps.log('trakt:pull', new Error('Stopped at the page limit.'))
+    const parsed = parseTraktHistory(page.rows)
+    const filed = await deps.file(parsed.rows)
+    if (moved()) return { plays: 0, read: true }
+
+    const held = new Set(
+      db.history().map((row) => `${row.id}:${row.season ?? 'movie'}:${row.episode ?? 'movie'}`)
+    )
+    const fresh = filed.filter(
+      (row) => !held.has(`${row.id}:${row.season ?? 'movie'}:${row.episode ?? 'movie'}`)
+    )
+    let plays = 0
+    if (fresh.length) {
+      deps.backup()
+      plays = db.importWatched(fresh)
+    }
+    // From when this pull asked, so a viewing that lands during it is read
+    // again next time rather than missed.
+    writeState(db, profile, { account, stamps, since: new Date(startedAt).toISOString() })
+    if (plays) deps.announce()
+    return { plays, read: true }
+  } catch (error) {
+    deps.log('trakt:pull', error)
+    return { plays: 0, read: false, error: (error as Error)?.message || String(error) }
+  }
+}

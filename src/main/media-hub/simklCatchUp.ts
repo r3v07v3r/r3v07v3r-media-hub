@@ -107,6 +107,10 @@ export interface CatchUpDeps {
   announce(): void
   /** Detached artwork fill for tracked rows that have none — see fillTrackedArtwork. */
   artwork(profile: string): void
+  /** Trakt's history since the last pull (traktHistoryPull.ts), behind its
+   *  own gate. Resolves to the viewings it wrote. Run only with Trakt
+   *  connected; optional so a test that is not about it can leave it out. */
+  traktHistory?(): Promise<number>
   /** True while something is playing: nothing may compete with it. */
   busy(): boolean
   now(): number
@@ -613,6 +617,19 @@ async function catchUpPass(
     if (moved()) return finish()
   }
 
+  // --- Trakt's history, after Simkl's -------------------------------------
+  //
+  // Same place in the order and the same reason: the watchlist pull above
+  // has settled the plan. Trakt asks /sync/last_activities first, so on a
+  // pass where nothing changed there this is one small request.
+  if (marks.trakt && deps.traktHistory) {
+    try {
+      report.plays += await deps.traktHistory()
+    } catch (error) {
+      deps.log('catch-up:trakt', error)
+    }
+  }
+
   return finish()
 }
 
@@ -739,18 +756,29 @@ export async function catchUpFromServices(
   options: { force?: boolean } = {}
 ): Promise<CatchUpReport> {
   // Lazily, for the reason in this file's header.
-  const [simkl, watchlists, idBridge, seasons, settings, recommendations, bridge, queue, catalog] =
-    await Promise.all([
-      import('./simklClient'),
-      import('./watchlists'),
-      import('./idBridge'),
-      import('./animeSeasons'),
-      import('./settingsStore'),
-      import('./recommendations'),
-      import('./rendererBridge'),
-      import('./titlePushQueue'),
-      import('./catalog')
-    ])
+  const [
+    simkl,
+    watchlists,
+    idBridge,
+    seasons,
+    settings,
+    recommendations,
+    bridge,
+    queue,
+    catalog,
+    trakt
+  ] = await Promise.all([
+    import('./simklClient'),
+    import('./watchlists'),
+    import('./idBridge'),
+    import('./animeSeasons'),
+    import('./settingsStore'),
+    import('./recommendations'),
+    import('./rendererBridge'),
+    import('./titlePushQueue'),
+    import('./catalog'),
+    import('./traktClient')
+  ])
   const deps: CatchUpDeps = {
     db: getDatabase(),
     account: settings.simklAccountMark,
@@ -807,6 +835,7 @@ export async function catchUpFromServices(
         failures: artworkFailures
       }).catch((error) => logError('catch-up:artwork', error))
     },
+    traktHistory: async () => (await trakt.pullTraktHistoryNow('visible')).plays,
     busy: () => currentPressure() === 'critical',
     now: () => Date.now(),
     log: logError

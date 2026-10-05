@@ -328,6 +328,9 @@ export interface WatchSyncDeps extends GatedPullDeps {
    *  (tracking's retryHistoryPushes, historyRetry.ts). Optional so a test
    *  that is not about it can leave it out. */
   retryHistory?(): Promise<unknown>
+  /** Brings in what Trakt says was watched since the last pull
+   *  (traktHistoryPull.ts), after the watchlists. Optional, as above. */
+  pullTraktHistory?(): Promise<unknown>
   /** Whether anything in this process has asked for the review panel's
    *  check. False for the whole life of a backend whose interface has no
    *  such panel, and the diff is then never made. */
@@ -404,9 +407,9 @@ async function readGate(
  *
  * In the order things have to happen: the history pushes still owed; the
  * gate; the watchlists (which is also where plan changes a service refused
- * are retried); the history decisions still queued; and last, if this
- * backend has a review panel and the films on either side moved, the diff
- * that panel shows.
+ * are retried); Trakt's history; the history decisions still queued; and
+ * last, if this backend has a review panel and the films on either side
+ * moved, the diff that panel shows.
  */
 export async function runWatchSync(deps: WatchSyncDeps, memory: WatchSyncMemory): Promise<void> {
   const { db } = deps
@@ -434,6 +437,17 @@ export async function runWatchSync(deps: WatchSyncDeps, memory: WatchSyncMemory)
     await pullPlannedGated(deps, gate)
   } catch (error) {
     deps.log('job:planned-sync', error)
+  }
+  // Trakt's history after the watchlists, as the catch-up takes Simkl's:
+  // the pull refuses to plan anything with local history. Trakt has its own
+  // gate (/sync/last_activities), so this is one small request when nothing
+  // changed, and it does not need Simkl.
+  if (deps.pullTraktHistory) {
+    try {
+      await deps.pullTraktHistory()
+    } catch (error) {
+      deps.log('job:trakt-history', error)
+    }
   }
   if (!deps.account()) return
 

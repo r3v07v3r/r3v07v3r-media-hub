@@ -1141,6 +1141,22 @@ async function passes(): Promise<void> {
     }
   )
 
+  await checkAsync('with Trakt connected, its history comes last and counts', async () => {
+    const h = harness()
+    h.deps.traktHistory = async () => {
+      h.calls.push('trakt-history')
+      return 3
+    }
+    const without = await passOf(h)
+    assert.equal(without.calls.includes('trakt-history'), false, 'not connected, not asked')
+    h.trakt = 'trakt-1'
+    h.clock += 3 * MINUTE
+    const { report, calls } = await passOf(h)
+    assert.equal(calls.at(-2), 'trakt-history')
+    assert.equal(calls.at(-1), 'announce')
+    assert.equal(report.plays, 3)
+  })
+
   await checkAsync('nothing moved at Simkl: exactly one request, and nothing written', async () => {
     const h = harness()
     await passOf(h)

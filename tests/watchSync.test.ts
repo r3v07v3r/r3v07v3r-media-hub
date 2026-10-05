@@ -378,6 +378,19 @@ async function passes(): Promise<void> {
     }
   )
 
+  await checkAsync('Trakt history comes after the watchlists, with or without Simkl', async () => {
+    const h = harness()
+    h.deps.pullTraktHistory = async () => {
+      h.calls.push('trakt-history')
+    }
+    const calls = await passOf(h)
+    assert.ok(calls.indexOf('trakt-history') > calls.indexOf('retry-owed-plan-changes'))
+    assert.ok(calls.indexOf('trakt-history') < calls.indexOf('flush-owed-history'))
+    // A Trakt-only account still gets it.
+    h.account = ''
+    assert.ok((await passOf(h)).includes('trakt-history'))
+  })
+
   await checkAsync('nothing changed: one Simkl request, and what is owed still goes', async () => {
     const h = harness()
     await passOf(h)

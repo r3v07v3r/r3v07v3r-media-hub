@@ -118,6 +118,7 @@ import {
   pushTraktScrobble,
   pushTraktSeasonHistory,
   pushTraktTitleHistory,
+  pullTraktHistoryNow,
   type TraktPushResult
 } from './traktClient'
 import {
@@ -1375,6 +1376,7 @@ export async function runBackgroundWatchSync(): Promise<void> {
       syncPlanned: (options) => syncPlannedFromServices('background', options),
       flushPushes: () => flushPendingPushes('background'),
       retryHistory: () => retryHistoryPushes('background'),
+      pullTraktHistory: () => pullTraktHistoryNow('background'),
       reviewAsked: () => reviewAsked,
       reconcile: backgroundReconcile,
       now: () => Date.now(),

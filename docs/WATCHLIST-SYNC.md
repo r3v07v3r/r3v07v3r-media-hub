@@ -311,8 +311,9 @@ whatever the setting says. The phone and TV player sends none either way.
   confused for each other. (In that review, films only: "Use Local" sends
   the local value to Simkl and then Trakt; "Use Simkl" rewrites the local
   record and sends Simkl's value on to Trakt. A Trakt failure is logged and
-  does not undo either choice.) The one exception is the catch-up, below,
-  which takes Simkl's history in without a review, adding only.
+  does not undo either choice.) The exceptions are the catch-up, below,
+  which takes Simkl's history in without a review, and Trakt's history pull
+  ("Trakt's history"); both only add.
 
 ## The catch-up
 
@@ -412,6 +413,42 @@ with viewings recorded here, the unscoped Simkl removal is not sent.
   while the removal is still owed (see "History pushes that fail are
   kept"). Once it has been given up on after ten tries, it can come back
   when that title next has activity there.
+
+## Trakt's history
+
+The "Import my Trakt library" button reads a whole Trakt account once:
+every viewing with its date, and every rating. It stays the way an
+account's past comes in, and it is safe to press again.
+
+After that, Trakt's history comes in by itself (`traktHistoryPull.ts`),
+in the half-hourly background sync and in every catch-up (desktop launch
+and focus; the phone and TV app hold no Trakt sign-in). Each pass asks
+Trakt's `/sync/last_activities` first, one small request, and reads
+`/sync/history` only when the films or episodes stamp there moved since
+the last pull, and then only from the last pull on (`start_at`), reaching
+back three days for a viewing that reached Trakt late. The record of where
+the pull is, and under which stamps, is kept per profile and per Trakt
+account, durably, like Simkl's stamps.
+
+- **It only adds**, and files every viewing where the import does: a film
+  or series under its IMDb id, an anime series under the merged show and
+  season it belongs to here (the same `imdbToAnimeTargets` the import
+  uses). While the anime catalog is still being organised it writes
+  nothing and tries the same rows again next time.
+- **A viewing already held here is skipped**, unlike the import. Every
+  episode played here is pushed to Trakt and comes back on the next pull
+  with Trakt's own time, and would otherwise be recorded as a second play.
+  A rewatch on Trakt of something already watched here therefore adds no
+  play here.
+- **It starts from the moment it first runs.** With nothing on record for
+  the profile and account, a pass records Trakt's stamps and the time and
+  reads nothing; the account's past is the import button's. An import that
+  finishes records where the pull carries on from.
+- A viewing given to Trakt with a date older than three days before the
+  last pull (a backdated entry) is not seen by the pull; the import finds
+  it.
+- A backup is written before it writes rows, at most once a day (see
+  "When the grouping changes" for the backups).
 
 ## Anime: one show here, an entry per season at Simkl
 

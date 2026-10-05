@@ -45,7 +45,15 @@ import {
   type TraktPlaybackPosition,
   type TraktPushItem
 } from './trakt'
-import { encrypt, readSettings, traktCredentials, writeSettings } from './settingsStore'
+import {
+  encrypt,
+  readSettings,
+  traktAccountMark,
+  traktCredentials,
+  writeSettings
+} from './settingsStore'
+import { notifyLibraryChanged } from './rendererBridge'
+import { markTraktHistoryPulled, pullTraktHistory, type TraktPullReport } from './traktHistoryPull'
 
 const API = 'https://api.trakt.tv'
 
@@ -533,6 +541,19 @@ function remapAnimePlays(
   })
 }
 
+/**
+ * Where Trakt's plays are filed here: the import's rule (imdbToAnimeTargets
+ * then remapAnimePlays), for the half-hourly pull to share rather than
+ * repeat. Throws, as the import does, while the anime catalog is still being
+ * organised and something in `rows` is anime.
+ */
+export async function fileTraktPlays(rows: ImportedPlay[]): Promise<ImportedPlay[]> {
+  const seriesImdbIds = [
+    ...new Set(rows.filter((row) => row.type === 'series').map((row) => row.id))
+  ]
+  return remapAnimePlays(rows, await imdbToAnimeTargets(seriesImdbIds))
+}
+
 /** Same remap as remapAnimePlays, for rating rows — a rating belongs to the
  *  whole show, so only the id moves, never the (irrelevant here) season. */
 function remapAnimeRatings<T extends { id: string; type: 'movie' | 'series' }>(
@@ -562,6 +583,10 @@ export async function importTraktLibrary(): Promise<ImportSummary> {
   // the same failure the stored recommendations and the reconcile results
   // each had to be taught about.
   const profile = db.activeProfile()
+  // Where the half-hourly pull carries on from once this has written: the
+  // moment before the first page was asked for.
+  const startedAt = Date.now()
+  const account = traktAccountMark()
 
   const history = await readAllPages('/sync/history')
   const movieRatings = await readAllPages('/sync/ratings/movies')
@@ -609,6 +634,8 @@ export async function importTraktLibrary(): Promise<ImportSummary> {
     ratings: db.importRatings(remappedRatings),
     skipped: plays.skipped + rated.reduce((total, parsed) => total + parsed.skipped, 0)
   }
+  // The account's past is in; the pull takes it from here.
+  if (traktAccountMark() === account) markTraktHistoryPulled(db, profile, account, startedAt)
 
   // Not silent. See IMPORT_MAX_PAGES — a truncated read that reports success
   // tells somebody their history is imported when part of it is not.
@@ -624,6 +651,39 @@ export async function importTraktLibrary(): Promise<ImportSummary> {
   // happened to this person's history.
   requestRecommendationsRebuild()
   return summary
+}
+
+let pullInFlight: Promise<TraktPullReport> | null = null
+
+/**
+ * The incremental history pull (traktHistoryPull.ts) against the real Trakt
+ * and database. Run by the half-hourly watch-sync job and by every
+ * catch-up; one at a time, a second caller sharing the first.
+ */
+export function pullTraktHistoryNow(
+  priority: TaskPriority = 'background'
+): Promise<TraktPullReport> {
+  if (pullInFlight) return pullInFlight
+  const run = pullTraktHistory({
+    db: getDatabase(),
+    account: traktAccountMark,
+    lastActivities: () => traktRequest('/sync/last_activities', {}, priority),
+    history: (startAt) => readAllPages(`/sync/history?start_at=${encodeURIComponent(startAt)}`),
+    file: fileTraktPlays,
+    // At most once a day: this runs every half hour, and its backups must
+    // not push the ones taken before a regroup out of the rotation.
+    backup: () => backupBeforeRewrite('trakt-pull', { notWithinMs: 24 * 60 * 60 * 1000 }),
+    announce: () => {
+      requestRecommendationsRebuild()
+      notifyLibraryChanged('trakt-pull', 'history')
+    },
+    now: () => Date.now(),
+    log: logError
+  }).finally(() => {
+    pullInFlight = null
+  })
+  pullInFlight = run
+  return run
 }
 
 export function registerTraktIpc(): void {
