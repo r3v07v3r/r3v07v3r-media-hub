@@ -19,7 +19,6 @@ import { app, shell } from 'electron'
 import crypto from 'node:crypto'
 import http from 'node:http'
 import type {
-  HistoryEntry,
   MalReconcileApplyResult,
   MalReconcilePreview,
   MalStartPayload,
@@ -41,6 +40,7 @@ import { notifyLibraryChanged } from './rendererBridge'
 import {
   buildAuthorizeUrl,
   computeReconciliation,
+  localEntryProgress,
   normalizeMalEntry,
   planMalPushes,
   type MalEntryPush
@@ -490,9 +490,13 @@ export function registerMalIpc(): void {
     // pushed for it.
     const withTargets = withKitsuIds.map((entry) => {
       const target = entry.kitsuId ? placeAnimeEntry(entry.kitsuId) : null
-      return { ...entry, kitsuId: target ? entry.kitsuId : '', target }
+      // A title of its own — never merged, or a member that cannot be
+      // placed — is one entry over every row under its id: the count a
+      // push sends for it (animeEntriesFor names no members for it).
+      const whole = Boolean(target) && !animeEntriesFor(entry.kitsuId).members
+      return { ...entry, kitsuId: target ? entry.kitsuId : '', target, whole }
     })
-    const localProgress = localProgressByGroupTarget(withTargets, history)
+    const localProgress = localEntryProgress(withTargets, history)
     const localRatings = Object.fromEntries(getDatabase().ratings())
     return computeReconciliation(
       withTargets.map((entry) => ({ ...entry, targetId: entry.target?.id })),
@@ -592,36 +596,4 @@ export function registerMalIpc(): void {
       return results
     }
   )
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value)
-}
-
-/**
- * For each MAL entry (keyed by the raw kitsuId MAL itself matched to),
- * how many distinct episodes local history has recorded where that entry
- * is kept (placeAnimeEntry) — not localWatchedEpisodeCounts' bare per-id
- * total, which for a grouped franchise would be every merged season's
- * episodes summed together and would never agree with MAL's own per-entry
- * (per-season) count.
- */
-function localProgressByGroupTarget(
-  entries: { kitsuId: string; target: { id: string; season: number } | null }[],
-  history: HistoryEntry[]
-): Record<string, number> {
-  const bySeasonKey = new Map<string, Set<string>>()
-  for (const entry of history) {
-    if (!isFiniteNumber(entry.season) || !isFiniteNumber(entry.episode)) continue
-    const key = `${entry.id}:${entry.season}`
-    if (!bySeasonKey.has(key)) bySeasonKey.set(key, new Set())
-    bySeasonKey.get(key)!.add(String(entry.episode))
-  }
-  const counts: Record<string, number> = {}
-  for (const entry of entries) {
-    if (!entry.kitsuId || !entry.target) continue
-    const key = `${entry.target.id}:${entry.target.season}`
-    counts[entry.kitsuId] = bySeasonKey.get(key)?.size || 0
-  }
-  return counts
 }
