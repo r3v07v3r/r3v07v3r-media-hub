@@ -45,7 +45,11 @@ const UPDATE_NOW_TIMEOUT_MS = 3 * 60 * 1000
  *  daemon that drops packets (a laptop away from home) held the play click
  *  for half a minute. A daemon on the same network answers in well under a
  *  second; one that has not answered in three is treated as away, and the
- *  tier contributes nothing. */
+ *  tier contributes nothing. The three seconds are counted from the call,
+ *  not from dispatch: the 'lancache' lane holds four requests at a time, and
+ *  the feeder, title sync and status calls to an away daemon each hold a
+ *  slot for their own thirty seconds, so a wire timeout alone would start
+ *  only after the lookup had queued behind them. */
 export const LAN_LOOKUP_TIMEOUT_MS = 3_000
 
 function request<T>(pathname: string, init: RequestInit = {}, timeoutMs?: number): Promise<T> {
@@ -85,6 +89,26 @@ export function lanCacheFingerprint(): string {
   return getLanCacheConnection()?.url ?? 'off'
 }
 
+/** The lookup's answer, or null once LAN_LOOKUP_TIMEOUT_MS have passed since
+ *  the call, whether the request is still queued in the lane or on the wire.
+ *  A request that loses the race is left to settle unread; its rejection is
+ *  caught here so it is not reported as unhandled. */
+function withinLookupTime<T>(pending: Promise<T>): Promise<T | null> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve(null), LAN_LOOKUP_TIMEOUT_MS)
+    pending.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error: unknown) => {
+        clearTimeout(timer)
+        reject(error)
+      }
+    )
+  })
+}
+
 /**
  * Tier 2 lookup: does the paired daemon hold this title, complete?
  *
@@ -95,11 +119,14 @@ export function lanCacheFingerprint(): string {
 export async function findLanCacheCandidate(contentKey: string): Promise<StreamCandidate | null> {
   if (!contentKey || !isLanCacheConnected()) return null
   try {
-    const catalog = await request<LanCacheCatalogResponse>(
-      `/api/catalog?keys=${encodeURIComponent(contentKey)}`,
-      {},
-      LAN_LOOKUP_TIMEOUT_MS
+    const catalog = await withinLookupTime(
+      request<LanCacheCatalogResponse>(
+        `/api/catalog?keys=${encodeURIComponent(contentKey)}`,
+        {},
+        LAN_LOOKUP_TIMEOUT_MS
+      )
     )
+    if (!catalog) return null
     const item = catalog.items.find((entry) => entry.contentKey === contentKey && entry.complete)
     if (!item) return null
     return {

@@ -2,8 +2,10 @@
 // findLanCacheCandidate), driven against a real local HTTP server. What is
 // pinned: the lookup is awaited before TorBox is tried, so a daemon that
 // accepts the connection and never answers must cost the play click about
-// three seconds, not httpClient's thirty-second default; and a daemon that
-// does answer still yields its complete copy.
+// three seconds, not httpClient's thirty-second default, even when the
+// 'lancache' lane is already full of background requests to that same silent
+// daemon (the three seconds count from the call, not from dispatch); and a
+// daemon that does answer still yields its complete copy.
 //
 // lanCache.ts imports 'electron' (through ipcGuard), so the module is loaded
 // with that name pointed at the headless stand-in (src/headless/electronShim),
@@ -101,6 +103,28 @@ async function main(): Promise<void> {
       assert.ok(took < LAN_LOOKUP_TIMEOUT_MS + 2_000, `held the play click for ${took} ms`)
     } finally {
       daemon.close()
+    }
+  })
+
+  await check('the lookup gives up after about three seconds behind a full lane', async () => {
+    const { fetchJson } = await import('../src/main/media-hub/httpClient')
+    const daemon = await startDaemon(true)
+    let background: Promise<unknown>[] = []
+    try {
+      setLanCacheConnection({ url: daemon.url, name: 'test', token: 'device-token' })
+      // Four background calls (the lane's concurrency) that the silent daemon
+      // never answers, each holding its slot for httpClient's thirty seconds.
+      background = Array.from({ length: 4 }, (_, n) =>
+        fetchJson(`${daemon.url}/api/status?n=${n}`, {}, { lane: 'lancache' }).catch(() => null)
+      )
+      const started = Date.now()
+      const found = await findLanCacheCandidate('tt0000001::')
+      const took = Date.now() - started
+      assert.equal(found, null, 'an unanswered lookup contributes nothing')
+      assert.ok(took < LAN_LOOKUP_TIMEOUT_MS + 2_000, `held the play click for ${took} ms`)
+    } finally {
+      daemon.close()
+      await Promise.all(background)
     }
   })
 
