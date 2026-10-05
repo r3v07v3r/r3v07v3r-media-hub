@@ -585,6 +585,14 @@ rows restored after the grouping has moved on are brought to where it is
 now. A backup from before the ledger has none; its rows are taken to be
 filed the way the install's own are.
 
+Before the regroup or the repair moves any rows, the app writes a backup of
+the whole library into a `backups` folder in its data folder
+(`autoBackup.ts`). So do the Trakt import (and its half-hourly pull, at most
+once a day) and the MyAnimeList apply before they write. These are ordinary
+backups that **Restore** reads. The newest five are kept, and each one
+written is a line in the log. A backup that cannot be written is logged and
+does not stop the step.
+
 **Rows from before the ledger.** The first run only records the grouping;
 it has nothing to compare it with. An id that fronted its show before then
 and is a later season now still holds the whole show's rows, in an order

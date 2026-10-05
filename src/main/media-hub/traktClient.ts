@@ -24,6 +24,7 @@ import type {
   TraktStatusResult
 } from '../../shared/media-hub/types'
 import { animeGroupingReady, resolveAnimeGroupTarget } from './animeSeasons'
+import { backupBeforeRewrite } from './autoBackup'
 import { fetchJson, retryOnceOn429 } from './httpClient'
 import { kitsuIdForExternal } from './idBridge'
 import { handle } from './ipcGuard'
@@ -598,6 +599,10 @@ export async function importTraktLibrary(): Promise<ImportSummary> {
 
   const remappedPlays = remapAnimePlays(plays.rows, animeTargets)
   const remappedRatings = rated.flatMap((parsed) => remapAnimeRatings(parsed.rows, animeTargets))
+
+  // A whole account's history is about to be written into this one: a
+  // backup first (autoBackup.ts).
+  if (remappedPlays.length || remappedRatings.length) backupBeforeRewrite('trakt-import')
 
   const summary: ImportSummary = {
     plays: db.importWatched(remappedPlays),

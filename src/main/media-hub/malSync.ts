@@ -36,6 +36,7 @@ import { getDatabase } from './dbState'
 import { fetchJson } from './httpClient'
 import { crossIdsForKitsu, kitsuIdForExternal } from './idBridge'
 import { handle } from './ipcGuard'
+import { backupBeforeRewrite } from './autoBackup'
 import { logError } from './logger'
 import { notifyLibraryChanged } from './rendererBridge'
 import {
@@ -522,6 +523,9 @@ export function registerMalIpc(): void {
         )
       }
       const results: MalReconcileApplyResult = { toLocal: [], toMal: [], ratings: [], errors: [] }
+      // Episodes and ratings are about to be written here from MAL: a
+      // backup first (autoBackup.ts).
+      if (diff?.toLocal?.length || diff?.ratingsToLocal?.length) backupBeforeRewrite('mal-apply')
 
       for (const item of diff?.toLocal || []) {
         try {

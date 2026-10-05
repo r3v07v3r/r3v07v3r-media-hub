@@ -235,6 +235,9 @@ over to its second face. It is where the installation is configured and watched:
 | **AI**            | The local Ollama model behind the assistant and Recommend Next.                                                                                                                                                                                              |
 | **Community**     | The Watch Party relay, and profiles.                                                                                                                                                                                                                         |
 
+- **A backup is taken automatically** into the `backups` folder in the app's data folder before
+  anything rewrites watch history on its own: the anime regroup, a Trakt import or pull, and the
+  MyAnimeList apply. The newest five are kept; restore one from **Your library** like any other.
 - **Ask Sonarr or Radarr for a title** straight from its page, picking the quality profile and
   folder, with a search starting as soon as it is added. Movies and series only; anime is
   catalogued by Kitsu id, which neither service can look up.
