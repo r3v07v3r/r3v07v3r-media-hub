@@ -152,16 +152,17 @@ Playback is mpv, embedded inside the app's own window on Windows; there is no tr
   on or off, <kbd>Esc</kbd> leave fullscreen, or close the player.
 - **Skip the intro and the credits.** Anime uses Aniskip's community-submitted times; movies and
   series read the release's own chapter marks, so a mislabeled chapter is never trusted.
-- **Keep watching a series.** When an episode ends, the next one is offered on a post-play card and
-  starts after a short countdown. If a stream stops well short of its runtime, a card says so and
+- **Keep watching a series.** When the credits start, an Up next card offers the next episode
+  beside Skip credits; when the episode ends, the same card starts it after a short countdown. If a
+  stream stops well short of its runtime, a card says so and
   offers Resume or Stop instead of marking the title watched. Turn it off with **Play the next episode** on the Settings page.
   Play on a series card starts the next episode you have not watched, not the first.
 - **Subtitles** come from the release's embedded tracks, or are searched automatically when SubDL
   or OpenSubtitles is connected. Both are searched together; SubDL rows come first because its
   downloads are unmetered, and OpenSubtitles can match by file hash for frame-accurate sync.
 - **Anime4K** (optional): install the shader pack once from **Control centre → General →
-  Performance & Display**, then toggle it live with the player's button or <kbd>a</kbd>, and pick a
-  mode. The same card holds **Video scaling** (Standard, High or Sharp), the **Playback buffer** preset,
+  Performance & Display** and pick a mode. Anime starts with it on and films and series with it
+  off; the player's button or <kbd>a</kbd> switches it for the title you are watching. The same card holds **Video scaling** (Standard, High or Sharp), the **Playback buffer** preset,
   and the switch for Home's live CPU, GPU, RAM and network gauges.
 - **Unsafe files are kept out.** A release whose name advertises an executable is never chosen or
   submitted to TorBox, and any file the app's web content tries to save to disk is refused if its
