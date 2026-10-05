@@ -652,6 +652,25 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     [watchedIdsResult.history]
   )
 
+  // What every conversion below reads a title's state from. Built once, so
+  // the four of them cannot come to disagree about a title.
+  const adapterContext = useMemo(
+    () => ({
+      trackedIds: myList,
+      watchedIds: watchedIdsResult.watchedIds,
+      historyById: searchHistoryById,
+      seasonEpisodesById: watchedIdsResult.seasonEpisodes,
+      dislikedIds
+    }),
+    [
+      myList,
+      watchedIdsResult.watchedIds,
+      searchHistoryById,
+      watchedIdsResult.seasonEpisodes,
+      dislikedIds
+    ]
+  )
+
   // The one sanctioned way for a page to turn backend CatalogItems into
   // MediaItems: the adapter plus THIS context's id-sets, so watched/list/
   // disliked badges on a paged grid agree with every other surface. The
@@ -663,16 +682,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     (items: CatalogItem[], completedIds?: string[]): MediaItem[] => {
       const completedSet = completedIds ? new Set(completedIds) : null
       return items.map((item) => {
-        const adapted = catalogItemToMediaItem(item, {
-          trackedIds: myList,
-          watchedIds: watchedIdsResult.watchedIds,
-          historyById: searchHistoryById,
-          dislikedIds
-        })
+        const adapted = catalogItemToMediaItem(item, adapterContext)
         return completedSet ? { ...adapted, completed: completedSet.has(item.id) } : adapted
       })
     },
-    [myList, watchedIdsResult.watchedIds, searchHistoryById, dislikedIds]
+    [adapterContext]
   )
 
   // Re-derived whenever the watch/dislike/My List state behind it moves, so
@@ -686,43 +700,20 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     () => ({
       kind: categorySearchRaw.kind,
       query: categorySearchRaw.query,
-      results: categorySearchRaw.items.map((item) =>
-        catalogItemToMediaItem(item, {
-          trackedIds: myList,
-          watchedIds: watchedIdsResult.watchedIds,
-          historyById: searchHistoryById,
-          dislikedIds
-        })
-      ),
+      results: categorySearchRaw.items.map((item) => catalogItemToMediaItem(item, adapterContext)),
       loading: categorySearchRaw.loading,
       error: categorySearchRaw.error
     }),
-    [categorySearchRaw, myList, watchedIdsResult.watchedIds, searchHistoryById, dislikedIds]
+    [categorySearchRaw, adapterContext]
   )
   // Same derivation, and the same reasoning, as categorySearch just above.
   const assistantResults = useMemo(
-    () =>
-      assistantFindings.results.map((item) =>
-        catalogItemToMediaItem(item, {
-          trackedIds: myList,
-          watchedIds: watchedIdsResult.watchedIds,
-          historyById: searchHistoryById,
-          dislikedIds
-        })
-      ),
-    [assistantFindings.results, myList, watchedIdsResult.watchedIds, searchHistoryById, dislikedIds]
+    () => assistantFindings.results.map((item) => catalogItemToMediaItem(item, adapterContext)),
+    [assistantFindings.results, adapterContext]
   )
   const assistantSimilar = useMemo(
-    () =>
-      assistantFindings.similar.map((item) =>
-        catalogItemToMediaItem(item, {
-          trackedIds: myList,
-          watchedIds: watchedIdsResult.watchedIds,
-          historyById: searchHistoryById,
-          dislikedIds
-        })
-      ),
-    [assistantFindings.similar, myList, watchedIdsResult.watchedIds, searchHistoryById, dislikedIds]
+    () => assistantFindings.similar.map((item) => catalogItemToMediaItem(item, adapterContext)),
+    [assistantFindings.similar, adapterContext]
   )
 
   // Which assistant question is the current one. A local model can take a

@@ -1006,6 +1006,36 @@ export function animeStoryLinks(payload: RawApiPayload = {}): AnimeStoryLink[] {
     .map(({ link }) => link)
 }
 
+/**
+ * The story around a merged show, from the links of its first and last
+ * seasons.
+ *
+ * Kitsu links one season to the next, so a merged show asked about by its
+ * own id — its first season — answers "continue with" its own second
+ * season, which is already on the page. What comes before the show is what
+ * comes before its first season, and what comes after it is what follows
+ * its last: so everything but the sequel is taken from the first, the
+ * sequel from the last, and a link to any season of the show itself is
+ * dropped. `members` is the show's ids in season order, its own first.
+ *
+ * The seasons in between are not asked. A film that sits between two of
+ * them is linked from the middle of the show, and is not listed here.
+ */
+export function mergedShowStoryLinks(
+  members: readonly string[],
+  first: readonly AnimeStoryLink[],
+  last: readonly AnimeStoryLink[]
+): AnimeStoryLink[] {
+  const inside = new Set(members.map(String))
+  const outside = (link: AnimeStoryLink): boolean => !inside.has(String(link.item?.id))
+  // Both lists are already in before / alongside / after order, and the
+  // sequel is the last group of it.
+  return [
+    ...first.filter((link) => link.relation !== 'sequel' && outside(link)),
+    ...last.filter((link) => link.relation === 'sequel' && outside(link))
+  ]
+}
+
 export function filterAnimeRelationships(payload: RawApiPayload = {}): CatalogItem[] {
   const included = new Map(
     (payload.included || [])

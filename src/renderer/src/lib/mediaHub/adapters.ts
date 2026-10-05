@@ -13,7 +13,8 @@ import type {
   ContinueWatchingEntry,
   HistoryEntry,
   MediaKind,
-  RecommendationReason
+  RecommendationReason,
+  TrackingListResult
 } from '@shared/media-hub/types'
 import { episodeWatchState, hasAired, isRegularEpisode } from '@shared/media-hub/catalog-logic'
 import { parseRating, parseRuntimeMinutes, parseYear } from '@shared/media-hub/catalogFields'
@@ -184,6 +185,13 @@ export interface CatalogItemAdapterContext {
    *  (which replaces the tracked-id set and so re-derives everything).
    *  Supplying the index makes it O(items + history). */
   historyById?: ReadonlyMap<string, HistoryEntry[]>
+  /** The watched episode numbers of each later season of a merged anime,
+   *  by the season's OWN id (see indexSeasonEpisodes). Nothing is kept
+   *  under such an id — its viewings are under the show, at that season —
+   *  so a card that names one finds none of its rows in the three fields
+   *  above. For an id in here this is what decides `watched`, `completed`
+   *  and the card's progress instead. */
+  seasonEpisodesById?: ReadonlyMap<string, ReadonlySet<number>>
   /** ids explicitly marked "Not interested" (from disliked:list) — drives MediaItem.disliked. */
   dislikedIds?: Set<string>
   /** Why the ranker put THIS title in the suggestion row — home:personalized's
@@ -202,6 +210,34 @@ export function indexHistoryById(history: HistoryEntry[]): Map<string, HistoryEn
     const bucket = index.get(key)
     if (bucket) bucket.push(entry)
     else index.set(key, [entry])
+  }
+  return index
+}
+
+/**
+ * Which episodes of each later season have been watched, by the season's
+ * own id (see CatalogItemAdapterContext.seasonEpisodesById).
+ *
+ * `laterSeasons` is tracking:list's: where each such season's rows are
+ * kept. Built once per history read, like indexHistoryById above.
+ */
+export function indexSeasonEpisodes(
+  history: HistoryEntry[],
+  laterSeasons: TrackingListResult['laterSeasons'] | undefined
+): Map<string, Set<number>> {
+  const index = new Map<string, Set<number>>()
+  const seasonIdAt = new Map<string, string>()
+  for (const [seasonId, show] of Object.entries(laterSeasons ?? {})) {
+    seasonIdAt.set(`${show.id}#${show.season}`, seasonId)
+  }
+  if (!seasonIdAt.size) return index
+  for (const entry of history) {
+    if (typeof entry?.episode !== 'number' || !Number.isFinite(entry.episode)) continue
+    const seasonId = seasonIdAt.get(`${entry.id}#${entry.season}`)
+    if (!seasonId) continue
+    const bucket = index.get(seasonId)
+    if (bucket) bucket.add(entry.episode)
+    else index.set(seasonId, new Set([entry.episode]))
   }
   return index
 }
@@ -250,6 +286,35 @@ function isSeriesCompleted(item: CatalogItem, history: HistoryEntry[]): boolean 
   return state.total > 0 && state.watchedCount >= state.total
 }
 
+/**
+ * How far through a later season of a merged anime somebody is, from the
+ * episode numbers watched of it (CatalogItemAdapterContext.seasonEpisodesById).
+ *
+ * Counted by episode number alone. The season on the item's own episodes is
+ * Kitsu's label inside that one entry, the season on the rows is its place
+ * in the show, and the two need not match — the number is the entry's own
+ * in both.
+ *
+ * Against the item's aired episodes when it carries them. An index row
+ * carries none, so there the total is its episode count: exact for a
+ * finished season, and short of 100% for one still airing — whose
+ * `completed` the index answers itself, from the aired count only it holds
+ * (database.ts's indexByIds).
+ */
+function laterSeasonProgress(
+  item: CatalogItem,
+  episodes: ReadonlySet<number>
+): { watched: number; total: number } {
+  const aired = airedEpisodes(item.videos)
+  if (aired.length) {
+    return {
+      watched: aired.filter((v) => episodes.has(Number(v.episode ?? v.number))).length,
+      total: aired.length
+    }
+  }
+  return { watched: episodes.size, total: item.episodeCounts?.totalEpisodes ?? 0 }
+}
+
 /** Season/episode counts for series+anime, derived from CatalogItem.videos
  *  — that list is the backend's own per-episode data (see Episode's
  *  season/episode/number fields), not a separate aggregate the backend
@@ -291,13 +356,24 @@ export function catalogItemToMediaItem(
   item: CatalogItem,
   context: CatalogItemAdapterContext = {}
 ): MediaItem {
-  const watched = context.watchedIds?.has(item.id) ?? false
+  // A later season of a merged anime, named by its own id: its viewings
+  // are under its show, so it is read from there and not from its own rows.
+  const seasonEpisodes =
+    item.type === 'anime' ? context.seasonEpisodesById?.get(item.id) : undefined
+  const season = seasonEpisodes ? laterSeasonProgress(item, seasonEpisodes) : null
+  const watched = seasonEpisodes
+    ? seasonEpisodes.size > 0
+    : (context.watchedIds?.has(item.id) ?? false)
   // Prefer the pre-grouped index when the caller supplied one — same
   // answer, without re-scanning the whole history for every single item.
   const ownHistory = context.historyById
     ? (context.historyById.get(item.id) ?? [])
     : (context.history ?? [])
-  const completed = item.type === 'movie' ? watched : isSeriesCompleted(item, ownHistory)
+  const completed = season
+    ? season.total > 0 && season.watched >= season.total
+    : item.type === 'movie'
+      ? watched
+      : isSeriesCompleted(item, ownHistory)
   const disliked = context.dislikedIds?.has(item.id) ?? false
   const { totalSeasons, totalEpisodes } = seasonEpisodeCounts(item.videos, item.episodeCounts)
   return {
@@ -332,6 +408,15 @@ export function catalogItemToMediaItem(
     totalSeasons,
     totalEpisodes,
     status: item.status || undefined,
+    // Only a later season carries its progress on the card itself: every
+    // other show's is Continue Watching's to report (see watchStatus.ts).
+    ...(season && season.total > 0
+      ? {
+          progressPercentage: Math.round(
+            (Math.min(season.watched, season.total) / season.total) * 100
+          )
+        }
+      : {}),
     watched,
     completed,
     disliked,

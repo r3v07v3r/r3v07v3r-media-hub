@@ -8,8 +8,12 @@
 // Run with: npx tsx tests/animeCatalogStorage.test.ts   (or npm.cmd test)
 
 import assert from 'node:assert'
-import type { CatalogItem, Episode } from '../src/shared/media-hub/types'
-import { animeStoryLinks, normalizeKitsuAnime } from '../src/main/media-hub/core'
+import type { AnimeStoryLink, CatalogItem, Episode } from '../src/shared/media-hub/types'
+import {
+  animeStoryLinks,
+  mergedShowStoryLinks,
+  normalizeKitsuAnime
+} from '../src/main/media-hub/core'
 import {
   combineGroupEpisodeCounts,
   groupedVideosAreComplete
@@ -145,6 +149,53 @@ check(
     )
   }
 )
+
+console.log('\nmergedShowStoryLinks')
+
+// A show merged from three seasons: kitsu:100 fronts it. Kitsu links one
+// season to the next, so asked of its own id the show's "sequel" is its own
+// second season — already on its page.
+const MERGED = ['kitsu:100', 'kitsu:200', 'kitsu:300']
+
+function storyLink(relation: AnimeStoryLink['relation'], id: string): AnimeStoryLink {
+  return { relation, item: anime(id, []) }
+}
+
+function storyShape(links: AnimeStoryLink[]): string[] {
+  return links.map((link) => `${link.relation}:${link.item.id}`)
+}
+
+check('what follows a merged show is what follows its last season', () => {
+  const first = [
+    storyLink('prequel', 'kitsu:50'),
+    storyLink('side_story', 'kitsu:60'),
+    storyLink('sequel', 'kitsu:200')
+  ]
+  const last = [storyLink('prequel', 'kitsu:200'), storyLink('sequel', 'kitsu:400')]
+  assert.deepEqual(storyShape(mergedShowStoryLinks(MERGED, first, last)), [
+    'prequel:kitsu:50',
+    'side_story:kitsu:60',
+    'sequel:kitsu:400'
+  ])
+})
+
+check('a link to a season of the show itself is dropped, whatever it is called', () => {
+  const first = [storyLink('side_story', 'kitsu:300'), storyLink('sequel', 'kitsu:200')]
+  // The last season's own "before" is the season before it, and its recap
+  // is not the show's: only its sequel is taken.
+  const last = [
+    storyLink('prequel', 'kitsu:200'),
+    storyLink('summary', 'kitsu:70'),
+    storyLink('parent_story', 'kitsu:100')
+  ]
+  assert.deepEqual(storyShape(mergedShowStoryLinks(MERGED, first, last)), [])
+})
+
+check('a show whose last season has nothing after it lists no sequel', () => {
+  const first = [storyLink('prequel', 'kitsu:50'), storyLink('sequel', 'kitsu:200')]
+  const last = [storyLink('prequel', 'kitsu:200')]
+  assert.deepEqual(storyShape(mergedShowStoryLinks(MERGED, first, last)), ['prequel:kitsu:50'])
+})
 
 check(
   'lightweight still preserves real season/episode positions — the exact thing a "Completed" badge is computed from',
