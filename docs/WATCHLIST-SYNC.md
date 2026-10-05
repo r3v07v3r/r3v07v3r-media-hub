@@ -268,12 +268,13 @@ is shared with the phone and TV app's catch-up (below), so the two of them
 read Simkl's lists once per change between them rather than once each.
 
 **Rate limits on writes.** Trakt allows an account one write a second, so
-every Trakt request goes through a lane of its own in the request scheduler
-(`taskScheduler.ts`), one at a time and a second apart. When Trakt answers
-any write (history, a scrobble, a rating, a plan change) with 429, or Simkl
-answers a history push with one, the request waits the time the service's
-`Retry-After` header asks for (a second when it gives none) and is sent once
-more; a second 429, or a wait longer than a minute, is an ordinary failure
+every Trakt request goes through a lane of its own in the request
+scheduler (`taskScheduler.ts`), one at a time and a second apart. When
+Trakt answers any write (history, a scrobble, a rating, a plan change)
+with 429, or Simkl answers a mark, un-mark, season or whole-title push
+with one, the request waits the time the service's `Retry-After` header
+asks for (a second when it gives none) and is sent once more; a second
+429, or a wait longer than a minute, is an ordinary failure
 (`retryOnceOn429` in `httpClient.ts`).
 
 **History pushes that fail are kept.** Marking an episode or a film,
@@ -290,20 +291,23 @@ reached the service (offline, a timeout) is not counted, though an entry
 is still let go 30 days after it was written; and a service that does not
 answer, or answers 429 or 5xx, is sent nothing more in that pass, so a
 service that is down holds up "Sync now" for one request, not one per
-title. A later push for
-the same episode replaces it, whichever way it went, and one that got
-through clears it. An owed change local has since moved away from (an add
-for an episode no longer watched here, a removal for one watched again) is
-dropped rather than replayed. While a removal is owed to Simkl or Trakt,
-or still on its way there, the catch-up and the Trakt history pull do not
-take that viewing back in from that service. The Tracking panel
-shows how many changes are still owed.
+title. A later push for the same episode replaces it, whichever way it
+went, and one that got through clears it. An owed change local has since
+moved away from (an add for an episode no longer watched here, a removal
+for one watched again) is dropped rather than replayed. A retried add
+carries no watched date, so the service records the viewing at the time of
+the retry rather than when it happened. While a removal is owed to Simkl
+or Trakt, or still on its way there, the catch-up and the Trakt history
+pull do not take that viewing back in from that service. The Watchlists
+panel (Settings → Accounts → Watchlists) shows how many changes are still
+owed.
 
 **Scrobbles are off unless turned on.** The player's start, pause and stop
 messages to Simkl and Trakt are sent only when "Scrobble while playing" is
-on (Accounts → Tracking). Each is a request against Simkl's daily
-allowance, and a finished episode or film is sent as a history add at 80%
-whatever the setting says. The phone and TV player sends none either way.
+on (Settings → Accounts → Watchlists). Each is a request against Simkl's
+daily allowance, and a finished episode or film is sent as a history add
+at 80% whatever the setting says. The phone and TV player sends none
+either way.
 
 ## What this deliberately does not do
 

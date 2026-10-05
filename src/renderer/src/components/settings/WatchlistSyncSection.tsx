@@ -111,7 +111,7 @@ export function WatchlistSyncSection() {
   return (
     <section className={`${styles.section} glass-panel`} aria-labelledby="settings-watchlists">
       <h2 id="settings-watchlists" className={styles.sectionTitle}>
-        Sync
+        Watchlists
       </h2>
       <div className={styles.row}>
         <div className={styles.rowIcon} aria-hidden="true">
