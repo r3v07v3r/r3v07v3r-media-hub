@@ -515,7 +515,9 @@ async function catalogListing(
       // written, so seeding cannot disagree with crawling — it only happens
       // sooner.
       if (!db.indexCount(kind)) {
-        db.indexUpsert(kind, cached, { source: 'cache-seed' })
+        if (db.indexUpsert(kind, cached, { source: 'cache-seed' }) && cached.length) {
+          notifyLibraryChanged('cache-seed', 'index')
+        }
       }
       // A cache entry inside its TTL is current by definition — this is
       // the ordinary hit, not the expired fallback below.
@@ -616,6 +618,10 @@ async function catalogListing(
     // saw and leaves every other row alone, which is what lets the library
     // outlive any single crawl's depth.
     db.indexUpsert(kind, items, { source: kind === 'anime' ? 'kitsu' : 'cinemeta+simkl' })
+    // Said out loud, as the deep scan and the household sync already do: a
+    // screen that read an empty index on a fresh install (the phone's Browse
+    // grid) has no other way to learn the first crawl has landed.
+    notifyLibraryChanged('catalog-crawl', 'index')
     if (kind === 'anime') {
       // This catalog is raw until the pass below says otherwise. Written
       // rather than left absent so a marker from the PREVIOUS catalog

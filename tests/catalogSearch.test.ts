@@ -11,7 +11,9 @@
 //     the only request a search makes is the provider's own search;
 //   - a title found only by that search gets an index row once it is
 //     opened (metadata()) or tracked (indexTrackedTitle), so the grids and
-//     My Stuff, which read the index by id, can show it.
+//     My Stuff, which read the index by id, can show it;
+//   - the crawl announces the index it wrote, which is what lets the phone's
+//     Browse grid, empty on a fresh install, fill in when the crawl lands.
 //
 // catalog.ts imports 'electron' (through ipcGuard), so the module is loaded
 // with that name pointed at the headless stand-in (src/headless/
@@ -77,6 +79,13 @@ globalThis.fetch = (async (input: string | URL) => {
       metas: [{ id: 'tt7000001', type: 'movie', name: 'Remote Harbour', poster: '' }]
     })
   }
+  const page = url.match(/\/catalog\/series\/top(?:\/skip=(\d+))?\.json$/)
+  if (page) {
+    const n = Number(page[1] ?? 0)
+    return json({
+      metas: [{ id: `tt80${String(n).padStart(5, '0')}`, type: 'series', name: `S${n}` }]
+    })
+  }
   const meta = url.match(/\/meta\/movie\/(tt\d+)\.json$/)
   if (meta) {
     return json({
@@ -92,8 +101,9 @@ const card = (id: string, title: string): CatalogItem =>
 async function main(): Promise<void> {
   const { createDatabase } = await import('../src/main/media-hub/database')
   const { setDatabase } = await import('../src/main/media-hub/dbState')
-  const { indexTrackedTitle, metadata, registerCatalogIpc } =
+  const { catalogData, indexTrackedTitle, metadata, registerCatalogIpc } =
     await import('../src/main/media-hub/catalog')
+  const { setActiveWindow } = await import('../src/main/media-hub/rendererBridge')
   const { BrowserWindow, ipcMain } = await import('../src/headless/electronShim')
   const { MEDIA_HUB_CHANNELS } = await import('../src/shared/media-hub/ipc-channels')
 
@@ -205,6 +215,28 @@ async function main(): Promise<void> {
       poster: 'http://x/p.jpg'
     })
     assert.equal(db.indexByIds(['simkl:9', 'tt7000003']).items.length, 0)
+  })
+
+  await check('the crawl announces the index it wrote', async () => {
+    // Anything the checks above announced has gone out (to no window) first.
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    const pushed: Array<{ channel: string; payload: unknown }> = []
+    window.webContents.setPushSink((channel, payload) => pushed.push({ channel, payload }))
+    setActiveWindow(window as never)
+    assert.equal(db.indexCount('series'), 0)
+    await catalogData('series')
+    assert.ok(db.indexCount('series') > 0, 'the crawl wrote the index')
+    // library:changed is coalesced for 300 ms.
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    const changes = pushed.filter((push) => push.channel === MEDIA_HUB_CHANNELS.libraryChanged)
+    assert.ok(
+      changes.some((push) => {
+        const event = push.payload as { scopes: string[]; sources: string[] }
+        return event.scopes.includes('index') && event.sources.includes('catalog-crawl')
+      }),
+      `pushed: ${JSON.stringify(pushed)}`
+    )
+    setActiveWindow(null)
   })
 
   db.close()

@@ -67,14 +67,20 @@ export default function Search() {
   // Debounced re-search: fires 400ms after the query or the active tab
   // settles. onSubmit below runs the same search immediately for anyone
   // who presses Enter/Search rather than waiting.
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => {
     const timer = setTimeout(() => runSearch(query, kind), DEBOUNCE_MS)
+    debounceRef.current = timer
     return () => clearTimeout(timer)
   }, [query, kind, runSearch])
 
   const onSubmit = useCallback(
     (event: FormEvent) => {
       event.preventDefault()
+      // The pending debounced run is for this same query. Left armed, an
+      // Enter within 400ms of the last keystroke sent the search twice: two
+      // provider requests for one answer, the first one's reply discarded.
+      clearTimeout(debounceRef.current)
       runSearch(query, kind)
     },
     [query, kind, runSearch]
