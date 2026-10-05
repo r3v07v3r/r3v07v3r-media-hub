@@ -113,6 +113,10 @@ export interface PlannedSyncReport {
   /** Titles removed locally because they left every service that had
    *  them — only ever titles this app had pulled in itself. */
   removed: number
+  /** Watch-history changes (marks, un-marks) that failed to reach a service
+   *  and are waiting to be retried — see historyRetry.ts. Filled in when the
+   *  report is handed to the interface, not stored with it. */
+  historyPending?: number
 }
 
 const REPORT_CACHE_KEY = 'planned:last-sync'

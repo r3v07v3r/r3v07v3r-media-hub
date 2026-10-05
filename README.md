@@ -193,18 +193,24 @@ Each tracking service needs its own API application: create one on the service's
 enter the Client ID (and, for Trakt, the client secret; MyAnimeList's is optional) under
 **Control centre → Accounts**.
 
-| Service         | What it does                                                                                                                                                                                                                                     |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Simkl**       | Pushes watch history and live scrobbles; syncs the plan-to-watch list both ways; shows your Simkl lists. When a movie's watched state differs between this app and Simkl, an **Out of sync with Simkl** panel lets you pick which side is right. |
-| **Trakt**       | Pushes watch history, ratings and live scrobbles for movies and series (anime is not sent); reads your watchlist and lists; imports an existing account's history and ratings once, safely repeatable.                                           |
-| **MyAnimeList** | Pushes anime progress and syncs the plan-to-watch list; **Preview sync with MAL** shows what would change before you apply it.                                                                                                                   |
+| Service         | What it does                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Simkl**       | Pushes watch history (and live scrobbles, if turned on); takes in what was watched elsewhere (films, series and anime episodes) when the app opens and comes back to the front, adding only; syncs the plan-to-watch list both ways; shows your Simkl lists. When a movie's watched state differs between this app and Simkl, an **Out of sync with Simkl** panel lets you pick which side is right, and Trakt is given the same answer. |
+| **Trakt**       | Pushes watch history, ratings and (if turned on) live scrobbles for movies and series (anime is not sent); reads your watchlist and lists; imports an existing account's history and ratings once, safely repeatable, and from then on takes in what is watched there every half hour and when the app opens, adding only.                                                                                                               |
+| **MyAnimeList** | Pushes anime progress and syncs the plan-to-watch list; **Preview sync with MAL** shows what would change before you apply it.                                                                                                                                                                                                                                                                                                           |
 
 **Keep watchlists in sync** (under Accounts → Tracking) is the two-way rule: planning or un-planning
 here pushes out, and a title a service drops is removed here too, but only if this app pulled it in
 from that service originally. The rules are written down in [docs/WATCHLIST-SYNC.md](docs/WATCHLIST-SYNC.md).
 
-> Known limitation: a mark made while a service is unreachable is logged and dropped, not retried.
-> Only the Simkl movie comparison above catches the difference later.
+**Scrobble while playing** (same place) is off by default. A finished episode or film is sent to
+Simkl and Trakt either way; scrobbles add a request for every start, pause and stop, and Simkl
+allows an account 500 requests a day, shared with a linked phone.
+
+A mark, un-mark, season or whole title that does not reach a service (offline, an expired token, a
+rate limit) is kept and sent again with each sync, every half hour and on **Sync now**, up to ten
+times (a try made while offline does not count). The Watchlists panel under Accounts → Tracking says
+how many are still waiting.
 
 - **Bring an existing history in** from **Control centre → General → Your library**: IMDb's ratings
   export (needs nothing) and a Letterboxd "Export Your Data" zip (needs TMDB connected, to match
@@ -251,6 +257,9 @@ over to its second face. It is where the installation is configured and watched:
 | **AI**            | The local Ollama model behind the assistant and Recommend Next.                                                                                                                                                                                              |
 | **Community**     | The Watch Party relay, and profiles.                                                                                                                                                                                                                         |
 
+- **A backup is taken automatically** into the `backups` folder in the app's data folder before
+  anything rewrites watch history on its own: the anime regroup, a Trakt import or pull, and the
+  MyAnimeList apply. The newest five are kept; restore one from **Your library** like any other.
 - **Ask Sonarr or Radarr for a title** straight from its page, picking the quality profile and
   folder, with a search starting as soon as it is added. Movies and series only; anime is
   catalogued by Kitsu id, which neither service can look up.
@@ -361,8 +370,8 @@ the control centre; API credentials are entered in the app, never in the source 
 | **Bazarr**          | No                              | Connection status only.                                                                                                                    | Media servers                      |
 | **TMDB**            | No (Letterboxd import needs it) | Age certificates, cast and crew, collections, better similar titles, grouped-anime episodes.                                               | Accounts → Artwork & metadata      |
 | **OMDb**            | No                              | Rotten Tomatoes scores.                                                                                                                    | Accounts → Artwork & metadata      |
-| **Simkl**           | No                              | History and scrobble push, two-way watchlist, your Simkl lists, the movie discrepancy review.                                              | Accounts → Tracking                |
-| **Trakt**           | No                              | History, ratings and scrobble push; watchlist and lists pull; one-off import.                                                              | Accounts → Tracking                |
+| **Simkl**           | No                              | History push (scrobbles if turned on), two-way watchlist, your Simkl lists, the movie discrepancy review.                                  | Accounts → Tracking                |
+| **Trakt**           | No                              | History, ratings and (if turned on) scrobble push; watchlist and lists pull; one-off import, then history pull.                            | Accounts → Tracking                |
 | **MyAnimeList**     | No                              | Anime progress push, two-way watchlist, preview-then-apply sync.                                                                           | Accounts → Tracking                |
 | **SubDL**           | No                              | Subtitle search with no daily limit.                                                                                                       | Accounts → Subtitles               |
 | **OpenSubtitles**   | No                              | A second subtitle catalogue with hash matching (a free account allows 5 downloads a day).                                                  | Accounts → Subtitles               |
@@ -576,13 +585,13 @@ Use the full base URL, including `http://` or `https://` and a non-default port 
 
 Found by the 2026-09-27 audit and tracked in [docs/AUDIT-2026-09-27.md](docs/AUDIT-2026-09-27.md):
 
-- A watch mark made while a tracking service is unreachable is dropped rather than retried.
 - A partly downloaded title can only resume from the source it came from, so it still needs that
   source connected.
 
 Three problems the same audit found are fixed: anime is now served from the r3-cache tier, cached
 titles play without TorBox or Jellyfin, and plan-to-watch and history pushes for a title keep
-their order. The placeholder weather readout is gone, and the Simkl episode fallback now sends
+their order. A watch mark that fails to reach a tracking service is now kept and retried rather
+than dropped. The placeholder weather readout is gone, and the Simkl episode fallback now sends
 its client id.
 
 ## License

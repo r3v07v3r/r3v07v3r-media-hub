@@ -834,6 +834,10 @@ export interface PlannedSyncReport {
    *  them — only ever titles this app pulled in itself. See
    *  docs/WATCHLIST-SYNC.md rule 2. */
   removed: number
+  /** Watch-history changes (marks, un-marks) that failed to reach a service
+   *  and are waiting to be retried — see historyRetry.ts. Filled in when the
+   *  report is handed to the interface, not stored with it. */
+  historyPending?: number
 }
 
 /**
@@ -1323,6 +1327,10 @@ export interface MediaHubPublicSettings {
   /** Whether watchlist changes travel both ways — see
    *  docs/WATCHLIST-SYNC.md. */
   watchlistTwoWay: boolean
+  /** Whether the player sends scrobbles (start, pause, stop) to Simkl and
+   *  Trakt. Off unless somebody turns it on; the watched mark at 80% is sent
+   *  either way. */
+  scrobbleEnabled: boolean
 }
 
 export type CacheMode = 'disk' | 'memory'

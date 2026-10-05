@@ -1,5 +1,11 @@
 import assert from 'node:assert'
-import { fetchJson, type HttpError } from '../src/main/media-hub/httpClient.ts'
+import {
+  fetchJson,
+  MAX_RETRY_AFTER_MS,
+  retryAfterMs,
+  retryOnceOn429,
+  type HttpError
+} from '../src/main/media-hub/httpClient.ts'
 import {
   MAX_PROXY_RESPONSE_BYTES,
   readLimitedResponseBytes,
@@ -249,6 +255,74 @@ async function main(): Promise<void> {
             (error as Error).message === 'Request failed (502)'
         )
     )
+  })
+
+  // A push that trips a service's rate limit gets one delayed retry, waiting
+  // what the service asked for, instead of being lost as an ordinary failure.
+  console.log('429 and Retry-After')
+  await check('a 429 carries the Retry-After the service sent', async () => {
+    await withFetch(
+      () => new Response('{}', { status: 429, headers: { 'retry-after': '3' } }),
+      () =>
+        assert.rejects(
+          () => fetchJson('https://example.test/m', { method: 'POST' }),
+          (error: unknown) =>
+            (error as HttpError).status === 429 && (error as HttpError).retryAfterMs === 3000
+        )
+    )
+  })
+  await check('Retry-After reads seconds and HTTP dates, and nothing else', async () => {
+    const now = Date.parse('2026-10-05T12:00:00Z')
+    assert.equal(retryAfterMs('2', now), 2000)
+    assert.equal(retryAfterMs('Mon, 05 Oct 2026 12:00:10 GMT', now), 10_000)
+    assert.equal(retryAfterMs('soon', now), undefined)
+    assert.equal(retryAfterMs(null, now), undefined)
+  })
+  await check('a 429 is waited out and sent once more', async () => {
+    let sends = 0
+    const waits: number[] = []
+    const result = await retryOnceOn429(
+      async () => {
+        sends++
+        if (sends === 1) {
+          throw Object.assign(new Error('slow down'), { status: 429, retryAfterMs: 1500 })
+        }
+        return 'ok'
+      },
+      async (ms) => {
+        waits.push(ms)
+      }
+    )
+    assert.equal(result, 'ok')
+    assert.equal(sends, 2)
+    assert.deepEqual(waits, [1500])
+  })
+  await check('a second 429 is a real failure', async () => {
+    let sends = 0
+    await assert.rejects(
+      () =>
+        retryOnceOn429(
+          async () => {
+            sends++
+            throw Object.assign(new Error('slow down'), { status: 429 })
+          },
+          async () => {}
+        ),
+      /slow down/
+    )
+    assert.equal(sends, 2)
+  })
+  await check('other failures and long waits are not retried', async () => {
+    let sends = 0
+    const send = (error: object) => async () => {
+      sends++
+      throw Object.assign(new Error('no'), error)
+    }
+    await assert.rejects(() => retryOnceOn429(send({ status: 500 }), async () => {}))
+    await assert.rejects(() =>
+      retryOnceOn429(send({ status: 429, retryAfterMs: MAX_RETRY_AFTER_MS + 1 }), async () => {})
+    )
+    assert.equal(sends, 2)
   })
 
   console.log(`\n${pass} passed`)

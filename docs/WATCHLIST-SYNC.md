@@ -233,12 +233,19 @@ asks that one question first and reads only what moved:
   some things on this side change what a read would do without touching
   Simkl: a queued removal given up on (rule 6), sync switched back on, a
   title that came from Simkl and has since left Trakt as well.
-- **The watched library the desktop's review panel is compared against**
-  is fetched when the films stamp moved, or when the set of films watched
+- **The watched films the desktop's review panel is compared against**
+  are fetched when the films stamp moved, or when the set of films watched
   here changed (a film marked here whose push to Simkl failed moves only
   this side), and only if the app's interface has asked for that panel
-  since it started. The phone and TV app never do, so there it is never
-  fetched.
+  since it started. The phone and TV app never do, so there they are never
+  fetched. Films only: the panel compares nothing else, and the shows
+  library with every episode's date, the largest thing the app asks Simkl
+  for, is left to the MyAnimeList preview, which needs it. The desktop's
+  own check a few seconds after launch asks `/sync/activities` the same
+  way first, after the catch-up below has run (reusing the catch-up's
+  answer when it is under a minute old), and when neither side's
+  films moved since the last comparison it shows that one again rather
+  than reading Simkl's films (a comparison is kept for a day).
 - **Trakt and MyAnimeList** have no such question to ask, and are read
   every half hour as before.
 
@@ -260,6 +267,48 @@ The record of what was read is kept per profile and per Simkl account, and
 is shared with the phone and TV app's catch-up (below), so the two of them
 read Simkl's lists once per change between them rather than once each.
 
+**Rate limits on writes.** Trakt allows an account one write a second, so
+every Trakt request goes through a lane of its own in the request
+scheduler (`taskScheduler.ts`), one at a time and a second apart. When
+Trakt answers any write (history, a scrobble, a rating, a plan change)
+with 429, or Simkl answers a mark, un-mark, season or whole-title push
+with one, the request waits the time the service's `Retry-After` header
+asks for (a second when it gives none) and is sent once more; a second
+429, or a wait longer than a minute, is an ordinary failure
+(`retryOnceOn429` in `httpClient.ts`).
+
+**History pushes that fail are kept.** Marking an episode or a film,
+un-marking one, marking a season and setting a whole title's status each
+push the change to Simkl, Trakt and MyAnimeList after the local write. A
+push that fails (offline, an expired token, a 5xx, a second 429) is
+written down per service, title and episode (per season for MyAnimeList,
+which is sent a recount) in a durable record per profile
+(`historyRetry.ts`), stamped with the account it was owed to. It is sent
+again at the start of every half-hourly pass and every "Sync now", one
+request per service, title and direction, on the title's own push chain;
+ten failed tries and it is let go, and the log says so. A try that never
+reached the service (offline, a timeout) is not counted, though an entry
+is still let go 30 days after it was written; and a service that does not
+answer, or answers 429 or 5xx, is sent nothing more in that pass, so a
+service that is down holds up "Sync now" for one request, not one per
+title. A later push for the same episode replaces it, whichever way it
+went, and one that got through clears it. An owed change local has since
+moved away from (an add for an episode no longer watched here, a removal
+for one watched again) is dropped rather than replayed. A retried add
+carries no watched date, so the service records the viewing at the time of
+the retry rather than when it happened. While a removal is owed to Simkl
+or Trakt, or still on its way there, the catch-up and the Trakt history
+pull do not take that viewing back in from that service. The Watchlists
+panel (Settings → Accounts → Watchlists) shows how many changes are still
+owed.
+
+**Scrobbles are off unless turned on.** The player's start, pause and stop
+messages to Simkl and Trakt are sent only when "Scrobble while playing" is
+on (Settings → Accounts → Watchlists). Each is a request against Simkl's
+daily allowance, and a finished episode or film is sent as a history add
+at 80% whatever the setting says. The phone and TV player sends none
+either way.
+
 ## What this deliberately does not do
 
 - **No merging of what a "list" means.** Trakt's watchlist, Simkl's
@@ -270,29 +319,44 @@ read Simkl's lists once per change between them rather than once each.
   feature, read-only first.
 - **No history.** This is plan-to-watch only. Watch history has its own
   reconcile queue with its own review UI, and the two should not be
-  confused for each other. The one exception is the phone and TV app's
-  catch-up, below, which takes Simkl's history in without a review.
+  confused for each other. (In that review, films only: "Use Local" sends
+  the local value to Simkl and then Trakt; "Use Simkl" rewrites the local
+  record and sends Simkl's value on to Trakt. A Trakt failure is logged and
+  does not undo either choice.) The exceptions are the catch-up, below,
+  which takes Simkl's history in without a review, and Trakt's history pull
+  ("Trakt's history"); both only add.
 
-## The catch-up on the phone and TV app
+## The catch-up
 
-The desktop settles disagreements with Simkl in a review panel. The phone
-and TV app have no panel and nobody to ask, so they run a **catch-up**
-(`src/main/media-hub/simklCatchUp.ts`; what it decides to write is in
-`simklCatchUpRules.ts`, which is tested directly).
+Every device runs a **catch-up** (`src/main/media-hub/simklCatchUp.ts`;
+what it decides to write is in `simklCatchUpRules.ts`, which is tested
+directly): what Simkl says was watched elsewhere, and this library does
+not have yet, is added without asking. It never removes anything, so it
+needs no review. On the desktop, what it cannot settle by adding (Simkl
+saying a film here is not watched, or a film it could not place) is still
+the "Out of sync with Simkl" panel's, whose check runs after it. The phone
+and TV app have no panel, and the catch-up is all they have.
 
-**Who asks.** Only the phone and TV interface, through `tracking.catchUp`:
-when the app opens, when it comes back to the front, and straight after
-linking to a desktop. The desktop app never runs it. A call within two
-minutes of the last pass, or while one is running, is answered with that
-pass's report; nothing runs while something is playing; a fresh link skips
-the two-minute wait. All of that is per profile: a pass for one profile
-never answers for another, which gets its own.
+**Who asks.** Every interface, through `tracking.catchUp`. The phone and TV
+app ask when the app opens, when it comes back to the front, and straight
+after linking to a desktop. The desktop asks when its window opens and when
+it comes back to the front, but for focus at most every ten minutes
+(`useServiceCatchUp.ts`), because a desktop window gains focus far more
+often than a phone resumes and each pass that gets through is a Simkl
+request. A call within two minutes of the last pass, or while one is
+running, is answered with that pass's report; nothing runs while something
+is playing; a fresh link skips the two-minute wait. All of that is per
+profile: a pass for one profile never answers for another, which gets its
+own.
 
 **What it reads.** First the watchlist pull above, so the plan is settled
 before any history lands: the pull refuses to plan anything with local
 history, so the other order would refuse a title for a viewing the same
 pass wrote. Simkl's lists are skipped in that pull if they were already
 read under the same activity stamps ("When Simkl's lists are read", above).
+Trakt's and MyAnimeList's lists have no such gate, so on the phone they are
+read at most every ten minutes; on the desktop they are left to the
+half-hourly pass and read here only when Simkl's moved.
 Then Simkl's watched history, one kind at a time (films, shows, anime), but
 only for a kind whose activity stamp at `/sync/activities` has moved since
 it was last fully applied. A kind is fetched whole the first time and with
@@ -351,17 +415,60 @@ with viewings recorded here, the unscoped Simkl removal is not sent.
   holds without a usable date is left out. A finished film with no watched
   date is recorded at the date it was added to the list there, or failing
   that at the time of the catch-up.
-- One direction. The desktop still does not take in episodes watched on the
-  phone. Those reach Simkl through the ordinary history push; a film then
-  shows up in the desktop's review panel, and an episode does not reach the
-  desktop at all yet.
+- Through Simkl. An episode or film watched on the phone reaches Simkl
+  through the ordinary history push, and the desktop's next catch-up takes
+  it from there; with Simkl not connected nothing travels between the two.
 - Anime takes only each Simkl entry's own first-season numbering (its
   season 1, or none), filed under whichever season of the merged franchise
   that entry is here. An episode Simkl files under season 0, or 2 and
   later, is refused. The next section has the mapping, and what became of
   later seasons pushed before it existed.
-- A local un-watch whose removal at Simkl failed can come back when that
-  title next has activity there.
+- A local un-watch is not taken back in while its removal at Simkl is
+  still on its way or owed after a failure (see "History pushes that fail
+  are kept"). Once it has been given up on after ten tries, it can come
+  back when that title next has activity there.
+- A film the review panel's "Use Local" ruled not watched is not taken
+  back in while that decision is still queued for Simkl, nor once the
+  queue has given up on it (90 days). Taken in, the next flush would find
+  both sides agreeing and pass "watched" on to Trakt, the opposite of what
+  was chosen.
+
+## Trakt's history
+
+The "Import my Trakt library" button reads a whole Trakt account once:
+every viewing with its date, and every rating. It stays the way an
+account's past comes in, and it is safe to press again.
+
+After that, Trakt's history comes in by itself (`traktHistoryPull.ts`),
+in the half-hourly background sync and in every catch-up (desktop launch
+and focus; the phone and TV app hold no Trakt sign-in). Each pass asks
+Trakt's `/sync/last_activities` first, one small request, and reads
+`/sync/history` only when the films or episodes stamp there moved since
+the last pull, and then only from the last pull on (`start_at`), reaching
+back three days for a viewing that reached Trakt late. The record of where
+the pull is, and under which stamps, is kept per profile and per Trakt
+account, durably, like Simkl's stamps.
+
+- **It only adds**, and files every viewing where the import does: a film
+  or series under its IMDb id, an anime series under the merged show and
+  season it belongs to here (the same `imdbToAnimeTargets` the import
+  uses). While the anime catalog is still being organised it writes
+  nothing and tries the same rows again next time.
+- **A viewing already held here is skipped**, unlike the import. Every
+  episode played here is pushed to Trakt and comes back on the next pull
+  with Trakt's own time, and would otherwise be recorded as a second play.
+  A rewatch on Trakt of something already watched here therefore adds no
+  play here. A viewing un-marked here whose removal Trakt has not taken
+  yet (on its way, or owed after a failure) is skipped the same way.
+- **It starts from the moment it first runs.** With nothing on record for
+  the profile and account, a pass records Trakt's stamps and the time and
+  reads nothing; the account's past is the import button's. An import that
+  finishes records where the pull carries on from.
+- A viewing given to Trakt with a date older than three days before the
+  last pull (a backdated entry) is not seen by the pull; the import finds
+  it.
+- A backup is written before it writes rows, at most once a day (see
+  "When the grouping changes" for the backups).
 
 ## Anime: one show here, an entry per season at Simkl
 
@@ -604,6 +711,14 @@ A backup carries the ledger, and a restore puts it back with the rows, so
 rows restored after the grouping has moved on are brought to where it is
 now. A backup from before the ledger has none; its rows are taken to be
 filed the way the install's own are.
+
+Before the regroup or the repair moves any rows, the app writes a backup of
+the whole library into a `backups` folder in its data folder
+(`autoBackup.ts`). So do the Trakt import (and its half-hourly pull, at most
+once a day) and the MyAnimeList apply before they write. These are ordinary
+backups that **Restore** reads. The newest five are kept, and each one
+written is a line in the log. A backup that cannot be written is logged and
+does not stop the step.
 
 **Rows from before the ledger.** The first run only records the grouping;
 it has nothing to compare it with. An id that fronted its show before then

@@ -91,6 +91,9 @@ async function main(): Promise<void> {
     assert.equal(laneForUrl('https://api.simkl.com/movies/123'), 'simkl')
     assert.equal(laneForUrl('https://v3-cinemeta.strem.io/catalog/movie/top.json'), 'cinemeta')
     assert.equal(laneForUrl('https://graphql.anilist.co'), 'anilist')
+    // Trakt's own lane, paced to its one-write-a-second limit, rather than
+    // the default lane with no gap at all.
+    assert.equal(laneForUrl('https://api.trakt.tv/sync/history'), 'trakt')
     assert.equal(laneForUrl('https://example.invalid/thing'), 'default')
     // A non-URL must not throw its way out of a scheduling decision.
     assert.equal(laneForUrl('not a url'), 'default')

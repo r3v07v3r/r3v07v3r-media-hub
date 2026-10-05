@@ -6,9 +6,9 @@
 // the behaviour, and it is what is pinned here. The pass (watchSync.ts) runs
 // against a real temporary database with the services faked; each fake logs
 // the Simkl requests the real thing makes: three plan-to-watch lists for a
-// pull that reads Simkl (watchlists.ts's fetchSimklPlanned), two libraries
-// for a diff that fetches its snapshot (simklClient.ts's
-// simklWatchedSnapshot).
+// pull that reads Simkl (watchlists.ts's fetchSimklPlanned), and the films
+// library for a diff that fetches its snapshot (simklClient.ts's
+// simklWatchedSnapshot, films only since the diff compares nothing else).
 //
 // Run with: npx tsx tests/watchSync.test.ts
 
@@ -20,9 +20,11 @@ import path from 'node:path'
 import { createDatabase } from '../src/main/media-hub/database'
 import {
   SIMKL_LIST_MAX_AGE_MS,
+  filmDiffCurrent,
   localFilmsSignature,
   newWatchSyncMemory,
   pullPlannedGated,
+  recordFilmDiff,
   runWatchSync,
   simklListDue,
   watchSyncStateFor,
@@ -67,7 +69,7 @@ const LISTS = [
   'GET /sync/all-items/shows/plantowatch',
   'GET /sync/all-items/anime/plantowatch'
 ]
-const LIBRARIES = ['GET /sync/all-items/movies/completed', 'GET /sync/all-items/shows/all']
+const LIBRARIES = ['GET /sync/all-items/movies/completed']
 
 // ---------------------------------------------------------------------------
 console.log('simklListDue')
@@ -358,6 +360,37 @@ async function passes(): Promise<void> {
     })
   })
 
+  await checkAsync(
+    'history pushes that failed are retried first, whatever the gate says',
+    async () => {
+      const h = harness()
+      h.deps.retryHistory = async () => {
+        h.calls.push('retry-owed-history-pushes')
+      }
+      const calls = await passOf(h)
+      assert.equal(calls[0], 'retry-owed-history-pushes')
+      // A gate that fails, and no Simkl account at all, still retry them:
+      // Trakt and MyAnimeList pushes are owed too.
+      h.activitiesError = Object.assign(new Error('Simkl is down'), { status: 503 })
+      assert.equal((await passOf(h))[0], 'retry-owed-history-pushes')
+      h.account = ''
+      assert.equal((await passOf(h))[0], 'retry-owed-history-pushes')
+    }
+  )
+
+  await checkAsync('Trakt history comes after the watchlists, with or without Simkl', async () => {
+    const h = harness()
+    h.deps.pullTraktHistory = async () => {
+      h.calls.push('trakt-history')
+    }
+    const calls = await passOf(h)
+    assert.ok(calls.indexOf('trakt-history') > calls.indexOf('retry-owed-plan-changes'))
+    assert.ok(calls.indexOf('trakt-history') < calls.indexOf('flush-owed-history'))
+    // A Trakt-only account still gets it.
+    h.account = ''
+    assert.ok((await passOf(h)).includes('trakt-history'))
+  })
+
   await checkAsync('nothing changed: one Simkl request, and what is owed still goes', async () => {
     const h = harness()
     await passOf(h)
@@ -623,6 +656,42 @@ async function passes(): Promise<void> {
       { skipSimkl: { reason: 'unasked', error: 'Simkl could not be asked.' } }
     ])
     assert.equal(h.state(), null)
+  })
+
+  // The desktop's launch check (tracking.ts's reconcileCheck) asks the same
+  // question the pass does before reading Simkl's films: has either side's
+  // films moved since the last diff? If not, that diff stands.
+  console.log('filmDiffCurrent')
+
+  await checkAsync('a recorded diff stands until either side moves', async () => {
+    const h = harness()
+    const local = localFilmsSignature([])
+    assert.equal(filmDiffCurrent(h.db, PROFILE, h.account, 'm1', local), false, 'none yet')
+    recordFilmDiff(h.db, PROFILE, h.account, 'm1', local, h.clock)
+    assert.equal(filmDiffCurrent(h.db, PROFILE, h.account, 'm1', local), true)
+    assert.equal(filmDiffCurrent(h.db, PROFILE, h.account, 'm2', local), false, 'Simkl moved')
+    const marked = localFilmsSignature([{ id: 'tt1', type: 'movie' }])
+    assert.equal(filmDiffCurrent(h.db, PROFILE, h.account, 'm1', marked), false, 'here moved')
+    assert.equal(filmDiffCurrent(h.db, PROFILE, 'acct-2', 'm1', local), false, 'another account')
+    assert.equal(filmDiffCurrent(h.db, 'profile-b', h.account, 'm1', local), false)
+  })
+
+  await checkAsync('the launch check and the pass share one record', async () => {
+    const h = harness()
+    await passOf(h)
+    // The pass diffed against a fetched library; the launch check finds it.
+    assert.equal(
+      filmDiffCurrent(h.db, PROFILE, h.account, h.stamps.movies, localFilmsSignature([])),
+      true
+    )
+    // And a diff the launch check records keeps the pass from reading again.
+    h.stamps.movies = 'm2'
+    recordFilmDiff(h.db, PROFILE, h.account, 'm2', localFilmsSignature([]), h.clock)
+    const calls = await passOf(h)
+    assert.deepEqual(
+      calls.filter((call) => LIBRARIES.includes(call)),
+      []
+    )
   })
 }
 
