@@ -251,8 +251,9 @@ asks that one question first and reads only what moved:
 - **The whole shows and anime lists**, for the desktop's episode comparison
   ("Episodes, show by show", below), are read when their own stamp moved
   since the last comparison, and at most every six hours however often it
-  moves. The comparison goes by the answer the catch-up or this pass just
-  read, and asks no question of its own.
+  moves (half an hour after a comparison that left shows for the next).
+  The comparison goes by the answer the catch-up or this pass just read,
+  and asks no question of its own.
 
 On a day when nothing changes that is one Simkl request per half hour
 instead of five. What is **owed** is not gated: plan changes a service
@@ -340,8 +341,8 @@ directly): what Simkl says was watched elsewhere, and this library does
 not have yet, is added without asking. It never removes anything, so it
 needs no review. On the desktop, what it cannot settle by adding (Simkl
 saying a film here is not watched, or a film it could not place) is still
-the films section of the "Sync review" panel, whose check runs after it. The phone
-and TV app have no panel, and the catch-up is all they have.
+the films section of the "Sync review" panel, whose check runs after it.
+The phone and TV app have no panel, and the catch-up is all they have.
 
 **Who asks.** Every interface, through `tracking.catchUp`. The phone and TV
 app ask when the app opens, when it comes back to the front, and straight
@@ -495,7 +496,9 @@ in `tests/episodeSync.test.ts`).
 
 **When it runs.** On the desktop only, after the catch-up (launch, focus,
 and the launch check eight seconds after the window opens) and after the
-half-hourly pass. A service is read only when its activity stamp moved
+half-hourly pass. The launch check does not wait for it: the films answer
+first, and what the comparison adds reaches the panel and the top bar's
+button when it is done, as does what any later pass adds. A service is read only when its activity stamp moved
 since the last comparison under that account: Simkl's shows and anime
 stamps as the catch-up or the pass just read them (the comparison asks
 `/sync/activities` nothing of its own, and leaves Simkl alone when that
@@ -514,9 +517,18 @@ nothing beyond what the pulls already asked.
   own push may still be on the way, and a second add is a second play at
   Trakt), one with a change owed to that service, or one that arrived from
   that service and has since gone from it: it was removed there, and
-  sending it back would undo that. At most twenty shows per service per
-  comparison; the rest go with the next, which the sends themselves bring
-  about.
+  sending it back would undo that. Nor one already sent to that service
+  under the same account: still missing, it was either not taken (the
+  service files it under another id or number) or removed there since,
+  and sending it at every comparison would add a play at Trakt each time.
+  Each episode is sent with the time it was watched here, so a backlog
+  does not land in the service's history as watched today (a retry after
+  a failure goes without it, as any retried push does, and an anime at
+  Simkl is sent undated, since its numbers there are the entry's).
+- At most twenty shows per service per comparison. A comparison that left
+  shows over is recorded as partial: the service is read again on the next
+  moved stamp, but not within half an hour (not six hours, for Simkl), and
+  since the shows just sent are not sent again, the rest move up.
 - Episodes only the service holds are already here: the catch-up reads
   each of Simkl's kinds whole the first time. The Trakt pull starts from
   the moment it first runs, so the first comparison against a Trakt account
@@ -534,7 +546,8 @@ nothing, and its stamp is left, so the next pass reads it again.
 **What is compared where.**
 
 - Series, at Simkl and Trakt, by IMDb id. A show a service holds with no
-  IMDb id cannot be matched, and its episodes here are sent to it again.
+  IMDb id cannot be matched: its episodes here are sent to it once, and
+  not again.
 - Anime at Simkl, entry by entry, placed by the rules every Simkl push uses
   ("Anime: one show here, an entry per season at Simkl", below): a later
   season only where `laterSeasonOf` can show its place is its season on the
@@ -556,7 +569,11 @@ ones sent, and the ones that cannot be sent. One durable entry per profile
 (`episode-sync:merged:v1`), each service's part stamped with its account
 (rule 7) and inert under any other. A show leaves it when it is reviewed,
 or 90 days after a pass last added to it. The same unsendable episodes
-found again do not bring a reviewed row back; a different set does. The
+found again do not bring a reviewed row back; a different set does.
+Besides the rows, it keeps per show, service and account what arrived and
+what was sent, for a year after the last addition. A review does not clear
+this; it is what the comparison goes by when it leaves out what came from
+a service, or was already sent to it. The
 phone and TV app keep the add-only catch-up and have no panel, and their
 pulls write the record all the same. What the phone takes in reaches the
 desktop through the services, and the desktop's own pulls record it there.
@@ -576,14 +593,21 @@ choices are the ways back from it:
 - **Make here match _service_**: this app ends up with that service's set.
   What was held here and not there is removed here, taken back from the
   service where the comparison had sent it, and removed at the other
-  service as well; what arrived from it is sent on to the other service
-  (rule 1).
+  service as well, except what this app saw arrive from that other
+  service. That one was recorded there by itself, not put there from here,
+  and like a planned title (rules 2 and 3) a removal only goes where this
+  app put the thing. What arrived from the service is sent on to the other
+  service (rule 1).
 
 These are the only way an episode is ever removed at a service, and each
 is somebody's decision about one show. Every removal names its episodes; a
 show reference never goes out without them (rule 3: at Simkl a bare one
 removes the show's whole history). What a choice cannot send, a season
-with no entry or anime to Trakt, is said, and left as it is there.
+with no entry or anime to Trakt, is said, and left as it is there. Where
+that is an Undo of episodes that came from that service (Trakt's
+viewings the pull filed under an anime here), the service's pulls leave
+those episodes out for 30 days, long enough for the Trakt pull's three
+days of overlap to pass, so the Undo is not taken back in.
 
 **A choice stands once made.** It is written down before anything changes:
 the changes for the services go into the same durable record as a failed
@@ -611,6 +635,8 @@ that service.
   changes at Simkl (rule 1), and it arrives as a new row.
 - A Trakt-only show is not taken in by the comparison; the import button
   brings an account's past in.
+- "Make here match" cannot tell a viewing the other service recorded
+  before rows were kept from one this app put there, and removes it there.
 
 ## Anime: one show here, an entry per season at Simkl
 

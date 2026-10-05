@@ -214,7 +214,7 @@ how many are still waiting.
 
 On the desktop, the watched episodes of each show are also compared with Simkl's and Trakt's whole
 record of that show whenever either changes, and the two are merged: episodes watched here that a
-service lacks are sent to it, and the first time a Trakt account is compared, its episodes of the
+service lacks are sent to it, with the date you watched them, and the first time a Trakt account is compared, its episodes of the
 shows you have here are taken in. Nothing is removed by this. The **Sync review** panel lists every
 show that was merged, season by season, with **Undo**, **Make Trakt match here** and **Make here
 match Trakt** (and the same for Simkl); those choices are the only way an episode is ever removed at
