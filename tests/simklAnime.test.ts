@@ -37,11 +37,13 @@ import {
 import { bySeason } from '../src/main/media-hub/titleStatusRules'
 import {
   animeHistoryCoordinates,
+  animeSeasonMatchesPage,
   animeSeasonOf,
   fromSimklAnimeEpisode,
   toSimklAnimeEpisode,
   type AnimeGroupTarget,
   type AnimeSiblings,
+  type AnimeTvdbSeason,
   type LocalAnimeEpisode
 } from '../src/shared/media-hub/serviceIds'
 
@@ -280,6 +282,87 @@ check('a show, an unmerged title and a row with no episode stay as they are', ()
   ]) {
     assert.deepEqual(animeHistoryCoordinates(local, targetOf), local)
   }
+})
+
+// ---------------------------------------------------------------------------
+console.log('\na place in the group is not always the season on the page')
+
+// A show whose first member has a TheTVDB mapping is numbered by TMDB on its
+// page: season N is TMDB's season N, whichever member sits at N. Modelled on
+// My Hero Academia: seasons 1-3 map to their own TheTVDB seasons, then an OVA
+// sits at place 4 and the real fourth season, unmapped, at place 5.
+const TMDB_SHOW = 'kitsu:11469'
+const TVDB: Record<string, { seriesId: string; season: number } | 'none'> = {
+  [TMDB_SHOW]: { seriesId: '305074', season: 1 },
+  'kitsu:12268': { seriesId: '305074', season: 2 },
+  'kitsu:13881': { seriesId: '305074', season: 3 },
+  'kitsu:12511': 'none',
+  'kitsu:41971': 'none',
+  'kitsu:777': { seriesId: '999', season: 6 },
+  [SHOW]: 'none',
+  [SEASON_2]: 'none'
+}
+const tvdbOf: AnimeTvdbSeason = (id) => TVDB[id] ?? null
+
+check('a show built from its members: every place is its season', () => {
+  assert.equal(animeSeasonMatchesPage(SHOW, SEASON_2, 2, tvdbOf), true)
+  // Even a member nobody has looked up: the page is the members, in order.
+  assert.equal(animeSeasonMatchesPage(SHOW, SEASON_3, 3, tvdbOf), true)
+})
+
+check('a show numbered by TMDB: only a member whose own season is its place', () => {
+  assert.equal(animeSeasonMatchesPage(TMDB_SHOW, 'kitsu:12268', 2, tvdbOf), true)
+  assert.equal(animeSeasonMatchesPage(TMDB_SHOW, 'kitsu:13881', 3, tvdbOf), true)
+  // An OVA at place 4, and the fourth season at place 5: neither is the
+  // page's season 4 or 5 as far as anything can show.
+  assert.equal(animeSeasonMatchesPage(TMDB_SHOW, 'kitsu:12511', 4, tvdbOf), false)
+  assert.equal(animeSeasonMatchesPage(TMDB_SHOW, 'kitsu:41971', 5, tvdbOf), false)
+  // Its season, but at another place; and a member of another series.
+  assert.equal(animeSeasonMatchesPage(TMDB_SHOW, 'kitsu:13881', 4, tvdbOf), false)
+  assert.equal(animeSeasonMatchesPage(TMDB_SHOW, 'kitsu:777', 6, tvdbOf), false)
+})
+
+check('a mapping nobody has looked up proves nothing', () => {
+  assert.equal(animeSeasonMatchesPage('kitsu:1', 'kitsu:2', 2, tvdbOf), false)
+  assert.equal(animeSeasonMatchesPage(TMDB_SHOW, 'kitsu:2', 2, tvdbOf), false)
+})
+
+check('a season whose member cannot be shown to be it is not sent to Simkl', () => {
+  // What animeSiblingsWhenGrouped hands the builders: the places that do
+  // not match the page are blank.
+  const members = ['kitsu:12268', 'kitsu:13881', 'kitsu:12511', 'kitsu:41971']
+  const provable: AnimeSiblings = (id) =>
+    id === TMDB_SHOW
+      ? members.map((member, index) =>
+          animeSeasonMatchesPage(TMDB_SHOW, member, index + 2, tvdbOf) ? member : null
+        )
+      : undefined
+  const mha = { id: TMDB_SHOW, type: 'anime' as const, title: 'My Hero Academia', year: '2016' }
+  assert.deepEqual(historyPayload(mha, { season: 3, episode: 5 }, provable), {
+    anime: [{ ids: { kitsu: 13881 }, episodes: [{ number: 5 }] }]
+  })
+  // Season 4 on the page is TMDB's fourth season; the member at place 4 is
+  // an OVA. Sent there, episode 5 would be marked on the wrong entry.
+  assert.deepEqual(historyPayload(mha, { season: 4, episode: 5 }, provable), {})
+  assert.deepEqual(historyPayload(mha, { season: 5, episode: 5 }, provable), {})
+  assert.equal(scrobblePayload(mha, { season: 4, episode: 5 }, 50, provable), null)
+  assert.deepEqual(
+    titleHistoryPayload(
+      mha,
+      [
+        { season: 1, episodes: [1] },
+        { season: 2, episodes: [1] },
+        { season: 4, episodes: [1, 2] }
+      ],
+      provable
+    ),
+    {
+      anime: [
+        { title: 'My Hero Academia', year: 2016, ids: { kitsu: 11469 }, episodes: [{ number: 1 }] },
+        { ids: { kitsu: 12268 }, episodes: [{ number: 1 }] }
+      ]
+    }
+  )
 })
 
 // ---------------------------------------------------------------------------

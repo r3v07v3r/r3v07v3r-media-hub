@@ -14,6 +14,7 @@
 import assert from 'node:assert/strict'
 
 import {
+  answeredServices,
   mayRemoveAt,
   plannedRemovals,
   remotePlanAdoptable,
@@ -321,5 +322,72 @@ assert.equal(
   'a film is never started, so its un-plan is sent as before'
 )
 assert.equal(startedHere({ id: 'tt-other', type: 'series' }, watchedIds, groupOf), false)
+
+// --- a list that was not read is not an answer -------------------------------
+
+// The recurring pull leaves Simkl's lists unread when Simkl says nothing
+// changed (watchSync.ts). Its report line then carries the counts of the last
+// real read, with no error on it — which looks exactly like an answer, and
+// must not be taken for one.
+const unreadSimkl = [
+  { service: 'simkl' as const, connected: true, pulled: 12, unmapped: 0, skipped: true },
+  { service: 'trakt' as const, connected: true, pulled: 3, unmapped: 0 },
+  { service: 'mal' as const, connected: false, pulled: 0, unmapped: 0 }
+]
+assert.deepEqual(
+  [...answeredServices(unreadSimkl)],
+  ['trakt'],
+  'a skipped service has not answered, and neither has one that is not connected'
+)
+assert.deepEqual(
+  [
+    ...answeredServices([
+      { service: 'simkl', connected: true, skipped: true, error: 'Too many requests' },
+      { service: 'trakt', connected: true, error: 'timed out' }
+    ])
+  ],
+  [],
+  'nor one that could not be asked, nor one that failed'
+)
+assert.deepEqual(
+  [...answeredServices([{ service: 'simkl', connected: true }])],
+  ['simkl'],
+  'one that was read and held nothing HAS answered (rule 5)'
+)
+
+// What that buys, through the rule itself. Two titles pulled from Simkl,
+// one of them also on Trakt until a moment ago; Trakt answered this pass,
+// Simkl was not read. The tags Simkl's last read left behind are carried
+// over by the pull, so `sources` still shows the first title there.
+const fromSimkl = { source: 'simkl' as const, addedAt: now - HOUR, account: ACCOUNTS.simkl }
+assert.deepEqual(
+  plannedRemovals({
+    tracked: ['tt-on-simkl', 'tt-left-simkl-earlier', 'tt-trakt-only'],
+    origins: {
+      'tt-on-simkl': fromSimkl,
+      // Gone from Simkl at its last read, kept then because Trakt had it.
+      'tt-left-simkl-earlier': fromSimkl,
+      'tt-trakt-only': fromTrakt
+    },
+    sources: { 'tt-on-simkl': ['simkl'] },
+    answered: answeredServices(unreadSimkl),
+    accounts: ACCOUNTS
+  }),
+  ['tt-trakt-only'],
+  'an unread Simkl removes nothing that came from Simkl; Trakt, which answered, still can'
+)
+// The failure this guards against, spelled out: the same pass with the
+// unread Simkl miscounted as an answer that held nothing.
+assert.deepEqual(
+  plannedRemovals({
+    tracked: ['tt-on-simkl'],
+    origins: { 'tt-on-simkl': fromSimkl },
+    sources: {},
+    answered: new Set(['simkl', 'trakt']),
+    accounts: ACCOUNTS
+  }),
+  ['tt-on-simkl'],
+  'answered-and-empty is a removal — which is why unread must never become it'
+)
 
 console.log('ok  watchlist two-way removal rule')

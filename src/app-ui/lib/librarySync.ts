@@ -55,6 +55,28 @@ function read(): CatchUpSnapshot {
   return snapshot
 }
 
+function playerIsUp(): boolean {
+  return window.location.hash.startsWith('#/player')
+}
+
+/**
+ * Asks again in a few minutes, for a pass that put part of its work off.
+ *
+ * One timer, replaced rather than stacked, so a run of deferred answers
+ * never turns into a run of overlapping retries. And one that waits the
+ * player out: a request made while something is playing is refused, and
+ * leaving the player is not a resume — on a TV that stays in the foreground
+ * nothing else would ever ask again, and the part that was put off would
+ * stay put off for the whole session.
+ */
+function armDeferredRetry(): void {
+  window.clearTimeout(retryTimer)
+  retryTimer = window.setTimeout(() => {
+    if (playerIsUp()) armDeferredRetry()
+    else requestCatchUp()
+  }, DEFERRED_RETRY_MS)
+}
+
 /**
  * Ask the backend to catch up. Safe to call as often as anything likes: the
  * backend answers a call made within a couple of minutes of the last pass, or
@@ -62,7 +84,8 @@ function read(): CatchUpSnapshot {
  *
  * Never while the player is up. A catch-up is network and database work, and
  * nothing may compete with a stream that is filling its buffer; the next
- * resume or visit to Home asks again.
+ * resume asks again, and a retry that was owed waits the player out (see
+ * armDeferredRetry).
  *
  * `force` is for a fresh link: the account just changed, so the backend's
  * floor must not answer with a report about the old one. A forced call that
@@ -73,7 +96,7 @@ function read(): CatchUpSnapshot {
 export function requestCatchUp(options?: { force?: boolean }): void {
   const mediaHub = api()
   if (!mediaHub) return
-  if (window.location.hash.startsWith('#/player')) return
+  if (playerIsUp()) return
   if (running) {
     if (options?.force) forceAfter = true
     return
@@ -84,12 +107,7 @@ export function requestCatchUp(options?: { force?: boolean }): void {
     .catchUp(options)
     .then((report) => {
       update({ report })
-      if (report.deferred) {
-        // One timer, replaced rather than stacked, so a run of deferred
-        // answers never turns into a run of overlapping retries.
-        window.clearTimeout(retryTimer)
-        retryTimer = window.setTimeout(() => requestCatchUp(), DEFERRED_RETRY_MS)
-      }
+      if (report.deferred) armDeferredRetry()
     })
     // A pass that failed outright has nothing to show; the last report stands
     // and the next resume asks again.
