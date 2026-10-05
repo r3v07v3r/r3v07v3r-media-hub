@@ -26,7 +26,7 @@ import {
   laterSeasonsOf,
   withShowTotals
 } from '../src/main/media-hub/animeSeasons'
-import { toPosterItem } from '../src/app-ui/lib/posterItem'
+import { timelineExtrasToPosterItems, toPosterItem } from '../src/app-ui/lib/posterItem'
 import { mergedSeasonsLabel } from '../src/shared/media-hub/catalogFields'
 import { createDatabase } from '../src/main/media-hub/database'
 import { watchedLaterSeasons } from '../src/shared/media-hub/serviceIds'
@@ -609,6 +609,31 @@ check('a show’s index row is given the show’s siblings and totals', () => {
   // A grouping with no totals recorded still counts its seasons.
   const [counted] = withShowTotals([row], () => ({ groupedIds: [SECOND] }))
   assert.deepEqual(counted.episodeCounts, { totalSeasons: 2, totalEpisodes: 2 })
+})
+
+check('the phone’s show page lists the films and specials among the seasons', () => {
+  // catalog.story's release-order timeline: the seasons, with what Kitsu
+  // calls a film, an OVA or a special between the seasons it aired between.
+  const strip = timelineExtrasToPosterItems([
+    { item: anime('kitsu:1', { subtype: 'movie' }) },
+    { item: anime(SHOW), season: 1 },
+    { item: anime('kitsu:2', { subtype: 'ova' }) },
+    { item: anime(SECOND), season: 2 },
+    { item: anime('kitsu:3', { subtype: 'movie' }) },
+    { item: anime('kitsu:4') }
+  ])
+  assert.deepEqual(
+    strip.map((poster) => [poster.id, poster.subtitle]),
+    [
+      ['kitsu:1', 'Film · before the first season'],
+      ['kitsu:2', 'OVA · after season 1'],
+      ['kitsu:3', 'Film · after season 2'],
+      ['kitsu:4', 'After season 2']
+    ]
+  )
+  // Each opens as its own title.
+  assert.equal(strip[0].kind, 'anime')
+  assert.deepEqual(timelineExtrasToPosterItems([{ item: anime(SHOW), season: 1 }]), [])
 })
 
 check('a former front that fronts no show now is one season again', () => {

@@ -82,7 +82,8 @@ trending feed (either one alone fills the grid), anime from Kitsu. No key is req
   key needed. A show merged from several seasons is treated as one title: what comes before it is
   what precedes its first season, and what comes after is what follows its last. Only TV seasons
   are merged: a film, OVA, ONA or special is a title of its own, listed on the show's page between
-  the seasons it came out between. On the desktop a Release order / Story order switch, remembered
+  the seasons it came out between (on the phone and TV, in a Films and specials row under the
+  episodes, each saying which season it follows). On the desktop a Release order / Story order switch, remembered
   on that computer, lists the whole franchise in story order instead: Kitsu's prequel and sequel
   links decide, and air dates place what they leave unordered, so it is only as right as those
   links. Film collections stay in release order.
