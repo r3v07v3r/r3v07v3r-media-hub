@@ -78,7 +78,7 @@ import {
   homeWatchedCounts,
   plannedList
 } from './core'
-import { catalogData, metadata } from './catalog'
+import { catalogData, indexTrackedTitle, metadata } from './catalog'
 import {
   animeGroupingReady,
   animeSiblingIds,
@@ -1516,6 +1516,8 @@ export function registerTrackingIpc(): void {
     const tracked = db.isTracked(item.id)
     if (tracked) db.untrack(item.id)
     else db.track(item)
+    // A search-only title gets an index row, or My List cannot show it.
+    if (!tracked) indexTrackedTitle(item)
     requestRecommendationsRebuild()
     // Out to the services, without making anybody wait for it. Three
     // third-party APIs between pressing Plan to Watch and the button
@@ -1555,6 +1557,7 @@ export function registerTrackingIpc(): void {
       const playback = kept.playback
       const db = getDatabase()
       db.markWatched(item, playback)
+      indexTrackedTitle(item)
       // A show played on the phone or TV is followed, so it reaches
       // Continue Watching there — the lite UI has no My List button on the
       // player to do it by hand. Local only, never pushLocalPlanChange: a
@@ -1625,6 +1628,7 @@ export function registerTrackingIpc(): void {
       const episodeNumbers = list.map((p) => p.episode)
       const db = getDatabase()
       for (const playback of list) db.markWatched(item, playback)
+      indexTrackedTitle(item)
       requestRecommendationsRebuild()
       // Detached and ordered per title, as the single-episode handler above.
       // Not awaited into the result — a Trakt failure is logged in
@@ -1684,6 +1688,7 @@ export function registerTrackingIpc(): void {
       const id = canonicalWriteId(item)
       const type = (item.type ?? 'movie') as MediaKind
       const episodic = type !== 'movie'
+      indexTrackedTitle({ ...item, id, type })
       // A later season of a merged anime, named by its own id — the card a
       // watchlist pull added. Its PLAN is its own: that id names the entry
       // at the service, which is what a removal has to be aimed at. Its
@@ -2158,6 +2163,7 @@ export function registerTrackingIpc(): void {
 
   handle<TrackableItem, { disliked: boolean }>(MEDIA_HUB_CHANNELS.dislikedAdd, (_e, item) => {
     getDatabase().dislike(item)
+    indexTrackedTitle(item)
     requestRecommendationsRebuild()
     return { disliked: true }
   })

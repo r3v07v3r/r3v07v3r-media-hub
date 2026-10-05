@@ -58,6 +58,8 @@ trending feed (either one alone fills the grid), anime from Kitsu. No key is req
   combination, and choose which of those start switched on
   from the Settings page's Browsing card. Save any filter combination as a named view; it comes back as
   a chip. **Scan deeper** on a category page pulls in more of the catalog than loaded by itself.
+  A title found only by search joins the library once you open or track it, so it shows in the
+  grids, My Stuff and the Planned row like anything else.
 - **Recommendations that say why.** Home shows the top row; **For You** shows the whole ranking,
   shelved by reason: a franchise continuation, a director or actor who recurs in what you have watched, a genre
   match. After

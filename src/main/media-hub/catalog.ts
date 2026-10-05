@@ -35,8 +35,9 @@ import type {
   TitleCollectionResult
 } from '../../shared/media-hub/types'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
-import { sendToRenderer } from './rendererBridge'
-import { planDeepScanBatch } from './deepScanRules'
+import { notifyLibraryChanged, sendToRenderer } from './rendererBridge'
+import { indexTitleIfMissing, planDeepScanBatch } from './deepScanRules'
+import { sanitizeDaemonTitleRow } from '../../shared/lancache/titleSync'
 import { fetchJson } from './httpClient'
 import { logError } from './logger'
 import { getDatabase } from './dbState'
@@ -976,8 +977,38 @@ async function resolveMetadata(
   // re-list it. A full resolve is exactly the moment those counts are
   // known: every title somebody opens heals its own row. Counts only —
   // never the rank or the source a crawl assigned.
-  if (!degraded) db.indexRefreshFromMetadata(type, item)
+  if (!degraded) {
+    db.indexRefreshFromMetadata(type, item)
+    // A title the index has no row for at all — found by a remote search,
+    // or reached through a service's list — gets one now, so it shows in
+    // the grids and in My Stuff like anything the crawl found.
+    indexIfMissing(type, item)
+  }
   return withCredits(item, type, resolvedId, priority)
+}
+
+/**
+ * indexTitleIfMissing against the live database, telling the screens that
+ * read the index when it wrote a row. See deepScanRules.ts for the rule.
+ */
+function indexIfMissing(kind: MediaKind, item: CatalogItem): void {
+  if (indexTitleIfMissing(getDatabase(), kind, item)) notifyLibraryChanged('search', 'index')
+}
+
+/**
+ * A title somebody tracked (planned, watched, rated, set a status on, or
+ * marked not for them), indexed if the index has no row for it. The item
+ * comes from the screen that did it — a search card, more often than not,
+ * which may never have been opened — so it is cut down to the fields and
+ * the id alphabet the index accepts from any source outside the crawl
+ * (sanitizeDaemonTitleRow) before it is written. Synchronous, so the
+ * My Stuff read that follows the write already finds the row.
+ */
+export function indexTrackedTitle(item: Partial<CatalogItem> & { id: string }): void {
+  const kind = item.type
+  if (kind !== 'movie' && kind !== 'series' && kind !== 'anime') return
+  const row = sanitizeDaemonTitleRow({ seq: 1, rank: 0, kind, item })
+  if (row) indexIfMissing(kind, row.item)
 }
 
 /** Free-text anime search against Kitsu. Grouped the same way the browse

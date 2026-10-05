@@ -21,6 +21,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { createDatabase } from '../src/main/media-hub/database'
+import { indexTitleIfMissing } from '../src/main/media-hub/deepScanRules'
 import type { CatalogItem } from '../src/shared/media-hub/types'
 
 const TEST_PROFILE = 'profile-under-test'
@@ -417,6 +418,74 @@ check('a title whose episodes have all still to air stores a confirmed zero', ()
   })
   db.indexRefreshFromMetadata('anime', resolved)
   assert.equal(raw(dbPath, 'kitsu:1')?.aired_episodes, 0, 'none aired is zero, not "no data"')
+  db.close()
+})
+
+// --- a title found only by a remote search (deepScanRules.ts) ------------
+//
+// Opened or tracked, it gets a row, or the grids and My Stuff (which read
+// the index by id) cannot show it. The deep scan's skip-existing rule
+// applies: nothing the crawl curated is touched.
+
+check('a search-only title gets a row ranked below everything indexed', () => {
+  const dbPath = tempDbPath()
+  const db = createDatabase(dbPath, TEST_PROFILE)
+  db.indexUpsert('movie', [item('tt1'), item('tt2')], { source: 'cinemeta+simkl', rankBase: 40 })
+  const found = item('tt9', { title: 'Remote Harbour', poster: 'https://img.example/p.jpg' })
+  assert.equal(indexTitleIfMissing(db, 'movie', found), true)
+  const row = raw(dbPath, 'tt9')
+  assert.equal(row?.source, 'search')
+  assert.equal(row?.title, 'Remote Harbour')
+  assert.ok(Number(row?.rank) > 41, `rank ${row?.rank} is not below the crawled rows`)
+  assert.deepEqual(
+    db.indexByIds(['tt9']).items.map((x) => x.id),
+    ['tt9'],
+    'My Stuff reads tracked titles by id, and now finds it'
+  )
+  db.close()
+})
+
+check('a title the index already holds is left exactly as the crawl wrote it', () => {
+  const dbPath = tempDbPath()
+  const db = createDatabase(dbPath, TEST_PROFILE)
+  db.indexUpsert('movie', [item('tt1', { title: 'Curated' })], { source: 'cinemeta+simkl' })
+  assert.equal(indexTitleIfMissing(db, 'movie', item('tt1', { title: 'Other' })), false)
+  assert.equal(raw(dbPath, 'tt1')?.title, 'Curated')
+  assert.equal(raw(dbPath, 'tt1')?.source, 'cinemeta+simkl')
+  db.close()
+})
+
+check('a season grouped under its show does not get a row of its own', () => {
+  const dbPath = tempDbPath()
+  const db = createDatabase(dbPath, TEST_PROFILE)
+  db.indexUpsert(
+    'anime',
+    [item('kitsu:1', { type: 'anime', groupedIds: ['kitsu:1', 'kitsu:2'] })],
+    {
+      source: 'kitsu'
+    }
+  )
+  assert.equal(indexTitleIfMissing(db, 'anime', item('kitsu:2', { type: 'anime' })), false)
+  assert.equal(raw(dbPath, 'kitsu:2'), undefined)
+  db.close()
+})
+
+check('only ids and titles the index accepts from outside the crawl are written', () => {
+  const dbPath = tempDbPath()
+  const db = createDatabase(dbPath, TEST_PROFILE)
+  assert.equal(indexTitleIfMissing(db, 'movie', item('simkl:42')), false)
+  assert.equal(indexTitleIfMissing(db, 'movie', item('tt5', { title: '  ' })), false)
+  assert.equal(db.indexCount('movie'), 0)
+  db.close()
+})
+
+check('a later crawl that lists a search row takes it over', () => {
+  const dbPath = tempDbPath()
+  const db = createDatabase(dbPath, TEST_PROFILE)
+  indexTitleIfMissing(db, 'movie', item('tt9', { title: 'Remote Harbour' }))
+  db.indexUpsert('movie', [item('tt9', { title: 'Remote Harbour' })], { source: 'cinemeta+simkl' })
+  assert.equal(raw(dbPath, 'tt9')?.source, 'cinemeta+simkl')
+  assert.equal(raw(dbPath, 'tt9')?.rank, 0)
   db.close()
 })
 

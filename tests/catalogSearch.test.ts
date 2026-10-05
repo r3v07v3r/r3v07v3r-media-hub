@@ -8,7 +8,10 @@
 //     results" instead of "no matches"; a caller that does not ask for the
 //     report still gets the bare list it always got;
 //   - a search reply never waits on a catalogue crawl: on a cold install
-//     the only request a search makes is the provider's own search.
+//     the only request a search makes is the provider's own search;
+//   - a title found only by that search gets an index row once it is
+//     opened (metadata()) or tracked (indexTrackedTitle), so the grids and
+//     My Stuff, which read the index by id, can show it.
 //
 // catalog.ts imports 'electron' (through ipcGuard), so the module is loaded
 // with that name pointed at the headless stand-in (src/headless/
@@ -74,6 +77,12 @@ globalThis.fetch = (async (input: string | URL) => {
       metas: [{ id: 'tt7000001', type: 'movie', name: 'Remote Harbour', poster: '' }]
     })
   }
+  const meta = url.match(/\/meta\/movie\/(tt\d+)\.json$/)
+  if (meta) {
+    return json({
+      meta: { id: meta[1], type: 'movie', name: 'Remote Harbour', year: '2021', runtime: '101 min' }
+    })
+  }
   throw new TypeError(`no stub for ${url}`)
 }) as typeof fetch
 
@@ -83,7 +92,8 @@ const card = (id: string, title: string): CatalogItem =>
 async function main(): Promise<void> {
   const { createDatabase } = await import('../src/main/media-hub/database')
   const { setDatabase } = await import('../src/main/media-hub/dbState')
-  const { registerCatalogIpc } = await import('../src/main/media-hub/catalog')
+  const { indexTrackedTitle, metadata, registerCatalogIpc } =
+    await import('../src/main/media-hub/catalog')
   const { BrowserWindow, ipcMain } = await import('../src/headless/electronShim')
   const { MEDIA_HUB_CHANNELS } = await import('../src/shared/media-hub/ipc-channels')
 
@@ -150,6 +160,51 @@ async function main(): Promise<void> {
     await search({ kind: 'movie', query: 'harbour', report: true })
     assert.equal(requests.length, 1, `requests: ${requests.join(', ')}`)
     assert.ok(requests[0].includes('/catalog/movie/top/search=harbour'))
+  })
+
+  await check('opening a title the index lacks gives it a row, below the crawl', async () => {
+    assert.equal(db.indexByIds(['tt7000001']).items.length, 0, 'a search hit is not indexed')
+    const opened = await metadata('movie', 'tt7000001')
+    assert.equal(opened.title, 'Remote Harbour')
+    const row = db.indexByIds(['tt7000001']).items
+    assert.deepEqual(
+      row.map((x) => x.id),
+      ['tt7000001']
+    )
+    assert.equal(row[0].title, 'Remote Harbour')
+    assert.ok(
+      db.indexList('movie', 10).findIndex((x) => x.id === 'tt7000001') >
+        db.indexList('movie', 10).findIndex((x) => x.id === 'tt6000001'),
+      'ranked below what the crawl found'
+    )
+  })
+
+  await check('opening it again writes nothing new', async () => {
+    const before = db.indexCount('movie')
+    await metadata('movie', 'tt7000001')
+    assert.equal(db.indexCount('movie'), before)
+  })
+
+  await check('tracking a search card that was never opened gives it a row', async () => {
+    indexTrackedTitle({
+      id: 'tt7000002',
+      type: 'movie',
+      title: 'Remote Harbour II',
+      poster: 'https://m.media-amazon.com/images/p.jpg'
+    })
+    const row = db.indexByIds(['tt7000002']).items
+    assert.equal(row[0]?.title, 'Remote Harbour II')
+    assert.equal(row[0]?.poster, 'https://m.media-amazon.com/images/p.jpg')
+    // The fields the index accepts from outside the crawl, and no others:
+    // an id outside the alphabet or art that is not https is refused.
+    indexTrackedTitle({ id: 'simkl:9', type: 'movie', title: 'Legacy id' })
+    indexTrackedTitle({
+      id: 'tt7000003',
+      type: 'movie',
+      title: 'Bad art',
+      poster: 'http://x/p.jpg'
+    })
+    assert.equal(db.indexByIds(['simkl:9', 'tt7000003']).items.length, 0)
   })
 
   db.close()

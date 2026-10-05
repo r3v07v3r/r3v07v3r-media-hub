@@ -16,6 +16,13 @@ import type { CatalogItem, MediaKind } from '../media-hub/types'
  *  URLs, so the alphabet is closed. */
 const ID_RE = /^(tt\d+|kitsu:\d+)$/
 
+/** Whether an id is one the index may hold — the same closed alphabet,
+ *  for the main process's other writer of rows from outside the crawl
+ *  (deepScanRules.ts's indexTitleIfMissing). */
+export function isIndexableTitleId(id: string): boolean {
+  return ID_RE.test(id)
+}
+
 /** Artwork must be https or absent. The renderer loads these URLs
  *  directly; http and every other scheme (file:, data:, chrome:) are
  *  refused rather than laundered. */
