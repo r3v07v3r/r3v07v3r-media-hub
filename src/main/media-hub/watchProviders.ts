@@ -12,6 +12,7 @@
 // file keeps its name so the imports that ask for a region do not all
 // have to move for a deletion elsewhere.
 
+import { electronModule } from './electronModule'
 import { readSettings } from './settingsStore'
 
 /**
@@ -20,11 +21,12 @@ import { readSettings } from './settingsStore'
  * `require('electron')` throws when the binary is absent, which is exactly
  * what CI's `npm ci --ignore-scripts` produces, and this module is reached
  * from preferences.ts, whose pure resolution logic is unit tested outside
- * Electron. The one use below runs only in the real app.
+ * Electron. The one use below runs only in the real app. electronModule()
+ * throws outside Electron without loading the package, which from Electron 42
+ * would download the binary.
  */
 function electron(): typeof import('electron') {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require('electron')
+  return electronModule()
 }
 
 /**

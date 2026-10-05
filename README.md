@@ -367,6 +367,10 @@ npm install
 npm run dev
 ```
 
+`npm run dev` and `npm start` first run `scripts/ensure-electron.mjs`, which fetches the Electron
+binary with the electron package's own `install.js` when `node_modules/electron/path.txt` is
+missing, since Electron 42 and later no longer fetch it during `npm install`.
+
 ### Environment variables
 
 The desktop app reads one: `MPV_PATH`, the path to an mpv binary, which is also the only way to

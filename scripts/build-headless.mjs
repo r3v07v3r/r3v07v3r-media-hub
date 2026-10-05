@@ -56,7 +56,12 @@ const result = esbuild.buildSync({
   ],
   // JSON.stringify, not hand-written quotes: the value must reach esbuild as
   // a JSON expression, and nothing in between may reinterpret it.
-  define: { 'process.env.R3_APP_VERSION': JSON.stringify(version) }
+  // R3_ELECTRON_SHIM tells src/main/media-hub/electronModule.ts that
+  // 'electron' is the stand-in here, so its plain-Node check lets it through.
+  define: {
+    'process.env.R3_APP_VERSION': JSON.stringify(version),
+    'process.env.R3_ELECTRON_SHIM': JSON.stringify('1')
+  }
 })
 
 // Nothing of Electron's may have come along. If the real package got in, an
