@@ -315,6 +315,24 @@
   text-transform: capitalize;
   color: var(--text-primary);
 }
+/* The thumbs-down is in the text colour, not the rating star's yellow. */
+.dislikedChip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.metaRow .dislikedChip svg {
+  width: 12px;
+  height: 12px;
+  color: inherit;
+}
 
 /* ---------- Actions ---------- */
 .actions {

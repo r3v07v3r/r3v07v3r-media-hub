@@ -16,14 +16,25 @@ const KIND_LABEL: Record<string, string> = {
 }
 
 /** One title, as a thing you can open. */
-function TitleTile({ media, onOpen }: { media: MediaItem; onOpen: (media: MediaItem) => void }) {
+function TitleTile({
+  media,
+  disliked,
+  onOpen
+}: {
+  media: MediaItem
+  /** Marked Not interested. These rows are search answers and are not
+   *  filtered by Hide Disliked, so the tile is dimmed and named instead. */
+  disliked: boolean
+  onOpen: (media: MediaItem) => void
+}) {
   const artwork = resolveArtwork(media)
   return (
     <li>
       <button
         type="button"
-        className={styles.aiTile}
+        className={`${styles.aiTile} ${disliked ? styles.aiTileDisliked : ''}`}
         data-media-id={media.id}
+        aria-label={disliked ? `${media.title}, not interested` : undefined}
         onClick={() => onOpen(media)}
       >
         <ArtworkImage
@@ -35,6 +46,7 @@ function TitleTile({ media, onOpen }: { media: MediaItem; onOpen: (media: MediaI
         />
         <span className={styles.aiTileTitle}>{media.title}</span>
         <span className={styles.aiTileMeta}>
+          {disliked && <Icon name="thumbs-down" size={10} />}
           {[KIND_LABEL[media.mediaType] ?? '', media.releaseYear || ''].filter(Boolean).join(' · ')}
         </span>
       </button>
@@ -79,7 +91,8 @@ export function AIResponsePanel() {
     assistantSimilarSource,
     assistantSearching,
     closeAssistant,
-    openDetail
+    openDetail,
+    dislikedIds
   } = useAppState()
 
   // 'error' shows too: a local model that isn't connected, isn't running,
@@ -120,7 +133,12 @@ export function AIResponsePanel() {
             ) : (
               <ul className={styles.aiTiles}>
                 {assistantResults.map((media) => (
-                  <TitleTile key={media.id} media={media} onOpen={open} />
+                  <TitleTile
+                    key={media.id}
+                    media={media}
+                    disliked={dislikedIds.has(media.id)}
+                    onOpen={open}
+                  />
                 ))}
               </ul>
             )}
@@ -152,7 +170,12 @@ export function AIResponsePanel() {
             </h2>
             <ul className={styles.aiTiles}>
               {assistantSimilar.map((media) => (
-                <TitleTile key={media.id} media={media} onOpen={open} />
+                <TitleTile
+                  key={media.id}
+                  media={media}
+                  disliked={dislikedIds.has(media.id)}
+                  onOpen={open}
+                />
               ))}
             </ul>
           </section>

@@ -18,7 +18,8 @@
 // Disliked titles are hidden from browsing unless the person switched Hide
 // Disliked off (preferences.ts's hideDislikedDefault), a page can still
 // show them with its own toggle, and a disliked card is marked wherever it
-// is shown.
+// is shown: MediaCard, a library tile, the detail page's More like this
+// cards, the hero and the assistant's title tiles.
 //
 // A card acted on from Home's Recommended row, a For You rail or the hero
 // keeps its slot, with its new state, until the route changes
@@ -234,6 +235,22 @@ check('a disliked card is marked on MediaCard and on a library tile', () => {
   assert.match(tile, /const disliked = dislikedIds\.has\(media\.id\)/)
   assert.match(tile, /disliked \? styles\.tileDisliked/)
   assert.match(tile, /\{disliked && \([\s\S]*?Not interested/)
+})
+
+check('a disliked title is marked on the More like this cards, the hero and the AI tiles', () => {
+  const read = (file: string): string =>
+    fs.readFileSync(path.resolve(__dirname, '../src/renderer/src', file), 'utf8')
+  const similar = read('components/detail/SimilarPanel.tsx')
+  assert.match(similar, /const disliked = dislikedIds\.has\(item\.id\)/)
+  assert.match(similar, /disliked \? styles\.cardItemDisliked/)
+  assert.match(similar, /\{disliked && \([\s\S]*?Not interested/)
+  // The hero: a title disliked from Home stays there until the page is left.
+  const hero = read('components/home/FeaturedHero/FeaturedMetadata.tsx')
+  assert.match(hero, /const disliked = dislikedIds\.has\(item\.id\)/)
+  assert.match(hero, /\{disliked && \([\s\S]*?Not interested/)
+  const ai = read('components/overlays/AIResponsePanel.tsx')
+  assert.equal(ai.match(/disliked=\{dislikedIds\.has\(media\.id\)\}/g)?.length, 2)
+  assert.match(ai, /disliked \? styles\.aiTileDisliked/)
 })
 
 // --- a card acted on keeps its slot -----------------------------------------
