@@ -104,6 +104,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
 
   const [storyLinks, setStoryLinks] = useState<AnimeStoryLink[]>([])
   const [storyTimeline, setStoryTimeline] = useState<AnimeTimelineEntry[]>([])
+  const [storyTimelineChecked, setStoryTimelineChecked] = useState(true)
   const [storyStatus, setStoryStatus] = useState<FetchStatus>('loading')
   const [storyChecked, setStoryChecked] = useState(false)
   // Release or story order for the franchise guide, as last chosen here.
@@ -209,6 +210,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
         if (cancelled) return
         setStoryLinks(result.links)
         setStoryTimeline(result.timeline ?? [])
+        setStoryTimelineChecked(result.timelineChecked !== false)
         setStoryChecked(result.checked)
         setStoryStatus('ready')
       })
@@ -834,6 +836,8 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
             checked={storyChecked}
             links={storyItems}
             timeline={storyEntries}
+            timelineChecked={storyTimelineChecked}
+            currentId={media.id}
             order={storyOrder}
             onOrderChange={(order) => {
               writeStoryOrder(order)

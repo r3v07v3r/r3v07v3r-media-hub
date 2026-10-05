@@ -58,6 +58,10 @@ interface AnimeStoryPanelProps {
   links: StoryLink[]
   /** The franchise in `order` (AnimeStoryResult.timeline). */
   timeline: StoryEntry[]
+  /** False when a part's links could not be looked up for story order. */
+  timelineChecked: boolean
+  /** The title this page is open on: its own row in the list is not a link. */
+  currentId: string
   order: AnimeStoryOrder
   onOrderChange: (order: AnimeStoryOrder) => void
   currentStatus?: string
@@ -88,6 +92,8 @@ export function AnimeStoryPanel({
   checked,
   links,
   timeline,
+  timelineChecked,
+  currentId,
   order,
   onOrderChange,
   currentStatus,
@@ -163,15 +169,45 @@ export function AnimeStoryPanel({
     links: links.filter((link) => group.relations.includes(link.relation))
   })).filter((group) => group.links.length)
 
-  /** One row of the guide: a title to open, or a season of this show. */
+  /** One row of the guide: a title to open, or a season of this show.
+   *  Without `onClick` it is the title already on screen, and not a link. */
   const row = (
     key: string,
     item: MediaItem,
     label: string,
     after: boolean,
-    onClick: () => void
+    onClick?: () => void
   ) => {
     const artwork = resolveArtwork(item)
+    const content = (
+      <>
+        <ArtworkImage
+          src={artwork.thumbnailUrl ?? artwork.posterUrl}
+          alt=""
+          fallbackTitle={item.title}
+          artTint={item.artTint}
+          className={styles.thumb}
+        />
+        <span className={styles.info}>
+          <span className={styles.linkType}>{label}</span>
+          <span className={styles.title}>{item.title}</span>
+          <span className={styles.meta}>{availability(item)}</span>
+        </span>
+      </>
+    )
+    if (!onClick) {
+      return (
+        <li key={key}>
+          <div
+            className={`${styles.storyLink} ${styles.current}`}
+            data-media-id={item.id}
+            aria-current="page"
+          >
+            {content}
+          </div>
+        </li>
+      )
+    }
     return (
       <li key={key}>
         <button
@@ -180,18 +216,7 @@ export function AnimeStoryPanel({
           data-media-id={item.id}
           onClick={onClick}
         >
-          <ArtworkImage
-            src={artwork.thumbnailUrl ?? artwork.posterUrl}
-            alt=""
-            fallbackTitle={item.title}
-            artTint={item.artTint}
-            className={styles.thumb}
-          />
-          <span className={styles.info}>
-            <span className={styles.linkType}>{label}</span>
-            <span className={styles.title}>{item.title}</span>
-            <span className={styles.meta}>{availability(item)}</span>
-          </span>
+          {content}
           <Icon name="chevron" size={16} className={styles.chevron} />
         </button>
       </li>
@@ -206,6 +231,14 @@ export function AnimeStoryPanel({
       const season = entry.season
       return row(`season:${season}`, entry.item, `Season ${season}`, true, () =>
         onSelectSeason(season)
+      )
+    }
+    if (String(entry.item.id) === currentId) {
+      return row(
+        `entry:${entry.item.id}`,
+        entry.item,
+        kind ? `${kind} · This title` : 'This title',
+        true
       )
     }
     const label = entry.relation
@@ -234,6 +267,11 @@ export function AnimeStoryPanel({
             {/* Kitsu's prequel and sequel links, in the order they make;
                 what they leave unordered goes by air date. */}
             <p className={styles.groupLabel}>In story order</p>
+            {!timelineChecked && (
+              <p className={styles.note}>
+                Some parts&apos; links couldn&apos;t be checked, so this order may be incomplete.
+              </p>
+            )}
             <ul className={styles.list}>{timeline.map(entryRow)}</ul>
           </div>
         ) : (

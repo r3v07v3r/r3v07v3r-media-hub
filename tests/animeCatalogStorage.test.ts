@@ -524,10 +524,11 @@ async function pageChecks(): Promise<void> {
 
   await checkAsync('story order lists every part and every link, in story order', async () => {
     const parts = animeShowTimelineParts(S1.id)
-    const timeline = animeStoryTimeline(
+    const { timeline, timelineChecked } = animeStoryTimeline(
       parts,
-      parts.map((part) => story[part.item.id] ?? [])
+      parts.map((part) => ({ links: story[part.item.id] ?? [], checked: true }))
     )
+    assert.equal(timelineChecked, true)
     assert.deepEqual(shape(timeline), [
       `prequel:${PREQUEL.id}`,
       'season 1',
@@ -536,6 +537,31 @@ async function pageChecks(): Promise<void> {
       `movie:${FILM.id}`,
       'season 3',
       `sequel:${NEXT.id}`
+    ])
+  })
+
+  await checkAsync('story order says so when a part’s links could not be looked up', async () => {
+    const parts = animeShowTimelineParts(S1.id)
+    // The film's lookup failed with nothing cached, and the third season's
+    // failed outright: the order is built from what answered.
+    const { timeline, timelineChecked } = animeStoryTimeline(
+      parts,
+      parts.map((part) =>
+        part.item.id === FILM.id
+          ? { links: [], checked: false }
+          : part.item.id === S3.id
+            ? null
+            : { links: story[part.item.id] ?? [], checked: true }
+      )
+    )
+    assert.equal(timelineChecked, false)
+    assert.deepEqual(shape(timeline), [
+      `prequel:${PREQUEL.id}`,
+      'season 1',
+      'season 2',
+      `side_story:${SIDE.id}`,
+      `movie:${FILM.id}`,
+      'season 3'
     ])
   })
   db.close()

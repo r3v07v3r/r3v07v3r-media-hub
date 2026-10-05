@@ -11,6 +11,7 @@
 
 import {
   AnimeStoryLink,
+  AnimeStoryResult,
   AnimeTimelineEntry,
   CacheSourceRef,
   CatalogItem,
@@ -1137,21 +1138,25 @@ export function animeStoryOrder<T>(
 
 /**
  * A show's parts and every title they link to, in story order
- * (animeStoryOrder). `stories[i]` is the story links of `parts[i]`: its
- * prequel and sequel links order the parts and the titles they name, and a
- * title outside the show is listed once, with the relation of the first part
- * that names it.
+ * (animeStoryOrder). `stories[i]` is the story lookup of `parts[i]`, null
+ * where it failed outright: its prequel and sequel links order the parts and
+ * the titles they name, and a title outside the show is listed once, with
+ * the relation of the first part that names it.
+ *
+ * `timelineChecked` is false when any part's links could not be looked up:
+ * the order is then built without them, and the page says it may be
+ * incomplete rather than presenting it as the story's order.
  */
 export function animeStoryTimeline(
   parts: readonly AnimeTimelineEntry[],
-  stories: readonly (readonly AnimeStoryLink[])[]
-): AnimeTimelineEntry[] {
+  stories: readonly (Pick<AnimeStoryResult, 'links' | 'checked'> | null)[]
+): Required<Pick<AnimeStoryResult, 'timeline' | 'timelineChecked'>> {
   const entries: AnimeTimelineEntry[] = [...parts]
   const known = new Set(parts.map((part) => String(part.item.id)))
   const links: [string, string][] = []
   parts.forEach((part, index) => {
     const partId = String(part.item.id)
-    for (const link of stories[index] ?? []) {
+    for (const link of stories[index]?.links ?? []) {
       const linkId = String(link.item?.id ?? '')
       if (!linkId) continue
       if (link.relation === 'prequel') links.push([linkId, partId])
@@ -1161,12 +1166,15 @@ export function animeStoryTimeline(
       entries.push({ item: link.item, relation: link.relation })
     }
   })
-  return animeStoryOrder(
-    entries,
-    (entry) => String(entry.item.id),
-    (entry) => String(entry.item.releaseDate || ''),
-    links
-  )
+  return {
+    timeline: animeStoryOrder(
+      entries,
+      (entry) => String(entry.item.id),
+      (entry) => String(entry.item.releaseDate || ''),
+      links
+    ),
+    timelineChecked: parts.every((_part, index) => stories[index]?.checked === true)
+  }
 }
 
 export function filterAnimeRelationships(payload: RawApiPayload = {}): CatalogItem[] {

@@ -267,6 +267,11 @@ export interface AnimeStoryResult {
    * title the show's parts link to, in story order.
    */
   timeline?: AnimeTimelineEntry[]
+  /**
+   * Story order only: false when a part's own links could not be looked up,
+   * so the order was built without them and may be incomplete.
+   */
+  timelineChecked?: boolean
 }
 
 /**

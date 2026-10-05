@@ -27,7 +27,7 @@ import { fetchJson } from './httpClient'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { isValidCatalogKind } from './security'
-import type { TaskPriority } from './taskScheduler'
+import { mapWithLimit, type TaskPriority } from './taskScheduler'
 
 const STORY_TTL_MS = 24 * 60 * 60 * 1000
 
@@ -97,7 +97,7 @@ export async function storyForShow(
   if (members.length === 1) {
     const story = await storyForAnime(showId, priority)
     if (order !== 'story') return story
-    return { ...story, timeline: await storyTimeline(animeShowTimelineParts(showId), priority) }
+    return { ...story, ...(await storyTimeline(animeShowTimelineParts(showId), priority)) }
   }
   const [first, last] = await Promise.all([
     storyForAnime(showId, priority),
@@ -110,7 +110,7 @@ export async function storyForShow(
     checked: first.checked && last.checked
   }
   if (order === 'story') {
-    return { ...story, timeline: await storyTimeline(animeShowTimelineParts(showId), priority) }
+    return { ...story, ...(await storyTimeline(animeShowTimelineParts(showId), priority)) }
   }
   // Release order lists the seasons only to place the films between them:
   // with none, the season tabs already say it all.
@@ -129,18 +129,17 @@ export async function storyForShow(
  * The show's parts and everything they link to, in story order: each part's
  * own links are asked for (storyForAnime, kept a day) and put in order by
  * core.ts's animeStoryTimeline.
+ *
+ * Bounded like groupAnimeCatalog's lookups: a long franchise files dozens of
+ * films with its show, and flipping the switch would otherwise send a
+ * request for every one of them at once.
  */
 async function storyTimeline(
   parts: readonly AnimeTimelineEntry[],
   priority: TaskPriority
-): Promise<AnimeTimelineEntry[]> {
-  const stories = await Promise.all(
-    parts.map((part) => storyForAnime(String(part.item.id), priority))
-  )
-  return animeStoryTimeline(
-    parts,
-    stories.map((story) => story.links)
-  )
+): Promise<Pick<AnimeStoryResult, 'timeline' | 'timelineChecked'>> {
+  const stories = await mapWithLimit(parts, (part) => storyForAnime(String(part.item.id), priority))
+  return animeStoryTimeline(parts, stories)
 }
 
 /** Registers the narrowly-scoped anime sequel/prequel lookup. */
