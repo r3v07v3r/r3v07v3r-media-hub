@@ -1098,6 +1098,9 @@ export interface ReconcileCheckResult {
    *  not "confirmed everything agrees." */
   ran: boolean
   discrepancies: WatchStatusDiscrepancy[]
+  /** The shows section: what was merged show by show and not reviewed yet.
+   *  Optional so an answer from an older backend still reads. */
+  shows?: ShowSyncRow[]
 }
 
 export type ReconcileResolution = 'use-local' | 'use-remote' | 'ignore'
@@ -1148,6 +1151,70 @@ export interface ReconcileSyncReport {
   /** Titles dropped after too many failed attempts — nothing retries these. */
   abandoned: string[]
   /** The most recent failure message, for the notification text. */
+  error?: string
+}
+
+/** The services whose watched episodes are compared show by show
+ *  (main/media-hub/episodeSync.ts). MyAnimeList keeps a count per entry,
+ *  not episodes, and is only sent the new count when a choice changes one. */
+export type EpisodeSyncService = 'simkl' | 'trakt'
+
+export interface SyncEpisode {
+  season: number
+  episode: number
+}
+
+/** What happened between this app and one service for one show. */
+export interface ShowSyncServiceRow {
+  /** Episodes the service held and this app did not, taken in here. */
+  arrived: SyncEpisode[]
+  /** Episodes held here that the service lacked, sent to it. */
+  sent: SyncEpisode[]
+  /** Episodes held here that the service lacks and that cannot be sent to
+   *  it: an anime season the placing rules name no entry for, or a title
+   *  the service has no id for. */
+  unsendable: SyncEpisode[]
+  /** Seasons in this row that nothing can be sent to the service for, so a
+   *  choice leaves the service as it is there. */
+  blockedSeasons: number[]
+}
+
+/** One show in the review panel's shows section: what the automatic step
+ *  merged for it, per service, since it was last reviewed. */
+export interface ShowSyncRow {
+  id: string
+  type: MediaKind
+  title: string
+  year: string
+  poster: string
+  /** When a pass last added to this row, ms. */
+  at: number
+  services: Partial<Record<EpisodeSyncService, ShowSyncServiceRow>>
+}
+
+/**
+ * The choices a show row offers. `keep` accepts the merge and drops the row;
+ * `undo` removes the episodes that arrived, here and where they came from;
+ * the other two name a `service`. See docs/WATCHLIST-SYNC.md, "Episodes,
+ * show by show".
+ */
+export type ShowSyncAction = 'keep' | 'undo' | 'service-match-here' | 'here-match-service'
+
+export interface ShowSyncDecision {
+  id: string
+  action: ShowSyncAction
+  service?: EpisodeSyncService
+}
+
+export interface ShowSyncDecisionResult {
+  /** False when the choice could not be recorded; nothing was changed. */
+  ok: boolean
+  /** True when changes for the services were queued. */
+  queued: boolean
+  /** Episodes removed here. */
+  removedHere: number
+  /** Seasons a choice could not reach a service for. */
+  cannotSend: Array<{ service: EpisodeSyncService; seasons: number[] }>
   error?: string
 }
 

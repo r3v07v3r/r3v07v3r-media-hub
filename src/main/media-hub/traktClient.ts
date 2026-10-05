@@ -666,12 +666,14 @@ let pullInFlight: Promise<TraktPullReport> | null = null
  * The incremental history pull (traktHistoryPull.ts) against the real Trakt
  * and database. Run by the half-hourly watch-sync job and by every
  * catch-up; one at a time, a second caller sharing the first.
- * `removalsOwed` is tracking.ts's removalsHeldBack('trakt'), handed in by
- * the caller because tracking.ts imports this module.
+ * `removalsOwed` is tracking.ts's removalsHeldBack('trakt'), and `merged`
+ * its noteEpisodeArrivals('trakt', …), handed in by the caller because
+ * tracking.ts imports this module.
  */
 export function pullTraktHistoryNow(
   priority: TaskPriority = 'background',
-  removalsOwed?: () => ReadonlySet<string>
+  removalsOwed?: () => ReadonlySet<string>,
+  merged?: (rows: ImportedPlay[]) => void
 ): Promise<TraktPullReport> {
   if (pullInFlight) return pullInFlight
   const run = pullTraktHistory({
@@ -680,6 +682,7 @@ export function pullTraktHistoryNow(
     lastActivities: () => traktRequest('/sync/last_activities', {}, priority),
     history: (startAt) => readAllPages(`/sync/history?start_at=${encodeURIComponent(startAt)}`),
     removalsOwed,
+    merged,
     file: fileTraktPlays,
     // At most once a day: this runs every half hour, and its backups must
     // not push the ones taken before a regroup out of the rotation.

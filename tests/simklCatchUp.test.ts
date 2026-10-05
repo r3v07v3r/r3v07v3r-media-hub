@@ -1128,6 +1128,31 @@ async function passes(): Promise<void> {
   )
 
   await checkAsync(
+    'what each kind wrote is handed on for the record of what was merged',
+    async () => {
+      // episodeSync.ts's noteArrivals keeps it per show for the desktop's
+      // review panel; the phone, which has no panel, keeps it all the same.
+      const h = harness()
+      const merged: string[] = []
+      h.deps.merged = (rows) => {
+        for (const row of rows) merged.push(`${row.id}:${row.season ?? '-'}:${row.episode ?? '-'}`)
+      }
+      await passOf(h)
+      assert.deepEqual(merged.sort(), [
+        'kitsu:46474:1:1',
+        'tt0000001:1:1',
+        'tt0000001:1:2',
+        'tt0000002:-:-'
+      ])
+      // Nothing new next time, nothing handed on.
+      merged.length = 0
+      h.clock += 3 * MINUTE
+      await passOf(h)
+      assert.deepEqual(merged, [])
+    }
+  )
+
+  await checkAsync(
     'a viewing whose removal is still owed to Simkl is not taken back in',
     async () => {
       // Episode 2 was un-marked here and the removal failed, so Simkl still

@@ -134,6 +134,19 @@ check('a request is one invoke carrying exactly the payload the handler reads', 
     args: [{ leaveListsToJob: true }]
   })
 
+  // A choice on a show row in the review panel: the handler reads id, action
+  // and service from this one object.
+  void api.mediaHub.tracking.episodeDecide({
+    id: 'tt0000001',
+    action: 'here-match-service',
+    service: 'trakt'
+  })
+  assert.deepEqual(calls.at(-1), {
+    kind: 'invoke',
+    channel: MEDIA_HUB_CHANNELS.trackingEpisodeDecide,
+    args: [{ id: 'tt0000001', action: 'here-match-service', service: 'trakt' }]
+  })
+
   // No payload means NO argument, not an explicit undefined: a handler that
   // counts its arguments must see the same call it always has.
   void api.mediaHub.bootstrap()

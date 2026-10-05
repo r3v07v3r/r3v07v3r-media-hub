@@ -279,7 +279,14 @@ async function pulls(): Promise<void> {
       episodeRow('One Piece', 1, 5, '2026-10-05T12:25:00.000Z')
     ]
     h.calls.length = 0
+    // What it wrote is handed on for the record of what each pass merged
+    // (episodeSync.ts's noteArrivals): the new viewings, not the echo.
+    const merged: string[] = []
+    h.deps.merged = (rows) => {
+      for (const row of rows) merged.push(`${row.id}:${row.season}:${row.episode}`)
+    }
     const pulled = await pullTraktHistory(h.deps)
+    assert.deepEqual(merged.sort(), ['kitsu:12:1:5', 'tt11280740:1:2'])
     const since = new Date(Date.parse('2026-10-05T12:00:00.000Z') - OVERLAP_MS).toISOString()
     assert.deepEqual(h.calls, [
       'last_activities',
