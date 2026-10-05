@@ -928,7 +928,7 @@ export interface MediaHubDatabase {
    * scan walks every large blob's overflow pages. createDatabase runs before
    * the window exists, so that scan was on time to first paint; the
    * background job registry runs this instead (see backgroundJobs.ts's
-   * cache-prune job).
+   * catalog-cache-prune job).
    */
   pruneExpiredCache(now?: number): number
   /**

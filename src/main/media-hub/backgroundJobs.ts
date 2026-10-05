@@ -64,12 +64,6 @@ const HEARTBEAT_MS = 30_000
 /** How many titles one credits-enrichment run may look up. See the job itself. */
 const CREDITS_PER_PASS = 60
 
-/** How often the cache-prune job reclaims month-expired catalog_cache rows,
- *  and when it last did. In memory, so the first run of each session prunes:
- *  that is how often the open-time prune it replaced ran. */
-const CATALOG_CACHE_PRUNE_EVERY_MS = 24 * 60 * 60 * 1000
-let catalogCachePrunedAt = 0
-
 const PRESSURE_RANK: Record<SchedulerPressure, number> = { idle: 0, busy: 1, critical: 2 }
 
 interface RecurringJob {
@@ -398,24 +392,14 @@ export function startBackgroundJobs(): void {
 
   registerRecurringJob({
     name: 'cache-prune',
-    label: 'Tidying the caches',
+    label: 'Tidying the stream cache',
     everyMs: 60 * 60 * 1000,
     firstRunAfterMs: 10 * 60 * 1000,
     priority: 'maintenance',
     // Disk hygiene for sessions that are by definition not the one
     // playing. Never worth doing while something is.
     maxPressure: 'busy',
-    run: async () => {
-      // The month-expired catalog_cache rows, once a day rather than on every
-      // hourly run. This used to run inside createDatabase, which is before
-      // the window exists: a full scan of a table holding the catalog blobs,
-      // on time to first paint, for rows that cost only disk space.
-      if (Date.now() - catalogCachePrunedAt >= CATALOG_CACHE_PRUNE_EVERY_MS) {
-        catalogCachePrunedAt = Date.now()
-        getDatabase().pruneExpiredCache()
-      }
-      await pruneIdleSessions()
-    }
+    run: pruneIdleSessions
   })
 
   registerRecurringJob({
@@ -475,6 +459,26 @@ export function startBackgroundJobs(): void {
         'maintenance'
       )
       if (filled) sendToRenderer(MEDIA_HUB_CHANNELS.activityChanged, activitySnapshot())
+    }
+  })
+
+  registerRecurringJob({
+    name: 'catalog-cache-prune',
+    label: 'Clearing expired catalog data',
+    // The month-expired catalog_cache rows (pruneExpiredCache). This used to
+    // run inside createDatabase, which is before the window exists: a full
+    // scan of a table holding the catalog blobs, on time to first paint, for
+    // rows that cost only disk space. Once a session, as before, but a
+    // minute after launch (plus the registry's stagger, about five minutes
+    // in all) rather than with the stream-cache job at ten, so a short phone
+    // or TV session still reaches it. Registered last so the other jobs'
+    // stagger is unchanged.
+    everyMs: 24 * 60 * 60 * 1000,
+    firstRunAfterMs: 60 * 1000,
+    priority: 'maintenance',
+    maxPressure: 'busy',
+    run: async () => {
+      getDatabase().pruneExpiredCache()
     }
   })
 

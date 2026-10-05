@@ -12,9 +12,9 @@
 // abandoned for a long time.
 //
 // The prune is a method the background job registry calls (backgroundJobs.ts's
-// cache-prune job), not something opening the database does: it is a full
-// scan of a table holding the catalog blobs, and createDatabase runs before
-// the window exists. The first check below pins that.
+// catalog-cache-prune job), not something opening the database does: it is a
+// full scan of a table holding the catalog blobs, and createDatabase runs
+// before the window exists. The first check below pins that.
 //
 // Run with: npx tsx tests/databasePruning.test.ts   (or npm.cmd test)
 
