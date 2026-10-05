@@ -52,6 +52,8 @@ import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import {
   applyPushOutcome,
   queuePendingPush,
+  splitForFlush,
+  traktFollowUps,
   withPushedRemoteState
 } from '../../shared/media-hub/reconcileQueue'
 import {
@@ -818,9 +820,6 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
   const failed = new Set<string>()
   /** id -> the value a successful request actually sent. */
   const pushedValue = new Map<string, boolean>()
-  // Disagreements that resolved themselves locally while the decision sat
-  // in the queue — nothing to send, but the entry is still done with.
-  const settled = new Set<string>()
   let error: string | undefined
 
   // The value to send is read HERE, not at decision time. Someone can
@@ -836,18 +835,14 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
   )
 
   // Local has since come round to what the remote already said, so the
-  // two sides now agree on their own. Pushing anyway would be a no-op at
-  // best and — for a removal Simkl has nothing to remove — an unmatched
-  // response that retries until the attempt cap.
-  const sendable = attemptable.filter((entry) => {
-    if (locallyWatched.has(entry.id) !== entry.remoteWatched) return true
-    // Agreement judged against a record this app knows to be behind
-    // what it did to the remote side is not agreement — see
-    // staleSnapshots.
-    if (staleSnapshots.has(entry.id)) return true
-    settled.add(entry.id)
-    return false
-  })
+  // two sides now agree on their own — which is also how a "Use Simkl"
+  // decision arrives here. Pushing anyway would be a no-op at best and —
+  // for a removal Simkl has nothing to remove — an unmatched response that
+  // retries until the attempt cap. Agreement judged against a record this
+  // app knows to be behind what it did to the remote side is not agreement
+  // — see staleSnapshots. These disagreements are done with at Simkl, and
+  // still go to Trakt below.
+  const { sendable, settled } = splitForFlush(attemptable, locallyWatched, staleSnapshots)
 
   for (const [watched, pathname] of [
     [true, '/sync/history'],
@@ -934,7 +929,9 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
   // ruled against — and the next check against Trakt would raise it all
   // over again. "The tracking services that are connected" has to mean all
   // of them, or resolving a disagreement in one place creates one in
-  // another.
+  // another. Settled entries as well as confirmed ones (traktFollowUps):
+  // a "Use Simkl" decision, or a "Use Local" one local came round to by
+  // itself, needs no request to Simkl but is still news to Trakt.
   //
   // Failures here do NOT un-confirm the entry, unlike MAL above. Simkl is
   // the service this queue's verdict is computed against and MAL's
@@ -942,8 +939,7 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
   // it. Dropping a decision Simkl accepted because Trakt was unreachable
   // would re-raise a disagreement that no longer exists. pushTraktHistory
   // already logs and swallows its own errors for the same reason.
-  for (const entry of queue) {
-    if (!confirmed.has(entry.id)) continue
+  for (const entry of traktFollowUps(queue, confirmed, settled)) {
     await pushTraktHistory(
       { id: entry.id, type: entry.type, title: entry.title, year: entry.year },
       {},
@@ -956,8 +952,9 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
   // not_found entries, decisions that vanished — was invisible precisely
   // because success and no-op looked identical in the log (a "keep local"
   // that changed nothing left no line anywhere). Catalog ids only; titles
-  // and tokens stay out.
-  if (sendable.length) {
+  // and tokens stay out. A flush that only settled entries says so too:
+  // those went to Trakt.
+  if (sendable.length || settled.size) {
     logError(
       'reconcile:flush',
       `sent=${sendable.map((e) => e.id).join(',')} confirmed=${[...confirmed].join(',') || '-'} ` +
@@ -2044,6 +2041,29 @@ export function registerTrackingIpc(): void {
     // Simkl's answer is the one to keep — update the local record to match.
     if (discrepancy.remoteWatched) db.markWatched(item)
     else db.unmarkWatched(item.id)
+    // And Trakt, which otherwise keeps whatever it had: the decision goes
+    // into the same queue "Use Local" uses, where the flush finds local and
+    // Simkl already agreeing (settled — nothing is sent to Simkl) and passes
+    // the value on to Trakt. A Trakt failure is logged there and does not
+    // undo anything here. Only with a Simkl account and an id the queue can
+    // hold, on the same terms as "Use Local" above.
+    if (
+      traktCredentials().accessToken &&
+      simklCredentials().accessToken &&
+      hasExpressibleSimklId(String(discrepancy.id)) &&
+      writePendingPushes(
+        queuePendingPush(pendingPushes(), {
+          id: discrepancy.id,
+          type: discrepancy.type,
+          title: discrepancy.title,
+          year: discrepancy.year,
+          remoteWatched: discrepancy.remoteWatched,
+          attempts: 0
+        })
+      )
+    ) {
+      scheduleFlush()
+    }
     // A write main made on the strength of a remote answer: the panel that
     // asked refreshes the home feed itself, but the detail page and the
     // grids learn of it the same way they learn of every other such write.

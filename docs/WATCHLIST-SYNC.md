@@ -285,7 +285,10 @@ whatever the setting says. The phone and TV player sends none either way.
   feature, read-only first.
 - **No history.** This is plan-to-watch only. Watch history has its own
   reconcile queue with its own review UI, and the two should not be
-  confused for each other. The one exception is the phone and TV app's
+  confused for each other. (In that review, films only: "Use Local" sends
+  the local value to Simkl and then Trakt; "Use Simkl" rewrites the local
+  record and sends Simkl's value on to Trakt. A Trakt failure is logged and
+  does not undo either choice.) The one exception is the phone and TV app's
   catch-up, below, which takes Simkl's history in without a review.
 
 ## The catch-up on the phone and TV app

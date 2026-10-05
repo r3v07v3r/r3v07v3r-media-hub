@@ -95,3 +95,46 @@ export function withPushedRemoteState(
       : { ...entry, remoteWatched: pushed }
   })
 }
+
+/**
+ * Which entries a flush sends to Simkl, and which have settled: the local
+ * value has come round to what Simkl already holds, so there is nothing to
+ * send there. An id in `stale` is never settled — its recorded remote value
+ * is known to be behind what this app did to Simkl (see tracking.ts's
+ * staleSnapshots).
+ *
+ * "Use Simkl" in the review panel lands here on purpose: it rewrites the
+ * local record to Simkl's value and queues the decision, so the flush finds
+ * it settled and passes it on to Trakt (traktFollowUps) without a request
+ * to Simkl.
+ */
+export function splitForFlush(
+  entries: readonly PendingWatchStatusPush[],
+  locallyWatched: ReadonlySet<string>,
+  stale: ReadonlySet<string>
+): { sendable: PendingWatchStatusPush[]; settled: Set<string> } {
+  const settled = new Set<string>()
+  const sendable = entries.filter((entry) => {
+    if (locallyWatched.has(entry.id) !== entry.remoteWatched) return true
+    if (stale.has(entry.id)) return true
+    settled.add(entry.id)
+    return false
+  })
+  return { sendable, settled }
+}
+
+/**
+ * The entries a flush passes on to Trakt, with the local value: those Simkl
+ * confirmed and those that had settled. A settled entry is a decision the
+ * person made all the same; leaving Trakt out of it left Trakt holding the
+ * value they had just ruled against, which resolves a disagreement with one
+ * service by keeping one with another. Entries that failed at Simkl are not
+ * passed on; they are retried, and reach Trakt when they go through.
+ */
+export function traktFollowUps(
+  queue: readonly PendingWatchStatusPush[],
+  confirmed: ReadonlySet<string>,
+  settled: ReadonlySet<string>
+): PendingWatchStatusPush[] {
+  return queue.filter((entry) => confirmed.has(entry.id) || settled.has(entry.id))
+}
