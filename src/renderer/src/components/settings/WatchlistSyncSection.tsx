@@ -12,6 +12,10 @@
 // many were dropped for want of an id this app could file them under,
 // and the service's own error text when there was one. The counts are
 // the point; the button is a convenience.
+//
+// It is also where the rest of what this app sends the services is set and
+// reported: whether the player scrobbles, and how many watch-history pushes
+// failed and are waiting to be retried.
 
 import { useCallback, useEffect, useState } from 'react'
 import type { PlannedServiceReport, PlannedSyncReport } from '@shared/media-hub/types'
@@ -107,7 +111,7 @@ export function WatchlistSyncSection() {
   return (
     <section className={`${styles.section} glass-panel`} aria-labelledby="settings-watchlists">
       <h2 id="settings-watchlists" className={styles.sectionTitle}>
-        Watchlists
+        Sync
       </h2>
       <div className={styles.row}>
         <div className={styles.rowIcon} aria-hidden="true">
