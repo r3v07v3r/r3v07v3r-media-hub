@@ -60,8 +60,9 @@ trending feed (either one alone fills the grid), anime from Kitsu. No key is req
   that setting was already saved as off (switched off in Settings, or stored by signing out on an
   earlier version); a page's own toggle shows them again, dimmed and marked. Save any filter combination as a named view; it comes back as
   a chip. **Scan deeper** on a category page pulls in more of the catalog than loaded by itself.
-  A title found only by search joins the library once you open or track it, so it shows in the
-  grids, My Stuff and the Planned row like anything else.
+  A title found only by search joins the library once you open or track it, and one pulled from a
+  service's plan-to-watch joins it when the pull brings it in, so it shows in the grids, My Stuff
+  and the Planned row like anything else (its poster arrives the first time it is opened).
   An anime whose seasons are merged into one show is one tile in the Anime library and in search,
   on the desktop and the phone, with an "N seasons" chip on its poster; its rating is its first
   season's. Its seasons are tabs on its page, and searching a later season's own name finds the
