@@ -408,7 +408,9 @@ async function withTempRoot(fn: (root: string) => Promise<void>): Promise<void> 
   try {
     await fn(root)
   } finally {
-    await fsp.rm(root, { recursive: true, force: true })
+    // Windows holds handles on the session files briefly after they are
+    // written, so retry rather than fail a test that passed.
+    await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   }
 }
 

@@ -368,7 +368,10 @@ run()
   })
   .finally(async () => {
     await stopDaemon()
-    if (dataDir) await fsp.rm(dataDir, { recursive: true, force: true })
+    // Windows holds handles on the daemon data dir briefly after close(), so
+    // retry rather than fail a test that passed.
+    if (dataDir)
+      await fsp.rm(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     console.log('')
     if (failures.length) {
       console.log(`FAILED  ${failures.length} of ${passed + failures.length}`)
