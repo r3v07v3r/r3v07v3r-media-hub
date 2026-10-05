@@ -1002,7 +1002,7 @@ function indexIfMissing(kind: MediaKind, item: CatalogItem): void {
 }
 
 /**
- * A title somebody tracked (planned, watched, rated, set a status on, or
+ * A title somebody tracked (planned, marked watched, set a status on, or
  * marked not for them), indexed if the index has no row for it. The item
  * comes from the screen that did it — a search card, more often than not,
  * which may never have been opened — so it is cut down to the fields and
