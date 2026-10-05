@@ -304,6 +304,14 @@
   font-size: 11px;
   color: var(--text-muted);
 }
+/* A title marked Not interested: dimmed, with a thumbs-down in the meta line. */
+.aiTileDisliked .aiTilePoster {
+  filter: grayscale(0.85) brightness(0.6);
+}
+.aiTileDisliked .aiTileMeta svg {
+  margin-right: 4px;
+  vertical-align: -1px;
+}
 /* Its own rule rather than .aiTilePoster plus .skeletonLine: that class
    carries height: 12px for a line of text, which beats aspect-ratio and
    collapsed the placeholder into a sliver where a poster was about to be. */

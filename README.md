@@ -56,7 +56,9 @@ trending feed (either one alone fills the grid), anime from Kitsu. No key is req
   for anime, and status. Hide what you have started or watched, shows you are caught up on, and
   titles you marked **Not interested** (they collect under My Stuff → Not for me), in any
   combination, and choose which of those start switched on
-  from the Settings page's Browsing card. Save any filter combination as a named view; it comes back as
+  from the Settings page's Browsing card. Hiding Not interested titles starts on, except where
+  that setting was already saved as off (switched off in Settings, or stored by signing out on an
+  earlier version); a page's own toggle shows them again, dimmed and marked. Save any filter combination as a named view; it comes back as
   a chip. **Scan deeper** on a category page pulls in more of the catalog than loaded by itself.
   A title found only by search joins the library once you open or track it, so it shows in the
   grids, My Stuff and the Planned row like anything else.
@@ -66,6 +68,8 @@ trending feed (either one alone fills the grid), anime from Kitsu. No key is req
   a film or anime, the next part of its series is offered first, and a rewatch counts. Your own
   ratings steer it: a genre you watch often but enjoy little stops leading. An anime whose
   seasons are merged into one show is suggested as that show, never as one of its later seasons.
+  A suggestion you plan, mark watched or mark Not interested from Home's row, a For You shelf or
+  the hero stays where it is, with its new badge, until you leave the page.
 - **Cast and crew are clickable** once a TMDB key is connected: names open what else of theirs
   the catalog holds, and typing a director's name in search finds their films rather than films
   with their name in the title.
@@ -151,9 +155,13 @@ Playback is mpv, embedded inside the app's own window on Windows; there is no tr
 ### 4. Keep track — needs nothing
 
 - **One status per title:** not watched, planned, or watched. A pill on a title's page, in the
-  library side panel and on the Home hero cycles through the three; the right-click menu offers
-  **Plan to watch** and **Mark watched** (**Mark all watched** on a series) as separate items. Marking a whole series watched marks
-  every aired episode, and clearing it offers an undo. On the episode list, **Mark season watched**
+  library side panel and on the Home hero cycles through the three; the right-click menu (or the
+  **...** button on a card, in the Movies, Series and Anime grids too) offers
+  **Plan to watch** and **Mark watched** (**Mark all watched** on a series) as separate items, and
+  **Not interested**. A planned title can be taken off the plan from the same menu, or with
+  **Remove from plan** in the library side panel. Marking a whole series watched marks
+  every aired episode, and clearing it offers an undo. Plan to watch and **Not interested** each
+  show a toast with an **Undo** for a few seconds. On the episode list, **Mark season watched**
   acts on a season's aired episodes, and <kbd>Ctrl</kbd>- or <kbd>Shift</kbd>-clicking episodes
   selects several to mark at once. Lists are separate from status.
 - **Rate what you have seen** out of 10 on a title's page. Each profile keeps its own scores, and

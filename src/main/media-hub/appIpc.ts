@@ -46,6 +46,7 @@ import {
   normalizeTheme,
   publicSettings,
   logoutSettings,
+  hideDislikedDefault,
   THEMES
 } from './preferences'
 import { isMediaServerConnected } from './mediaSources'
@@ -745,7 +746,7 @@ export function registerAppIpc(): void {
     return {
       hideWatchedDefault: settings.hideWatchedDefault === true,
       hideCompletedDefault: settings.hideCompletedDefault === true,
-      hideDislikedDefault: settings.hideDislikedDefault === true
+      hideDislikedDefault: hideDislikedDefault(settings)
     }
   })
 

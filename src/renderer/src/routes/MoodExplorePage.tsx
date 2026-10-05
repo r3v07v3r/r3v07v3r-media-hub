@@ -117,7 +117,7 @@ export default function MoodExplorePage() {
     return rankMoodSpotlight(pool, recommendations, moods, {
       hideWatched: mediaHubSettings?.hideWatchedDefault ?? false,
       hideCompleted: mediaHubSettings?.hideCompletedDefault ?? false,
-      hideDisliked: mediaHubSettings?.hideDislikedDefault ?? false
+      hideDisliked: mediaHubSettings?.hideDislikedDefault ?? true
     })
   }, [catalog, deepPool, recommendations, moods, mediaHubSettings])
 

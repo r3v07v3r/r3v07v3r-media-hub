@@ -173,6 +173,13 @@ export interface AppNotification {
     run: () => void
   }
   /**
+   * How long the toast stays, in place of the defaults in OverlayContext.
+   * For an Undo that answers a click just made (Plan to watch, Not
+   * interested), which need not wait to be dismissed the way the Undo of a
+   * whole-show mark does.
+   */
+  durationMs?: number
+  /**
    * The profile whose library this is about. A toast bound to one is
    * dropped when another profile becomes active: its Undo is theirs, and
    * the title it names may be too.

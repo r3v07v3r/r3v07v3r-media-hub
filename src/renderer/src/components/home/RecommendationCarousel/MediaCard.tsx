@@ -49,7 +49,7 @@ export function MediaCard({
    *  and "which service" is the fact worth reading. */
   showProvenance?: boolean
 }) {
-  const { plannedSources, myList } = useAppState()
+  const { plannedSources, myList, dislikedIds } = useAppState()
   const { openDetail, startPartyPlayback, openContextMenu, continueWatching, resolvingMedia } =
     useAppState()
   const artwork = resolveArtwork(media)
@@ -82,9 +82,19 @@ export function MediaCard({
   // On the Planned tab every card is planned, so the corner badge would
   // say the same thing forty times; the provenance chip is the fact worth
   // reading there. Everywhere else the badge is how a planned title shows.
-  const status = getWatchStatus(media, continueWatching)
+  // The plan from the live set, not the flag the item was built with: a
+  // recommendation planned from its own menu stays in its row until the
+  // page is left (lib/mediaHub/heldFeed.ts), and should say Planned at
+  // once rather than when the next feed arrives.
+  const status = getWatchStatus({ ...media, inMyList: myList.has(media.id) }, continueWatching)
   const watchStatus =
     status.state === 'planned' && plannedTag ? { state: 'unwatched' as const } : status
+
+  // Marked Not interested. Read from the live set rather than the item, so
+  // a card marked from its own menu says so at once; dimmed and named
+  // wherever it is still shown (Hide Disliked off, My Stuff's Not for me,
+  // a recommendation held in place until the page is left).
+  const disliked = dislikedIds.has(media.id)
 
   function handleContextMenu(e: React.MouseEvent) {
     e.preventDefault()
@@ -99,7 +109,7 @@ export function MediaCard({
           "data card." Everything lives inside .card now; there's no
           .cardBody. */}
       <div
-        className={`${styles.card} animated-edge light-sweep`}
+        className={`${styles.card} ${disliked ? styles.cardDisliked : ''} animated-edge light-sweep`}
         role="button"
         tabIndex={0}
         data-media-id={media.id}
@@ -108,7 +118,9 @@ export function MediaCard({
           if (e.key === 'Enter') openDetail(media)
         }}
         onContextMenu={handleContextMenu}
-        aria-label={`${media.title}, ${media.matchPercentage ?? 0} percent match`}
+        aria-label={`${media.title}, ${media.matchPercentage ?? 0} percent match${
+          disliked ? ', not interested' : ''
+        }`}
       >
         <ArtworkImage
           src={artwork.backdropUrl ?? artwork.posterUrl}
@@ -174,8 +186,14 @@ export function MediaCard({
               list that holds all three, and — on the Planned tab only — the
               service whose watchlist it arrived from, since a list pulled in
               from three services otherwise looks like one this app invented. */}
-          {(showKind || plannedTag) && (
+          {(showKind || plannedTag || disliked) && (
             <span className={styles.chipRow}>
+              {disliked && (
+                <span className={styles.dislikedChip}>
+                  <Icon name="thumbs-down" size={10} />
+                  Not interested
+                </span>
+              )}
               {showKind && <span className={styles.kindChip}>{KIND_LABELS[kindOf(media)]}</span>}
               {plannedTag && (
                 <span className={styles.plannedChip} title={`On your ${plannedTag} watchlist`}>

@@ -21,7 +21,7 @@
 // worse QA signal than showing the real empty state. "Nothing remembered
 // yet" now renders a skeleton everywhere.
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import type {
   CatalogItem,
   CustomList,
@@ -39,6 +39,7 @@ import {
   continueWatchingEntryToItem
 } from './adapters'
 import type { PlannedServiceId } from '@shared/media-hub/types'
+import { holdTouchedEntries, type HeldChange } from './heldFeed'
 import {
   applyTrackingState,
   mergeRememberedCatalog,
@@ -867,8 +868,17 @@ export interface HomeFeedResult {
  * has been re-checked this run", so a caller that needs to distinguish
  * remembered from fresh still can.
  */
-export function useMediaHubHomeFeed(libraryKey: string): HomeFeedResult {
+export function useMediaHubHomeFeed(
+  libraryKey: string,
+  /** Titles changed on the page now on screen, kept at their place in
+   *  the recommendations until the route changes — see heldFeed.ts. */
+  held?: RefObject<ReadonlyMap<string, HeldChange>>
+): HomeFeedResult {
   const [state, setState] = useState<typeof EMPTY_HOME_FEED | null>(null)
+  // The library the feed on screen was fetched for. A held title is only
+  // put back into a feed of the same library: after a profile switch the
+  // previous feed is someone else's.
+  const shownKey = useRef<string | null>(null)
   // See useMediaHubBrowseCatalog above for why this is a lazy initializer
   // rather than an effect-driven flip.
   const [loading, setLoading] = useState(() => Boolean(window.api?.mediaHub))
@@ -927,11 +937,21 @@ export function useMediaHubHomeFeed(libraryKey: string): HomeFeedResult {
           trackedIds,
           plannedSources: result.plannedSources ?? {}
         }
-        setState(next)
+        // Read now, not inside the updater: the updater can run after the
+        // next fetch has moved shownKey on.
+        const sameLibrary = shownKey.current === libraryKey
+        shownKey.current = libraryKey
+        const heldNow = new Map(held?.current ?? [])
+        setState((previous) =>
+          previous && sameLibrary && heldNow.size > 0
+            ? holdTouchedEntries(previous, next, heldNow, trackedIds)
+            : next
+        )
         // This is the part of the snapshot that matters most: the hero,
         // the AI Picks row and Continue Watching are the whole of what
         // Home is above the fold, and they are what the next launch has
-        // to paint before home:personalized can answer again.
+        // to paint before home:personalized can answer again. The fresh
+        // answer, without the held titles: those are only for this page.
         rememberHomeFeed({
           featured: next.featured,
           recommendations: next.recommendations,
@@ -959,7 +979,7 @@ export function useMediaHubHomeFeed(libraryKey: string): HomeFeedResult {
     return () => {
       cancelled = true
     }
-  }, [generation, libraryKey])
+  }, [generation, libraryKey, held])
 
   const refresh = useCallback(() => setGeneration((g) => g + 1), [])
 

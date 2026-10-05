@@ -40,6 +40,17 @@ export function normalizeUpdateChannel(value: unknown): UpdateChannel {
 }
 
 /**
+ * Whether the browse pages start with Hide Disliked on. On unless the
+ * person turned it off: a title marked Not interested is one they asked
+ * not to be shown, and leaving it in every grid made the dislike visible
+ * only in the recommendation rows. The pages keep their own toggle to
+ * show disliked titles again (categoryFilters.ts).
+ */
+export function hideDislikedDefault(settings: Record<string, unknown>): boolean {
+  return settings.hideDislikedDefault !== false
+}
+
+/**
  * Projects the raw persisted settings object down to the fields safe to
  * expose to the renderer. `settings` is the raw settings-store record
  * (shape defined by settingsStore.ts), loosely typed here since untrusted/
@@ -85,7 +96,7 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
       Number(settings.connectionSpeedMbps) > 0 ? Number(settings.connectionSpeedMbps) : undefined,
     hideWatchedDefault: settings.hideWatchedDefault === true,
     hideCompletedDefault: settings.hideCompletedDefault === true,
-    hideDislikedDefault: settings.hideDislikedDefault === true,
+    hideDislikedDefault: hideDislikedDefault(settings),
     // Re-normalized on the way out, not just on the way in: what's on disk
     // was written by some earlier version of this app, and the renderer
     // renders this straight into the Settings pane. These two are what was
@@ -288,7 +299,7 @@ export function logoutSettings(settings: Record<string, unknown> = {}): Pick<
       Number(settings.connectionSpeedMbps) > 0 ? Number(settings.connectionSpeedMbps) : undefined,
     hideWatchedDefault: settings.hideWatchedDefault === true,
     hideCompletedDefault: settings.hideCompletedDefault === true,
-    hideDislikedDefault: settings.hideDislikedDefault === true,
+    hideDislikedDefault: hideDislikedDefault(settings),
     // Survives logout with the other device preferences: which machine on
     // your own network runs your own models has nothing to do with which
     // TorBox/Simkl account was signed in. Having turned local AI off is the

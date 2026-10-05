@@ -702,7 +702,7 @@ export default function MyStuffPage() {
     () => ({
       hideWatched: mediaHubSettings?.hideWatchedDefault ?? false,
       hideCompleted: mediaHubSettings?.hideCompletedDefault ?? false,
-      hideDisliked: mediaHubSettings?.hideDislikedDefault ?? false
+      hideDisliked: mediaHubSettings?.hideDislikedDefault ?? true
     }),
     [mediaHubSettings]
   )

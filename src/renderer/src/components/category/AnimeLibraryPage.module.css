@@ -369,7 +369,8 @@
 /* .tileOpen takes this corner on hover — two marks stacked on top of each
    other would be neither. */
 .tile:hover .tileState,
-.tile:focus-visible .tileState {
+.tile:focus-visible .tileState,
+.tile:has(.tileOpen:focus-visible) .tileState {
   opacity: 0;
 }
 .tileState svg {
@@ -430,13 +431,21 @@
     transform var(--transition-fast),
     background var(--transition-fast);
 }
+/* And while one of the buttons has keyboard focus: the tile itself is not
+   :focus-visible then, and a focused button that cannot be seen is no use. */
 .tile:hover .tileOpen,
-.tile:focus-visible .tileOpen {
+.tile:focus-visible .tileOpen,
+.tile:has(.tileOpen:focus-visible) .tileOpen {
   opacity: 1;
   transform: scale(1);
 }
 .tileOpen:hover {
   background: var(--library-violet);
+}
+/* The card menu's button. It carries .tileOpen as well, so it is revealed
+   with it; this only moves it to the left of the open button. */
+.tileMore {
+  right: 42px;
 }
 .tileCopy {
   position: absolute;
@@ -455,6 +464,23 @@
   font-size: 15px;
   font-weight: 700;
   text-shadow: 0 1px 8px #000;
+}
+/* Marked Not interested and still shown (Hide Disliked switched off). */
+.tileDisliked .tileArtwork {
+  filter: grayscale(0.85) brightness(0.6);
+}
+.tileDislikedNote {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(2, 5, 13, 0.7);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
 }
 .tileCopy small {
   overflow: hidden;

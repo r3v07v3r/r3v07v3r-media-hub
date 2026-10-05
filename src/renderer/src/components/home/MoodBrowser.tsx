@@ -131,7 +131,7 @@ export function MoodBrowser() {
     () => ({
       hideWatched: mediaHubSettings?.hideWatchedDefault ?? false,
       hideCompleted: mediaHubSettings?.hideCompletedDefault ?? false,
-      hideDisliked: mediaHubSettings?.hideDislikedDefault ?? false
+      hideDisliked: mediaHubSettings?.hideDislikedDefault ?? true
     }),
     [mediaHubSettings]
   )

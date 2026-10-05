@@ -54,6 +54,13 @@ import {
   rememberTrackedId
 } from '@renderer/lib/mediaHub/startupSnapshot'
 import {
+  planToastAfterStatus,
+  planToastAfterToggle,
+  plannedToast,
+  toggleApplies
+} from '@renderer/lib/mediaHub/statusToasts'
+import type { HeldChange } from '@renderer/lib/mediaHub/heldFeed'
+import {
   startupContinueWatchingFallback,
   startupTrackedIdsFallback,
   useMediaHubBrowseCatalog,
@@ -180,7 +187,10 @@ interface AppStateValue {
   // optimistic local update on toggle so the UI doesn't wait on the IPC
   // round trip.
   myList: Set<string>
-  toggleMyList: (media: MediaItem) => void
+  /** Plans or un-plans a title. With `to`, a no-op when the title is
+   *  already there: what an Undo calls, so a late press cannot flip it the
+   *  other way. Putting a title on the plan raises a toast with an Undo. */
+  toggleMyList: (media: MediaItem, to?: boolean) => void
   /**
    * The one status a title has — not watched, plan to watch, watched —
    * set as a whole. Main decides what that takes (every aired episode of
@@ -240,7 +250,9 @@ interface AppStateValue {
    *  create/delete: a backup from another machine carries that machine's
    *  profile ids, and they are merged into settings by the import. */
   refreshProfiles: () => void
-  toggleDisliked: (media: MediaItem) => void
+  /** Same shape as toggleMyList, `to` included. The toast and its Undo are
+   *  raised by the caller, which knows which way the click went. */
+  toggleDisliked: (media: MediaItem, to?: boolean) => void
 
   // Continue Watching — seeded from the media-hub backend's
   // home:personalized (episode-level watch tracking, not a mock array —
@@ -534,6 +546,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // neutral starting point: it renders saved titles as unsaved, and the
   // Add control it produces calls a toggle that removes them.
   const [myList, setMyList] = useState<Set<string>>(startupTrackedIdsFallback)
+  // What toggleMyList's `to` is checked against. An Undo runs seconds after
+  // the render that created it, so it reads the plan from here rather than
+  // from the closure.
+  const myListRef = useRef(myList)
+  useEffect(() => {
+    myListRef.current = myList
+  }, [myList])
   const [dislikedIds, setDislikedIds] = useState<Set<string>>(new Set())
   // Seeded from the same remembered feed useMediaHubHomeFeed falls back
   // to, so the row this component owns and the row that hook reports
@@ -554,7 +573,32 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [watchStatusVersion, setWatchStatusVersion] = useState(0)
   const reloadLibrary = useCallback(() => setLibraryEpoch((n) => n + 1), [])
 
-  const homeFeed = useMediaHubHomeFeed(libraryKey)
+  // Titles whose status was changed on the page now on screen, with what
+  // the change did to them. The home feed keeps them at their place until
+  // the route changes, so a card acted on from Home's Recommended row, a
+  // For You rail or the hero does not vanish under the click. Filled by
+  // holdInFeed below; see lib/mediaHub/heldFeed.ts.
+  const heldFeedRef = useRef<Map<string, HeldChange>>(new Map())
+  const holdInFeed = useCallback((id: string, change: HeldChange = {}) => {
+    const held = heldFeedRef.current
+    held.set(id, { ...held.get(id), ...change })
+  }, [])
+  const homeFeed = useMediaHubHomeFeed(libraryKey, heldFeedRef)
+  // Leaving the page lets them go: the set is cleared and the feed
+  // refetched, so the next page shows the ranking as it stands. Keyed on
+  // the path alone, so a library page's filter changes, which only touch
+  // the query string, keep them.
+  const refreshHomeFeedForHeld = homeFeed.refresh
+  useEffect(() => {
+    if (heldFeedRef.current.size === 0) return
+    heldFeedRef.current.clear()
+    refreshHomeFeedForHeld()
+  }, [location.pathname, refreshHomeFeedForHeld])
+  // Another profile's library is not this page's: drop them without the
+  // refetch, which the new library key brings anyway.
+  useEffect(() => {
+    heldFeedRef.current.clear()
+  }, [libraryKey])
   const watchedIdsResult = useMediaHubWatchedIds(libraryKey)
   const dislikedIdsResult = useMediaHubDislikedIds(libraryKey)
   // Ratings have no refresh() of their own (the hook adopts what the backend
@@ -906,8 +950,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     })
   }, [refreshPartyStatus, pushNotification])
 
+  // The plan toast's Undo calls toggleMyList from inside toggleMyList, so
+  // it goes through a ref, filled in once toggleMyList exists just below.
+  const toggleMyListRef = useRef<(media: MediaItem, to?: boolean) => void>(() => {})
   const toggleMyList = useCallback(
-    (media: MediaItem) => {
+    (media: MediaItem, to?: boolean) => {
+      if (!toggleApplies(myListRef.current.has(media.id), to)) return
+      holdInFeed(media.id)
       // This used to refuse the click outright when `media.id` was not
       // expressible to a tracking service, on the grounds that such an id
       // could only have come from mockData's demo pool (the source of the
@@ -959,6 +1008,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             forgetContinueWatching(media.id)
           }
           homeFeed.refresh()
+          // A plan is one click from a card's menu, and on a recommendation
+          // row it is also what takes the card out of the row; the toast's
+          // Undo is the one-click way back. See statusToasts.ts.
+          if (planToastAfterToggle(result?.tracked)) {
+            pushNotification(
+              plannedToast(media, activeProfileId, () => toggleMyListRef.current(media, false))
+            )
+          }
         })
         .catch(() => {
           // Best-effort — the optimistic local toggle above already reflects
@@ -966,11 +1023,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // refresh, not a broken UI in the moment.
         })
     },
-    [homeFeed]
+    [homeFeed, pushNotification, activeProfileId, holdInFeed]
   )
+  useEffect(() => {
+    toggleMyListRef.current = toggleMyList
+  }, [toggleMyList])
 
   const toggleDisliked = useCallback(
-    (media: MediaItem) => {
+    (media: MediaItem, to?: boolean) => {
       const api = window.api?.mediaHub
       // The write goes out once the optimistic set is decided, then the hook
       // is re-read so its own copy — the one that reseeds this state on the
@@ -979,7 +1039,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       const settle = (write: Promise<unknown> | undefined): void => {
         void write?.then(() => dislikedIdsResult.refresh()).catch(() => {})
       }
+      holdInFeed(media.id)
       setDislikedIds((prev) => {
+        if (!toggleApplies(prev.has(media.id), to)) return prev
         const next = new Set(prev)
         if (next.has(media.id)) {
           next.delete(media.id)
@@ -996,7 +1058,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // out of the rail instead of lingering until some unrelated refetch.
       homeFeed.refresh()
     },
-    [homeFeed, dislikedIdsResult]
+    [homeFeed, dislikedIdsResult, holdInFeed]
   )
 
   const markContinueWatching = useCallback(
@@ -1941,6 +2003,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       }
       const id = media.id
       const wasPlanned = myList.has(id)
+      // What the change does to the title's own flags, for its held copy
+      // in the home feed: watched is every aired episode, not watched is
+      // none, and a plan leaves them as they are.
+      holdInFeed(
+        id,
+        status === 'watched'
+          ? { watched: true, completed: true }
+          : status === 'unwatched'
+            ? { watched: false, completed: false }
+            : {}
+      )
       // Shown as where the write lands: clearing a planned title leaves
       // its plan (titleStatusRules.ts), so what comes back is Planned.
       setTitleStatusPending((prev) => ({
@@ -1988,6 +2061,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           if (status === 'watched') forgetContinueWatching(id)
           settle()
           clearPending()
+          // A plan from the pill gets the same toast and Undo as one from
+          // the card menu; planToastAfterStatus says when.
+          if (planToastAfterStatus(status, wasPlanned, episodes)) {
+            pushNotification(
+              plannedToast(media, result.profileId, () => toggleMyList(media, false))
+            )
+          }
           // A whole show in one click is worth a word, and a way back: the
           // undo replays exactly the rows this change reported, dates and
           // all, and touches nothing else. An undo itself (episodes given)
@@ -2058,6 +2138,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         })
         .catch((error: unknown) => {
           clearPending()
+          // Nothing changed, so the held copy keeps its own flags.
+          heldFeedRef.current.set(id, {})
           // Put the plan set back exactly; the watched sets never moved.
           if (status === 'planned' || (status === 'watched' && wasPlanned)) {
             setMyList((prev) => {
@@ -2074,7 +2156,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           })
         })
     },
-    [homeFeed, watchedIdsResult, pushNotification, myList]
+    [homeFeed, watchedIdsResult, pushNotification, myList, toggleMyList, holdInFeed]
   )
 
   const partyPanelReportedOpen = useRef<boolean | null>(null)

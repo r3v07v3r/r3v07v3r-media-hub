@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
+import { useOverlayActions } from '@renderer/context/OverlayContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { resolveArtwork } from '@renderer/lib/artwork'
@@ -30,6 +31,7 @@ import { formatReleaseDate, isFutureRelease } from '@renderer/lib/mediaHub/relea
 import { CategoryFilterBar } from './CategoryFilterBar'
 import { TitleStatusButton } from '@renderer/components/media/TitleStatusButton'
 import { titleStatusOf } from '@renderer/lib/mediaHub/titleStatus'
+import { resolveLibrarySelection } from '@renderer/lib/mediaHub/librarySelection'
 import styles from './AnimeLibraryPage.module.css'
 import { RatingBadge } from '@renderer/components/detail/RatingBadge'
 import { ratingSourceFor } from '@renderer/components/detail/ratingSource'
@@ -175,19 +177,41 @@ function LibraryTile({
   const artwork = resolveArtwork(media)
   const rating = score(media)
   const state = watchState(media)
+  // The card menu MediaCard has (Plan / Remove from plan, Mark watched, Not
+  // interested), on right-click and on the "..." button. These grids are
+  // where most browsing happens, and without it un-planning a title from
+  // here meant marking the whole title watched with the side panel's pill.
+  const { openContextMenu } = useOverlayActions()
+  // Marked Not interested. Hide Disliked (on by default) keeps these out of
+  // the grid; with it switched off on the page they stay, dimmed and named,
+  // so a dislike is visible where it was made. From the live set, like
+  // MediaCard, so the mark lands with the click rather than the reload.
+  const { dislikedIds } = useAppState()
+  const disliked = dislikedIds.has(media.id)
 
   return (
     <li>
       <article
         className={`${styles.tile} ${selected ? styles.tileSelected : ''} ${
           state === 'watched' ? styles.tileWatched : state === 'planned' ? styles.tilePlanned : ''
-        }`}
+        } ${disliked ? styles.tileDisliked : ''}`}
         data-media-id={media.id}
         tabIndex={0}
         role="button"
         onClick={() => onSelect(media)}
         onDoubleClick={() => onOpen(media)}
+        // A right-click opens the menu and leaves the selection alone: the
+        // browser raises no click for the secondary button, so onSelect
+        // above never runs for it.
+        onContextMenu={(event) => {
+          event.preventDefault()
+          openContextMenu(event.clientX, event.clientY, media)
+        }}
         onKeyDown={(event) => {
+          // Only a key pressed on the tile itself. Enter or Space on the
+          // play or "..." button bubbles up here, and handling it would
+          // cancel that button's click and select the tile instead.
+          if (event.target !== event.currentTarget) return
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault()
             onSelect(media)
@@ -195,7 +219,7 @@ function LibraryTile({
         }}
         aria-label={`${media.title}.${
           state === 'watched' ? ' Watched.' : state === 'planned' ? ' Planned to watch.' : ''
-        } Select for details; double click to open.`}
+        }${disliked ? ' Not interested.' : ''} Select for details; double click to open.`}
       >
         <ArtworkImage
           className={styles.tileArtwork}
@@ -237,7 +261,26 @@ function LibraryTile({
         >
           <Icon name="play" size={14} />
         </button>
+        <button
+          type="button"
+          className={`${styles.tileOpen} ${styles.tileMore}`}
+          onClick={(event) => {
+            event.stopPropagation()
+            const rect = event.currentTarget.getBoundingClientRect()
+            openContextMenu(rect.left, rect.bottom, media)
+          }}
+          onDoubleClick={(event) => event.stopPropagation()}
+          aria-label={`More actions for ${media.title}`}
+        >
+          <Icon name="more-horizontal" size={14} />
+        </button>
         <div className={styles.tileCopy}>
+          {disliked && (
+            <em className={styles.tileDislikedNote} aria-hidden="true">
+              <Icon name="thumbs-down" size={10} />
+              Not interested
+            </em>
+          )}
           <span>{media.title}</span>
           <small>
             {mediaKindLabel(media)} · {media.releaseYear ?? 'New'} · {formatLibraryMeta(media)}
@@ -387,8 +430,15 @@ interface NextUpTarget {
 }
 
 function LibraryDetails({ media, config }: { media: MediaItem | null; config: CategoryConfig }) {
-  const { startPartyPlayback, openDetail, resolvingMedia, ratings, adaptCatalogItems } =
-    useAppState()
+  const {
+    startPartyPlayback,
+    openDetail,
+    resolvingMedia,
+    ratings,
+    adaptCatalogItems,
+    myList,
+    toggleMyList
+  } = useAppState()
 
   const [tab, setTab] = useState<DetailTab>('details')
   // The grid row this panel is handed comes from the browse index, which
@@ -696,6 +746,20 @@ function LibraryDetails({ media, config }: { media: MediaItem | null; config: Ca
                 now: the old "Mark as watched" needed an episode number this
                 panel never had, and quietly did nothing for series. */}
             <TitleStatusButton media={media} variant="action" />
+            {/* The pill only moves forward (planned goes to watched), so
+                taking a title off the plan from here used to mean marking
+                every episode watched and then clearing it. This is the
+                plan alone, the same as the card menu's Remove from plan. */}
+            {myList.has(media.id) && (
+              <button
+                type="button"
+                className={styles.action}
+                onClick={() => toggleMyList(media, false)}
+              >
+                <Icon name="x" size={15} />
+                Remove from plan
+              </button>
+            )}
           </div>
         </>
       )}
@@ -789,14 +853,16 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
   const [heroIndex, setHeroIndex] = useState(0)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  // The item itself, not only its id, so the panel can keep showing it once
+  // it has left every shelf — see librarySelection.ts.
+  const [selection, setSelection] = useState<MediaItem | null>(null)
 
   const paramsString = searchParams.toString()
   const hideDefaults: HideStateDefaults = useMemo(
     () => ({
       hideWatched: mediaHubSettings?.hideWatchedDefault ?? false,
       hideCompleted: mediaHubSettings?.hideCompletedDefault ?? false,
-      hideDisliked: mediaHubSettings?.hideDislikedDefault ?? false
+      hideDisliked: mediaHubSettings?.hideDislikedDefault ?? true
     }),
     [mediaHubSettings]
   )
@@ -1097,10 +1163,12 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
   }, [restorePendingHere, browseLoading, pendingRestore, ensureItem])
   const selected = useMemo(
     () =>
-      [...browseItems, ...continuing, ...recommended, ...heroItems].find(
-        (item) => item.id === selectedId
-      ) ?? activeHero,
-    [activeHero, browseItems, continuing, heroItems, recommended, selectedId]
+      resolveLibrarySelection(
+        [browseItems, continuing, recommended, heroItems],
+        selection,
+        activeHero
+      ),
+    [activeHero, browseItems, continuing, heroItems, recommended, selection]
   )
   const heroArt = activeHero ? resolveArtwork(activeHero) : null
 
@@ -1233,7 +1301,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
                   onClick={(event) => {
                     event.stopPropagation()
                     setHeroIndex(index)
-                    setSelectedId(item.id)
+                    setSelection(item)
                   }}
                   aria-label={`Show ${item.title}`}
                   aria-pressed={index === heroIndex}
@@ -1290,7 +1358,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
             icon="search"
             items={searchResults}
             selectedId={selected?.id ?? null}
-            onSelect={(media) => setSelectedId(media.id)}
+            onSelect={setSelection}
             onOpen={openDetail}
             emptyMessage={
               categorySearch.loading
@@ -1309,7 +1377,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
               icon="clock"
               items={continuing}
               selectedId={selected?.id ?? null}
-              onSelect={(media) => setSelectedId(media.id)}
+              onSelect={setSelection}
               onOpen={openDetail}
               emptyMessage="Nothing in progress here yet"
               collapseWhenEmpty
@@ -1319,7 +1387,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
               icon="sparkle"
               items={recommended}
               selectedId={selected?.id ?? null}
-              onSelect={(media) => setSelectedId(media.id)}
+              onSelect={setSelection}
               onOpen={openDetail}
               emptyMessage="Watch a few titles and personalised recommendations will appear here."
             />
@@ -1328,7 +1396,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
               icon="sparkle"
               items={popular}
               selectedId={selected?.id ?? null}
-              onSelect={(media) => setSelectedId(media.id)}
+              onSelect={setSelection}
               onOpen={openDetail}
               emptyMessage={
                 kindState === 'loading'
@@ -1346,7 +1414,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
           icon="grid"
           items={browseItems}
           selectedId={selected?.id ?? null}
-          onSelect={(media) => setSelectedId(media.id)}
+          onSelect={setSelection}
           onOpen={openDetail}
           initialVisibleCount={restoreVisibleCount}
           viewKey={viewKey}
