@@ -142,13 +142,39 @@ check('a new order moves nothing: season N on the page is still TMDB season N', 
     [byTmdb('305074', 's1', 's2', 's3', 's4')],
     [byTmdb('305074', 's1', 's2', 'ova', 's3', 's4')]
   )
-  assert.deepEqual(
-    plan.moves,
-    // Only the id that joined: a later season by its own id is kept under
-    // the show, as every write under it already is.
-    [move('ova', null, 's1', 3)]
-  )
+  // Not even the id that joined. Its place is 3 and season 3 of the page is
+  // TMDB's third season, not this OVA: moved there, its rows would mark
+  // that season watched. It still opens and saves as itself.
+  assert.deepEqual(plan.moves, [])
   assert.deepEqual(plan.left, [])
+})
+
+check('an id that joins a TMDB-numbered show moves only where its place is its season', () => {
+  const before = [byTmdb('305074', 's1', 's2')]
+  const after = [byTmdb('305074', 's1', 's2', 's3', 'ova')]
+  // What animeSeasons.ts's seasonMatchesPage answers: s3 maps to TheTVDB
+  // season 3 and sits at place 3; the OVA at place 4 maps to nothing.
+  const placeIsSeason = (show: string, member: string, season: number): boolean =>
+    show === 's1' && member === 's3' && season === 3
+  assert.deepEqual(planAnimeRegroup(before, after, placeIsSeason).moves, [
+    move('s3', null, 's1', 3)
+  ])
+  assert.deepEqual(planAnimeRegroup(before, after, placeIsSeason).ratings, [
+    { fromId: 's3', toId: 's1' }
+  ])
+  // With nothing to ask, only a show numbered by its members is known to
+  // keep a later season at its place.
+  assert.deepEqual(planAnimeRegroup(before, after).moves, [])
+  assert.deepEqual(planAnimeRegroup([byMember('a')], [byMember('a', 'b')]).moves, [
+    move('b', null, 'a', 2)
+  ])
+})
+
+check('the rule is asked of a show numbered by its members too, and can say no', () => {
+  // seasonMatchesPage answers yes for every member of such a show; this
+  // only pins that the answer given is the one obeyed.
+  const plan = planAnimeRegroup([byMember('a', 'c')], [byMember('a', 'b', 'c')], () => false)
+  assert.deepEqual(plan.moves, [move('a', 2, 'a', 3)])
 })
 
 check('another id fronting the same series takes every row, at the season it has', () => {

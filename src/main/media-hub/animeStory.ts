@@ -5,7 +5,8 @@
 
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type { AnimeStoryResult } from '../../shared/media-hub/types'
-import { animeStoryLinks, type RawApiPayload } from './core'
+import { groupedIdsFor, laterSeasonOf } from './animeSeasons'
+import { animeStoryLinks, mergedShowStoryLinks, type RawApiPayload } from './core'
 import { getDatabase } from './dbState'
 import { fetchJson } from './httpClient'
 import { handle } from './ipcGuard'
@@ -53,6 +54,36 @@ export async function storyForAnime(
   }
 }
 
+/**
+ * The story around a title as its PAGE shows it: a merged show is asked as
+ * the whole show, not as its first season.
+ *
+ * continuations.ts asks the same question for the Home row, of the last
+ * season only. The page wants the other end too — see mergedShowStoryLinks
+ * for what is taken from which. A later season's own id is answered as its
+ * show, since that is the page it opens (catalog.ts's meta handler).
+ */
+export async function storyForShow(
+  id: string,
+  priority: TaskPriority = 'interactive'
+): Promise<AnimeStoryResult> {
+  const showId = laterSeasonOf(id)?.id ?? id
+  // The same lookup metadata() builds the page's seasons from, so what is
+  // dropped here is exactly what the page already lists.
+  const members = [showId, ...(groupedIdsFor(showId) ?? [])]
+  if (members.length === 1) return storyForAnime(showId, priority)
+  const [first, last] = await Promise.all([
+    storyForAnime(showId, priority),
+    storyForAnime(members[members.length - 1], priority)
+  ])
+  return {
+    links: mergedShowStoryLinks(members, first.links, last.links),
+    // Unchecked at either end is unchecked: with the last season's answer
+    // missing, "no sequel listed" would be a claim nobody looked up.
+    checked: first.checked && last.checked
+  }
+}
+
 /** Registers the narrowly-scoped anime sequel/prequel lookup. */
 export function registerAnimeStoryIpc(): void {
   handle<CatalogStoryPayload, AnimeStoryResult>(
@@ -60,7 +91,7 @@ export function registerAnimeStoryIpc(): void {
     async (_event, payload) => {
       const kind = payload?.type
       if (!isValidCatalogKind(kind) || kind !== 'anime') return { links: [], checked: true }
-      return storyForAnime(String(payload?.id || ''))
+      return storyForShow(String(payload?.id || ''))
     }
   )
 }

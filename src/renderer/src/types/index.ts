@@ -95,6 +95,9 @@ export interface ContinueWatchingItem {
   playbackPositionSeconds: number
   durationSeconds: number
   nextEpisodeId?: string
+  /** The id on the list this row is here for, when it is not `media.id` —
+   *  see ContinueWatchingEntry.trackedId in shared/media-hub/types.ts. */
+  trackedId?: string
 }
 
 export interface Recommendation {

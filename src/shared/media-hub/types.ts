@@ -710,6 +710,15 @@ export interface ContinueWatchingEntry extends CatalogItem {
   watchedCount: number
   totalCount: number
   lastWatchedAt: string
+  /**
+   * The title on the list this row is here for, when that is not the row
+   * itself. A merged anime's later season can be tracked on its own while
+   * its viewings are kept under the show; the row is the show (that is what
+   * the viewings match, and the page to open), and the show is NOT on the
+   * list. Anything that takes the row away by untracking has to untrack
+   * this id — toggling the row's own would add the show to the list.
+   */
+  trackedId?: string
 }
 
 export interface TrackingListResult {
@@ -725,6 +734,17 @@ export interface TrackingListResult {
    * local-only, which is the ordinary case for anything marked here.
    */
   plannedSources: Record<string, PlannedServiceId[]>
+  /**
+   * The later seasons of merged anime that have viewings, keyed by the
+   * season's own id: the show the viewings are kept under, and the season
+   * there (see watchedLaterSeasons in serviceIds.ts).
+   *
+   * `history` holds nothing under a later season's own id, so a card that
+   * names one — a plan card a watchlist pull added — would read as not
+   * started from its own rows however much of it was watched. This is
+   * where its rows are.
+   */
+  laterSeasons: Record<string, { id: string; season: number }>
 }
 
 /** Services with both a login in this app and a personal list to read.
@@ -743,10 +763,16 @@ export interface PlannedServiceReport {
    *  anime, in practice. Counted so the gap is visible. */
   unmapped: number
   error?: string
+  /** The list was not read this pass: the service said nothing had changed
+   *  since the last read (the counts are that read's), or could not be
+   *  asked (`error` says why). See docs/WATCHLIST-SYNC.md. */
+  skipped?: boolean
 }
 
 export interface PlannedSyncReport {
   at: number
+  /** When the pull began. Absent on reports stored before this existed. */
+  startedAt?: number
   services: PlannedServiceReport[]
   added: number
   /** Titles removed locally because they left every service that had

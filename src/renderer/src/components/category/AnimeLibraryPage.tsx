@@ -429,15 +429,27 @@ function LibraryDetails({ media, config }: { media: MediaItem | null; config: Ca
           ])
           if (cancelled) return
           setDetail({ id: mediaId, item })
-          if (!tracking || !item.videos?.length) return
+          if (!tracking) return
+          // A later season of a merged anime, selected by its own tile. Play
+          // on it starts the SHOW at that season, from the show's viewings
+          // (resolvePlaybackTarget), so the same is read here: nothing is
+          // kept under the tile's own id to find a next episode from.
+          const part = item.seasonOf
+          const shown = part ? await api.catalog.meta(kind, part.id) : item
+          if (cancelled) return
+          const titleId = part ? part.id : mediaId
+          const videos = part
+            ? (shown.videos ?? []).filter((video) => video.season === part.season)
+            : (shown.videos ?? [])
+          if (!videos.length) return
           const watchedKeys = new Set<string>()
           for (const row of tracking.history) {
-            if (String(row.id) !== String(mediaId)) continue
+            if (String(row.id) !== String(titleId)) continue
             if (row.season == null || row.episode == null) continue
             watchedKeys.add(episodeWatchKey(row.season, row.episode))
           }
-          const target = episodeToStart(item.videos, watchedKeys)
-          const picked = item.videos.find(
+          const target = episodeToStart(videos, watchedKeys)
+          const picked = videos.find(
             (video) => video.season === target.season && video.episode === target.episode
           )
           setNextUp({

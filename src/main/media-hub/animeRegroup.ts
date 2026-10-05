@@ -124,14 +124,28 @@ function placesOf(groups: readonly AnimeGroupRecord[]): Map<string, Place> {
 const byMember = (group: AnimeGroupRecord): boolean => group.series === ''
 
 /**
+ * Whether a member's place in its show is also its season on the show's
+ * page — animeSeasons.ts's seasonMatchesPage. It is what decides whether a
+ * later season's rows are the show's at all: where the answer is no, such a
+ * season still opens and saves as itself (laterSeasonOf), and its rows have
+ * to stay with it.
+ */
+export type PlaceIsSeason = (showId: string, memberId: string, season: number) => boolean
+
+/**
  * What has to move for rows filed under `before` to be right under `after`.
  *
  * An id in neither list stands alone: its rows are under its own id, and it
  * needs nothing until a grouping takes it in.
+ *
+ * Without `placeIsSeason` only a show numbered by its members is known to
+ * keep a later season at its place, which is the half of the rule that
+ * needs no lookup.
  */
 export function planAnimeRegroup(
   before: readonly AnimeGroupRecord[],
-  after: readonly AnimeGroupRecord[]
+  after: readonly AnimeGroupRecord[],
+  placeIsSeason?: PlaceIsSeason
 ): AnimeRegroupPlan {
   const was = placesOf(before)
   const now = placesOf(after)
@@ -194,10 +208,17 @@ export function planAnimeRegroup(
         }
         return
       }
-      // A later season is kept under its show at its position whatever the
-      // show is numbered by: the rule every write under such an id already
-      // follows (tracking.ts's underShow).
-      plan.moves.push({ fromId: member, fromSeason: null, toId: group.id, toSeason: index + 1 })
+      // A later season is kept under its show at its place only where that
+      // place is its season on the show's page: the rule every write under
+      // such an id follows (tracking.ts's underShow, through laterSeasonOf).
+      // On a show numbered by TMDB the member at place N is often not
+      // season N — a film or an OVA sits among the seasons — and its rows
+      // moved there would mark another season watched. Such a member still
+      // opens and saves as itself, so its rows stay where they are.
+      const season = index + 1
+      const kept = placeIsSeason ? placeIsSeason(group.id, member, season) : byMember(group)
+      if (!kept) return
+      plan.moves.push({ fromId: member, fromSeason: null, toId: group.id, toSeason: season })
       plan.ratings.push({ fromId: member, toId: group.id })
     })
   }
@@ -215,7 +236,8 @@ export function planAnimeRegroup(
  */
 export function followAnimeRegroup(
   db: Pick<MediaHubDatabase, 'animeGroupLedger' | 'moveAnimeHistory'>,
-  after: readonly AnimeGroupRecord[]
+  after: readonly AnimeGroupRecord[],
+  placeIsSeason?: PlaceIsSeason
 ): { moved: number; left: AnimeRegroupPlan['left'] } {
   const before = db.animeGroupLedger()
   if (!before) {
@@ -223,7 +245,7 @@ export function followAnimeRegroup(
     return { moved: 0, left: [] }
   }
   if (JSON.stringify(before) === JSON.stringify(after)) return { moved: 0, left: [] }
-  const plan = planAnimeRegroup(before, after)
+  const plan = planAnimeRegroup(before, after, placeIsSeason)
   // The moves and the new ledger commit together: a ledger that ran ahead
   // of the rows would describe an order they were never moved to.
   const landed = db.moveAnimeHistory(plan, [...after])

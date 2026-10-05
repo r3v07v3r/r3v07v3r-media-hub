@@ -23,6 +23,12 @@ export type WatchStatus =
  * "this show is done" from "this movie has been watched" the way the
  * reference design does.
  *
+ * One card is never in `continueWatching` however far through it somebody
+ * is: a later season of a merged anime, named by its own id. Continue
+ * Watching lists its show, under the show's id. Such a card carries its own
+ * progress instead — catalogItemToMediaItem sets `progressPercentage` for a
+ * later season and for nothing else — and is in progress by that.
+ *
  * 'planned' is the third fact a card can carry (the plan-to-watch list,
  * `inMyList`), and it ranks below the two above: something both planned
  * and seen reads as seen, the same precedence lib/mediaHub/titleStatus.ts
@@ -42,6 +48,9 @@ export function getWatchStatus(
     return media.totalEpisodes != null
       ? { state: 'completed', progressPercentage: 100 }
       : { state: 'watched' }
+  }
+  if (media.watched && media.progressPercentage != null) {
+    return { state: 'in-progress', progressPercentage: media.progressPercentage }
   }
   if (media.inMyList) return { state: 'planned' }
   return { state: 'unwatched' }

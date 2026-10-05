@@ -34,6 +34,7 @@ import { recommendationRailTitle } from '@shared/media-hub/recommendationReason'
 import {
   catalogItemToMediaItem,
   indexHistoryById,
+  indexSeasonEpisodes,
   catalogItemToRecommendation,
   continueWatchingEntryToItem
 } from './adapters'
@@ -57,6 +58,7 @@ const CATALOG_KINDS: MediaKind[] = ['movie', 'series', 'anime']
 // call site.
 const NO_HISTORY: HistoryEntry[] = []
 const NO_IDS: Set<string> = new Set()
+const NO_SEASON_EPISODES: ReadonlyMap<string, ReadonlySet<number>> = new Map()
 const NO_ITEMS: MediaItem[] = []
 
 const EMPTY_HOME_FEED = {
@@ -474,6 +476,10 @@ export interface WatchedIdsResult {
    *  not just "started") has to be computed, since a flat id set can't
    *  tell that apart. See adapters.ts's isSeriesCompleted. */
   history: HistoryEntry[]
+  /** The watched episode numbers of each later season of a merged anime,
+   *  by the season's own id — nothing is kept under such an id, so neither
+   *  field above holds it. See CatalogItemAdapterContext.seasonEpisodesById. */
+  seasonEpisodes: ReadonlyMap<string, ReadonlySet<number>>
   /** tracking:list has answered successfully at least once. Until then
    *  `watchedIds` is empty because nothing has been read, not because
    *  nothing is watched — a distinction remembered rows depend on (see
@@ -511,6 +517,8 @@ export interface WatchedIdsResult {
 export function useMediaHubWatchedIds(libraryKey: string): WatchedIdsResult {
   const [watchedIds, setWatchedIds] = useState<Set<string>>(new Set())
   const [history, setHistory] = useState<HistoryEntry[]>([])
+  const [seasonEpisodes, setSeasonEpisodes] =
+    useState<WatchedIdsResult['seasonEpisodes']>(NO_SEASON_EPISODES)
   const [loaded, setLoaded] = useState(false)
   const [generation, setGeneration] = useState(0)
 
@@ -524,6 +532,7 @@ export function useMediaHubWatchedIds(libraryKey: string): WatchedIdsResult {
         if (cancelled) return
         setWatchedIds(new Set(result.history.map((h) => h.id)))
         setHistory(result.history)
+        setSeasonEpisodes(indexSeasonEpisodes(result.history, result.laterSeasons))
         setLoaded(true)
       })
       // A failed read leaves `loaded` false on purpose: this set is then
@@ -543,8 +552,8 @@ export function useMediaHubWatchedIds(libraryKey: string): WatchedIdsResult {
   // dependency array — a fresh object here defeated both.
   const refresh = useCallback(() => setGeneration((g) => g + 1), [])
   return useMemo(
-    () => ({ watchedIds, history, loaded, refresh }),
-    [watchedIds, history, loaded, refresh]
+    () => ({ watchedIds, history, seasonEpisodes, loaded, refresh }),
+    [watchedIds, history, seasonEpisodes, loaded, refresh]
   )
 }
 

@@ -61,7 +61,7 @@
 // neither external source has anything to say.
 
 import type { CatalogItem, Episode } from '../../shared/media-hub/types'
-import { animeSeasonOf } from '../../shared/media-hub/serviceIds'
+import { animeSeasonMatchesPage, animeSeasonOf } from '../../shared/media-hub/serviceIds'
 import { fetchJson } from './httpClient'
 import { mapWithLimit, type TaskPriority } from './taskScheduler'
 import { logError } from './logger'
@@ -79,6 +79,27 @@ interface TvdbMapping {
 // can't also mean "cached, and the answer is no" without every miss being
 // re-fetched forever. An empty seriesId string is never a valid mapping.
 const NO_TVDB_MAPPING: TvdbMapping = { seriesId: '', season: -1 }
+
+/**
+ * What the cache already holds of an id's TheTVDB mapping, with no request:
+ * the mapping, 'none' when Kitsu was asked and has none, null when it was
+ * never asked. Expired entries count — the mapping essentially never
+ * changes, and an aged answer is still the one the page was built from.
+ */
+function cachedTvdbMapping(catalogId: string): TvdbMapping | 'none' | null {
+  const kitsuId = String(catalogId).replace(/^kitsu:/, '')
+  const cached = getDatabase().getCache<TvdbMapping>(`kitsu:tvdb:${kitsuId}`, {
+    allowExpired: true
+  })
+  if (!cached) return null
+  return cached.seriesId ? cached : 'none'
+}
+
+/** Whether `memberId`, at `season` of `showId` by its place in the group, is
+ *  that season on the show's page too — see animeSeasonMatchesPage. */
+export function seasonMatchesPage(showId: string, memberId: string, season: number): boolean {
+  return animeSeasonMatchesPage(showId, memberId, season, cachedTvdbMapping)
+}
 
 /** Cached (30d — this cross-reference essentially never changes once
  *  published) Kitsu-to-TheTVDB mapping for one anime id. Returns null (not
@@ -732,9 +753,18 @@ export function animeGroupingMovedOn(
  * later season to the canonical id's own entry — the first season's. Handed
  * nothing instead, toSimklAnimeEpisode (serviceIds.ts) places a first season
  * only and sends no later one. See animeGroupingReady.
+ *
+ * A member whose place is not its season on the show's page is blanked
+ * (seasonMatchesPage): the season being pushed is the page's, and the
+ * member at that place may be a different season, or an OVA.
  */
-export function animeSiblingsWhenGrouped(): ((id: string) => string[] | undefined) | undefined {
-  return animeGroupingReady() ? groupedIdsFor : undefined
+export function animeSiblingsWhenGrouped():
+  ((id: string) => (string | null)[] | undefined) | undefined {
+  if (!animeGroupingReady()) return undefined
+  return (id) =>
+    groupedIdsFor(id)?.map((member, index) =>
+      seasonMatchesPage(id, member, index + 2) ? member : null
+    )
 }
 
 /**
@@ -763,11 +793,36 @@ export function resolveAnimeGroupTarget(catalogId: string): { id: string; season
  * else about it belongs to the show: a page that opens it opens the show
  * (catalog.ts's meta handler), and a viewing written under it is kept under
  * the show (tracking.ts).
+ *
+ * Null as well for a later season whose place in the group is not its
+ * season on the show's page (seasonMatchesPage). Such a season still opens
+ * and saves as itself: sent to "its" season of the show it would open, mark
+ * and move rows onto a different one.
  */
 export function laterSeasonOf(catalogId: string): { id: string; season: number } | null {
   const id = String(catalogId)
   if (!id.startsWith('kitsu:') || !animeGroupingReady()) return null
-  return animeSeasonOf(id, resolveAnimeGroupTarget)
+  const show = animeSeasonOf(id, resolveAnimeGroupTarget)
+  return show && seasonMatchesPage(show.id, id, show.season) ? show : null
+}
+
+/**
+ * laterSeasonOf for a list of ids, or nothing while the catalog is not
+ * grouped. The grouping marker is a database read, and asked once here
+ * rather than once per id: My Stuff asks about every watched title at once.
+ */
+export function laterSeasonLookup():
+  ((catalogId: string) => { id: string; season: number } | null) | undefined {
+  if (!animeGroupingReady()) return undefined
+  return (catalogId) => {
+    const id = String(catalogId)
+    if (!id.startsWith('kitsu:')) return null
+    // The same answer laterSeasonOf gives, gate included: a later season
+    // whose place is not its season on the show's page keeps its own rows,
+    // and counted at "its" season of the show it would read another one's.
+    const show = animeSeasonOf(id, resolveAnimeGroupTarget)
+    return show && seasonMatchesPage(show.id, id, show.season) ? show : null
+  }
 }
 
 /**
