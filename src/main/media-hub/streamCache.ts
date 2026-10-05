@@ -66,6 +66,7 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 import path from 'node:path'
 
 import { assertPublicMediaUrl, defaultResolveHost, fetchMediaWithRetry } from './playback'
+import { electronModule } from './electronModule'
 import { logError } from './logger'
 import { formatMegabytes, reportPreparation } from './playbackProgress'
 import { readSettings } from './settingsStore'
@@ -143,10 +144,10 @@ const PLAYHEAD_FILL_TOLERANCE_BYTES = CHUNK_BYTES * 8
  * full reasoning. Short version: a top-level electron import throws when
  * the binary is absent, taking down every module that transitively
  * mentions this one, and CI installs without that binary on purpose.
+ * electronModule() is the guarded require: see electronModule.ts.
  */
 function electron(): typeof import('electron') {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require('electron')
+  return electronModule()
 }
 
 /** Where sessions live: the configured folder, or userData. Exported so

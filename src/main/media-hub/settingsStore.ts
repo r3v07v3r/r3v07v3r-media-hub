@@ -22,6 +22,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
+import { electronModule } from './electronModule'
 import { logError } from './logger'
 import { sendToRenderer } from './rendererBridge'
 import type { ProfileRecord } from './profiles'
@@ -207,11 +208,11 @@ export interface MediaHubRawSettings {
  * Every use below is inside a function that only runs in the real app,
  * where the binary is always present, so nothing changes for the packaged
  * build. See logger.ts, which carries the same pattern for the same
- * reason.
+ * reason. electronModule() throws outside Electron without loading the
+ * package, which from Electron 42 would download the binary.
  */
 function electron(): typeof import('electron') {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require('electron')
+  return electronModule()
 }
 
 function settingsPath(): string {
