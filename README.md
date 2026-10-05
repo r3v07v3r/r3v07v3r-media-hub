@@ -62,7 +62,9 @@ trending feed (either one alone fills the grid), anime from Kitsu. No key is req
   a chip. **Scan deeper** on a category page pulls in more of the catalog than loaded by itself.
   A title found only by search joins the library once you open or track it, and one pulled from a
   service's plan-to-watch joins it when the pull brings it in, so it shows in the grids, My Stuff
-  and the Planned row like anything else (its poster arrives the first time it is opened).
+  and the Planned row like anything else (its poster arrives the first time it is opened). Titles
+  tracked, watched, rated or marked Not interested before this was the case are added once, in the
+  background, when the app is idle.
   An anime whose seasons are merged into one show is one tile in the Anime library and in search,
   on the desktop and the phone, with an "N seasons" chip on its poster; its rating is its first
   season's. Its seasons are tabs on its page, and searching a later season's own name finds the

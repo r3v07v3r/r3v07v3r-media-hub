@@ -76,9 +76,8 @@ export interface IndexWriter {
  * only when there is no direct row.
  */
 export function indexTitleIfMissing(db: IndexWriter, kind: MediaKind, item: CatalogItem): boolean {
-  const id = String(item?.id ?? '')
-  if (!isIndexableTitleId(id) || !String(item.title ?? '').trim()) return false
-  if (id.startsWith('kitsu:') !== (kind === 'anime')) return false
+  if (!admissible(kind, item)) return false
+  const id = String(item.id)
   const hasRow = db.indexHasRow(kind, id)
   // Null is membership unknown, which the check below also refuses.
   if (hasRow !== false) return false
@@ -88,4 +87,38 @@ export function indexTitleIfMissing(db: IndexWriter, kind: MediaKind, item: Cata
   const { add } = planDeepScanBatch([{ ...item, id }], existing)
   if (!add.length) return false
   return db.indexUpsert(kind, add, { source: 'search', rankBase: db.indexMaxRank(kind) + 1 })
+}
+
+/** Whether a title outside the crawl may have an index row of this kind: an
+ *  id in the index's alphabet that belongs to the kind's catalog, and a
+ *  name. See indexTitleIfMissing. */
+function admissible(kind: MediaKind, item: CatalogItem): boolean {
+  const id = String(item?.id ?? '')
+  if (!isIndexableTitleId(id) || !String(item.title ?? '').trim()) return false
+  return id.startsWith('kitsu:') === (kind === 'anime')
+}
+
+/**
+ * indexTitleIfMissing for many titles of one kind, for the one-time backfill
+ * (indexBackfill.ts): the same admission rule and the same skip of an id the
+ * index holds directly or as a grouped season, with one membership read for
+ * the whole batch instead of one per title. How many rows were written, or
+ * null when membership could not be read.
+ */
+export function indexTitlesIfMissing(
+  db: Omit<IndexWriter, 'indexHasRow'>,
+  kind: MediaKind,
+  items: readonly CatalogItem[]
+): number | null {
+  const admitted = items.filter((item) => admissible(kind, item))
+  if (!admitted.length) return 0
+  const existing = db.indexExistingIds(
+    kind,
+    admitted.map((item) => String(item.id))
+  )
+  if (existing === null) return null
+  const { add } = planDeepScanBatch(admitted, existing)
+  if (!add.length) return 0
+  const wrote = db.indexUpsert(kind, add, { source: 'search', rankBase: db.indexMaxRank(kind) + 1 })
+  return wrote ? add.length : 0
 }
