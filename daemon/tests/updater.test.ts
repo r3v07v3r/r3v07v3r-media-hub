@@ -483,7 +483,9 @@ async function main(): Promise<void> {
       'a version that kept killing the process is abandoned via the tripwire'
     )
   } finally {
-    await fsp.rm(root, { recursive: true, force: true })
+    // Windows holds handles on the launcher proof files briefly after the run
+    // ends, so retry rather than fail a test that passed.
+    await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   }
 
   // --- updater integration: stage-and-verify against a stub feed -----------
@@ -582,7 +584,7 @@ async function main(): Promise<void> {
       feedServer.close()
     }
   } finally {
-    await fsp.rm(updRoot, { recursive: true, force: true })
+    await fsp.rm(updRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   }
 }
 

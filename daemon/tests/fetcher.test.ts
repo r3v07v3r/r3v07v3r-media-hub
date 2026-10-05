@@ -177,7 +177,9 @@ async function main(): Promise<void> {
     clearTrustedMediaHosts()
     contentServer.close()
     torboxServer.close()
-    await fsp.rm(root, { recursive: true, force: true })
+    // Windows holds handles on the downloaded item briefly after close(), so
+    // retry rather than fail a test that passed.
+    await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   }
 }
 

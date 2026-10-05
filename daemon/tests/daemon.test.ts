@@ -636,7 +636,7 @@ async function main(): Promise<void> {
       await new Promise<void>((resolve) => server.close(() => resolve()))
     }
   } finally {
-    await fsp.rm(root, { recursive: true, force: true })
+    await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   }
 }
 
