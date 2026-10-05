@@ -1816,9 +1816,13 @@ export function registerTrackingIpc(): void {
    * (useServiceCatchUp); the pass itself decides whether that is worth a
    * request, so the screen never has to.
    */
-  handle<{ force?: boolean } | undefined, CatchUpReport>(
+  handle<{ force?: boolean; leaveListsToJob?: boolean } | undefined, CatchUpReport>(
     MEDIA_HUB_CHANNELS.trackingCatchUp,
-    async (_e, payload) => catchUpFromServices({ force: payload?.force === true })
+    async (_e, payload) =>
+      catchUpFromServices({
+        force: payload?.force === true,
+        leaveListsToJob: payload?.leaveListsToJob === true
+      })
   )
 
   /**
@@ -2346,7 +2350,10 @@ export function registerTrackingIpc(): void {
     // and anything the catch-up could not place. Shares the pass the launch
     // asked for if it is still running, and answers from the last one within
     // two minutes; nothing runs while something plays.
-    await catchUpFromServices().catch((error) => logError('tracking:reconcile:catch-up', error))
+    // The desktop's, so the Trakt and MyAnimeList lists stay the job's.
+    await catchUpFromServices({ leaveListsToJob: true }).catch((error) =>
+      logError('tracking:reconcile:catch-up', error)
+    )
     if (db.getCache(reconcileKey(RECONCILE_COOLDOWN_KEY_PREFIX))) {
       // Inside the cooldown, but that no longer means "nothing to say" —
       // the background watch-sync job may have run the diff moments ago.

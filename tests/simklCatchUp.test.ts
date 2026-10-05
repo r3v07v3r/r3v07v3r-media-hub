@@ -1077,7 +1077,7 @@ function harness(): Harness {
 /** The calls one pass made, with the log cleared for the next. */
 async function passOf(
   h: Harness,
-  options: { force?: boolean } = {}
+  options: { force?: boolean; leaveListsToJob?: boolean } = {}
 ): Promise<{ report: CatchUpReport; calls: string[] }> {
   h.calls.length = 0
   const report = await runCatchUp(h.deps, h.memory, options)
@@ -1689,6 +1689,26 @@ async function passes(): Promise<void> {
     h.clock += MINUTE
     assert.deepEqual((await passOf(h, { force: true })).calls, ['planned'], 'and when forced')
   })
+
+  await checkAsync(
+    'on the desktop the Trakt and MyAnimeList lists are left to the job unless Simkl moved',
+    async () => {
+      // Focus brings a pass far more often than a phone resumes, and those
+      // two lists have no gate: the half-hourly job reads them.
+      const h = harness()
+      h.trakt = 'trakt-1'
+      const first = await passOf(h, { leaveListsToJob: true })
+      assert.equal(first.calls.includes('planned'), true, 'Simkl moved: read with it')
+      h.clock += 11 * MINUTE
+      const quiet = await passOf(h, { leaveListsToJob: true })
+      assert.deepEqual(quiet.calls, ['activities'], 'nothing moved at Simkl: no list read')
+      // Without Simkl, the desktop never reads them here at all.
+      const alone = harness()
+      alone.account = ''
+      alone.trakt = 'trakt-1'
+      assert.deepEqual((await passOf(alone, { leaveListsToJob: true })).calls, [])
+    }
+  )
 
   await checkAsync('the floor and a running pass are per profile', async () => {
     const h = harness()

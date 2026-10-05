@@ -116,6 +116,15 @@ check('a request is one invoke carrying exactly the payload the handler reads', 
     args: [{ enabled: true }]
   })
 
+  // The desktop's catch-up says to leave the ungated lists to the job; the
+  // handler reads exactly this field.
+  void api.mediaHub.tracking.catchUp({ leaveListsToJob: true })
+  assert.deepEqual(calls.at(-1), {
+    kind: 'invoke',
+    channel: MEDIA_HUB_CHANNELS.trackingCatchUp,
+    args: [{ leaveListsToJob: true }]
+  })
+
   // No payload means NO argument, not an explicit undefined: a handler that
   // counts its arguments must see the same call it always has.
   void api.mediaHub.bootstrap()

@@ -349,6 +349,9 @@ before any history lands: the pull refuses to plan anything with local
 history, so the other order would refuse a title for a viewing the same
 pass wrote. Simkl's lists are skipped in that pull if they were already
 read under the same activity stamps ("When Simkl's lists are read", above).
+Trakt's and MyAnimeList's lists have no such gate, so on the phone they are
+read at most every ten minutes; on the desktop they are left to the
+half-hourly pass and read here only when Simkl's moved.
 Then Simkl's watched history, one kind at a time (films, shows, anime), but
 only for a kind whose activity stamp at `/sync/activities` has moved since
 it was last fully applied. A kind is fetched whole the first time and with

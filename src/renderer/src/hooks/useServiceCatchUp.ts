@@ -17,9 +17,11 @@
 // playing (the player window puts the scheduler under critical pressure).
 // On top of that a desktop window gains focus far more often than a phone
 // resumes, and every pass that gets through is a Simkl request against the
-// 500 a day the phone shares, so focus asks at most every ten minutes. A
-// pass that put anime off until the catalog is grouped is asked again in a
-// few minutes, as on the phone.
+// 500 a day the phone shares, so focus asks at most every ten minutes, and
+// the Trakt and MyAnimeList watchlists, which have no gate to ask first,
+// are left to the half-hourly job unless Simkl's moved. A pass that put
+// anime off until the catalog is grouped is asked again in a few minutes,
+// as on the phone.
 
 import { useEffect } from 'react'
 
@@ -41,7 +43,7 @@ export function useServiceCatchUp(): void {
       running = true
       lastAsked = Date.now()
       void tracking
-        .catchUp()
+        .catchUp({ leaveListsToJob: true })
         .then((report) => {
           window.clearTimeout(retry)
           if (report?.deferred) retry = window.setTimeout(ask, DEFERRED_RETRY_MS)

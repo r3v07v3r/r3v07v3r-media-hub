@@ -239,6 +239,17 @@ function emptyReport(at: number, connected: boolean): CatchUpReport {
   }
 }
 
+export interface CatchUpOptions {
+  /** Skip the two-minute floor: somebody has just linked this device. */
+  force?: boolean
+  /** The desktop's: leave the Trakt and MyAnimeList watchlists, which have
+   *  no gate to ask first, to the half-hourly watch-sync job, and read them
+   *  here only along with Simkl's when Simkl's moved. A desktop window
+   *  gains focus far more often than a phone resumes, and each pass would
+   *  otherwise read both lists again on top of the job's own reads. */
+  leaveListsToJob?: boolean
+}
+
 /**
  * One catch-up pass, or the answer of one that already ran or is running.
  *
@@ -250,7 +261,7 @@ function emptyReport(at: number, connected: boolean): CatchUpReport {
 export function runCatchUp(
   deps: CatchUpDeps,
   memory: CatchUpMemory,
-  options: { force?: boolean } = {}
+  options: CatchUpOptions = {}
 ): Promise<CatchUpReport> {
   const profile = deps.db.activeProfile()
   if (memory.inFlight) {
@@ -275,7 +286,7 @@ export function runCatchUp(
   // name: the pauses that exist to space out idle passes do not apply.
   const fresh = Boolean(options.force) || accounts !== memory.lastAccounts
   if (!fresh && last && deps.now() - memory.lastAt < FLOOR_MS) return Promise.resolve(last)
-  const run = catchUpPass(deps, memory, marks, fresh)
+  const run = catchUpPass(deps, memory, marks, fresh, options.leaveListsToJob === true)
     .catch((error) => {
       // Never thrown to the caller: the screen that asked would only turn
       // it into an error over a row it can draw perfectly well without.
@@ -300,7 +311,9 @@ async function catchUpPass(
   memory: CatchUpMemory,
   marks: ConnectedAccounts,
   /** A forced pass, or the first since the connected accounts changed. */
-  fresh: boolean
+  fresh: boolean,
+  /** CatchUpOptions.leaveListsToJob. */
+  leaveListsToJob: boolean
 ): Promise<CatchUpReport> {
   const { db } = deps
   // Who this pass is FOR, captured before the first wait. Every write below
@@ -430,10 +443,13 @@ async function catchUpPass(
   // The interval paces Trakt and MyAnimeList, which have no gate to ask
   // first. It does not apply to a fresh pass: an account linked a minute
   // after the last pull has a list nobody has read yet, and waiting out the
-  // rest of ten minutes would leave Plan to Watch empty for it.
+  // rest of ten minutes would leave Plan to Watch empty for it. On the
+  // desktop (leaveListsToJob) the half-hourly job reads them instead, and
+  // this pass reads them only when Simkl's moved.
   const pullDue = fresh || startedAt - memory.lastPlannedAt >= PULL_INTERVAL_MS
   const simklMoved = kinds.length > 0 || (report.deferred && pullDue)
-  if (simklMoved || ((marks.trakt || marks.mal) && pullDue)) {
+  const ungatedDue = !leaveListsToJob && Boolean(marks.trakt || marks.mal) && pullDue
+  if (simklMoved || ungatedDue) {
     memory.lastPlannedAt = startedAt
     try {
       const pulled = await deps.syncPlanned({
@@ -753,9 +769,7 @@ const artworkFailures = new Map<string, number>()
  * The catch-up against the real services and database, with this process's
  * memory. What the lite UI's tracking.catchUp reaches.
  */
-export async function catchUpFromServices(
-  options: { force?: boolean } = {}
-): Promise<CatchUpReport> {
+export async function catchUpFromServices(options: CatchUpOptions = {}): Promise<CatchUpReport> {
   // Lazily, for the reason in this file's header.
   const [
     simkl,
