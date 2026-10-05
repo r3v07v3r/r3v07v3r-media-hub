@@ -120,13 +120,16 @@ export function AIResponsePanel() {
               <TileSkeletons />
             ) : (
               <>
-                {/* Said whether or not anything was found: with the online
-                    catalogs out of reach, an empty row or a short one is
-                    "not in the library yet", not "does not exist". */}
+                {/* Said whether or not anything was found: with an online
+                    catalog out of reach, an empty row or a short one is
+                    "not in the library yet", not "does not exist". The
+                    flag is set when any one of the three kinds' catalogs
+                    failed, and the others' results are complete, so the
+                    note does not claim they all failed. */}
                 {assistantProviderUnreachable && (
                   <p className={styles.aiSectionNote} role="status">
-                    The online catalogs could not be reached, so only titles already in the library
-                    are shown.
+                    One or more online catalogs could not be reached, so for those only titles
+                    already in the library are shown.
                   </p>
                 )}
                 {assistantResults.length > 0 && (
