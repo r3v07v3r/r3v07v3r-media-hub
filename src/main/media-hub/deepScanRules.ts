@@ -39,6 +39,7 @@ export function planDeepScanBatch(
 /** The index methods indexTitleIfMissing uses: a slice of the database, so
  *  this module still has none of its own in reach. */
 export interface IndexWriter {
+  indexHasRow(kind: MediaKind, id: string): boolean | null
   indexExistingIds(kind: MediaKind, ids: readonly string[]): Set<string> | null
   indexMaxRank(kind: MediaKind): number
   indexUpsert(
@@ -63,10 +64,24 @@ export interface IndexWriter {
  * touched, so nothing the crawl curated is overwritten. The row is ranked
  * below everything already indexed and tagged source 'search'; a later crawl
  * that lists the title rewrites both. True when a row was written.
+ *
+ * The id must belong to the kind's catalog: Kitsu ids for anime, IMDb ids for
+ * movies and series. A caller that defaulted a missing type (the status
+ * handler reads a typeless payload as a movie) would otherwise put a Kitsu
+ * title in the movie grid, or an IMDb one in the Kitsu-keyed anime grid.
+ *
+ * This runs on every open and every watched mark, so the common answer, a
+ * row under this id already, is one primary-key lookup; the grouped-sibling
+ * pass inside indexExistingIds parses every grouped row of the kind and runs
+ * only when there is no direct row.
  */
 export function indexTitleIfMissing(db: IndexWriter, kind: MediaKind, item: CatalogItem): boolean {
   const id = String(item?.id ?? '')
   if (!isIndexableTitleId(id) || !String(item.title ?? '').trim()) return false
+  if (id.startsWith('kitsu:') !== (kind === 'anime')) return false
+  const hasRow = db.indexHasRow(kind, id)
+  // Null is membership unknown, which the check below also refuses.
+  if (hasRow !== false) return false
   const existing = db.indexExistingIds(kind, [id])
   // Membership unknown: writing could duplicate a grouped season.
   if (existing === null) return false

@@ -479,6 +479,47 @@ check('only ids and titles the index accepts from outside the crawl are written'
   db.close()
 })
 
+check("a title is only written into its own kind's catalog", () => {
+  const dbPath = tempDbPath()
+  const db = createDatabase(dbPath, TEST_PROFILE)
+  // The status handler reads a typeless payload as a movie: a Kitsu id
+  // must not land in the movie grid, nor an IMDb id in the Kitsu-keyed
+  // anime grid.
+  assert.equal(indexTitleIfMissing(db, 'movie', item('kitsu:5', { type: 'anime' })), false)
+  assert.equal(indexTitleIfMissing(db, 'anime', item('tt5', { type: 'anime' })), false)
+  assert.equal(db.indexCount('movie') + db.indexCount('anime'), 0)
+  assert.equal(indexTitleIfMissing(db, 'series', item('tt6', { type: 'series' })), true)
+  assert.equal(indexTitleIfMissing(db, 'anime', item('kitsu:6', { type: 'anime' })), true)
+  db.close()
+})
+
+check('a title with its own row is answered by key, without the grouped pass', () => {
+  const dbPath = tempDbPath()
+  const db = createDatabase(dbPath, TEST_PROFILE)
+  db.indexUpsert('anime', [item('kitsu:1', { type: 'anime', groupedIds: ['kitsu:1', 'kitsu:2'] })])
+  assert.equal(db.indexHasRow('anime', 'kitsu:1'), true)
+  assert.equal(db.indexHasRow('anime', 'kitsu:2'), false, 'a grouped member has no row of its own')
+  assert.equal(db.indexHasRow('movie', 'kitsu:1'), false, 'per kind')
+  // indexTitleIfMissing runs on every open and watched mark; the grouped
+  // pass parses every grouped row of the kind, so it is kept for ids with
+  // no row of their own.
+  let groupedPasses = 0
+  const counted = {
+    indexHasRow: db.indexHasRow,
+    indexMaxRank: db.indexMaxRank,
+    indexUpsert: db.indexUpsert,
+    indexExistingIds: (kind: Parameters<typeof db.indexExistingIds>[0], ids: readonly string[]) => {
+      groupedPasses += 1
+      return db.indexExistingIds(kind, ids)
+    }
+  }
+  assert.equal(indexTitleIfMissing(counted, 'anime', item('kitsu:1', { type: 'anime' })), false)
+  assert.equal(groupedPasses, 0)
+  assert.equal(indexTitleIfMissing(counted, 'anime', item('kitsu:2', { type: 'anime' })), false)
+  assert.equal(groupedPasses, 1)
+  db.close()
+})
+
 check('a later crawl that lists a search row takes it over', () => {
   const dbPath = tempDbPath()
   const db = createDatabase(dbPath, TEST_PROFILE)

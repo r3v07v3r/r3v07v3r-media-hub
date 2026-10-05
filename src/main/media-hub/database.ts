@@ -1031,6 +1031,12 @@ export interface MediaHubDatabase {
    *  durable bookmark on this answer: claiming everything exists would
    *  make it add nothing AND move on, permanently skipping the chunk. */
   indexExistingIds(kind: MediaKind, ids: readonly string[]): Set<string> | null
+  /** Whether this kind has a row under this exact id, by primary key alone:
+   *  no grouped-sibling pass, so it costs one indexed lookup. Null when the
+   *  lookup failed. For callers on a hot path (indexTitleIfMissing runs on
+   *  every open and every watched mark) that only need indexExistingIds'
+   *  grouped pass when there is no direct row. */
+  indexHasRow(kind: MediaKind, id: string): boolean | null
   /** The highest rank any row of this kind holds — the floor above which
    *  deep-scanned rows must land to stay UNDER the curated ordering. */
   indexMaxRank(kind: MediaKind): number
@@ -3172,6 +3178,17 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         // Zero makes the caller fall back to its own offset-derived
         // floor — depth may interleave a little, nothing is lost.
         return 0
+      }
+    },
+
+    indexHasRow(kind, id) {
+      try {
+        return Boolean(
+          sql.prepare('SELECT 1 FROM catalog_index WHERE kind = ? AND id = ?').get(kind, id)
+        )
+      } catch (error) {
+        logError('catalog:index:has-row', error)
+        return null
       }
     },
 
