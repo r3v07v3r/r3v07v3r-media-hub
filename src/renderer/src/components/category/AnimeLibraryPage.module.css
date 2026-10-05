@@ -433,6 +433,11 @@
 .tileOpen:hover {
   background: var(--library-violet);
 }
+/* The card menu's button. It carries .tileOpen as well, so it is revealed
+   with it; this only moves it to the left of the open button. */
+.tileMore {
+  right: 42px;
+}
 .tileCopy {
   position: absolute;
   right: 10px;

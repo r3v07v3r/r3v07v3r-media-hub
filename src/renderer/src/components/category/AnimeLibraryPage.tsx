@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
+import { useOverlayActions } from '@renderer/context/OverlayContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { resolveArtwork } from '@renderer/lib/artwork'
@@ -175,6 +176,13 @@ function LibraryTile({
   const artwork = resolveArtwork(media)
   const rating = score(media)
   const state = watchState(media)
+  // The card menu MediaCard has (Plan / Remove from plan, Mark watched, Not
+  // interested), on right-click and on the "..." button. These grids are
+  // where most browsing happens, and without it un-planning a title from
+  // here meant marking the whole title watched with the side panel's pill.
+  // From the overlay context rather than the app-wide one: it never
+  // changes, so a grid of tiles is not re-rendered by it.
+  const { openContextMenu } = useOverlayActions()
 
   return (
     <li>
@@ -187,6 +195,13 @@ function LibraryTile({
         role="button"
         onClick={() => onSelect(media)}
         onDoubleClick={() => onOpen(media)}
+        // A right-click opens the menu and leaves the selection alone: the
+        // browser raises no click for the secondary button, so onSelect
+        // above never runs for it.
+        onContextMenu={(event) => {
+          event.preventDefault()
+          openContextMenu(event.clientX, event.clientY, media)
+        }}
         onKeyDown={(event) => {
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault()
@@ -236,6 +251,19 @@ function LibraryTile({
           aria-label={`Open ${media.title}`}
         >
           <Icon name="play" size={14} />
+        </button>
+        <button
+          type="button"
+          className={`${styles.tileOpen} ${styles.tileMore}`}
+          onClick={(event) => {
+            event.stopPropagation()
+            const rect = event.currentTarget.getBoundingClientRect()
+            openContextMenu(rect.left, rect.bottom, media)
+          }}
+          onDoubleClick={(event) => event.stopPropagation()}
+          aria-label={`More actions for ${media.title}`}
+        >
+          <Icon name="more-horizontal" size={14} />
         </button>
         <div className={styles.tileCopy}>
           <span>{media.title}</span>
@@ -387,8 +415,15 @@ interface NextUpTarget {
 }
 
 function LibraryDetails({ media, config }: { media: MediaItem | null; config: CategoryConfig }) {
-  const { startPartyPlayback, openDetail, resolvingMedia, ratings, adaptCatalogItems } =
-    useAppState()
+  const {
+    startPartyPlayback,
+    openDetail,
+    resolvingMedia,
+    ratings,
+    adaptCatalogItems,
+    myList,
+    toggleMyList
+  } = useAppState()
 
   const [tab, setTab] = useState<DetailTab>('details')
   // The grid row this panel is handed comes from the browse index, which
@@ -696,6 +731,20 @@ function LibraryDetails({ media, config }: { media: MediaItem | null; config: Ca
                 now: the old "Mark as watched" needed an episode number this
                 panel never had, and quietly did nothing for series. */}
             <TitleStatusButton media={media} variant="action" />
+            {/* The pill only moves forward (planned goes to watched), so
+                taking a title off the plan from here used to mean marking
+                every episode watched and then clearing it. This is the
+                plan alone, the same as the card menu's Remove from plan. */}
+            {myList.has(media.id) && (
+              <button
+                type="button"
+                className={styles.action}
+                onClick={() => toggleMyList(media, false)}
+              >
+                <Icon name="x" size={15} />
+                Remove from plan
+              </button>
+            )}
           </div>
         </>
       )}

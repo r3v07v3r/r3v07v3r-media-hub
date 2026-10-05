@@ -7,9 +7,18 @@
 // (statusToasts.ts, OverlayContext's notificationTtlMs). Removing a dislike
 // offers no Undo: it is already the way back.
 //
+// The Movies, Series and Anime grids (LibraryTile in AnimeLibraryPage.tsx)
+// open the same card menu as MediaCard, on right-click and on a "..."
+// button, and a right-click does not also select the tile; the side panel
+// can take a title off the plan without the pill's trip through watched.
+// Those are read from the source: the components need the CSS-module
+// build to render, and what matters is which handler each event reaches.
+//
 // Run with: npx tsx tests/statusActions.test.ts
 
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
 
 import {
   dislikedToast,
@@ -71,6 +80,56 @@ check('the quick Undo toasts leave by themselves; other Undo toasts still wait',
     null
   )
   assert.ok((notificationTtlMs({ tone: 'info' }) ?? 0) > 0)
+})
+
+// --- the library grids' card menu ------------------------------------------
+
+const libraryPage = fs.readFileSync(
+  path.resolve(__dirname, '../src/renderer/src/components/category/AnimeLibraryPage.tsx'),
+  'utf8'
+)
+
+/** One top-level function's source, up to the next top-level function. */
+function functionSource(source: string, name: string): string {
+  const start = source.indexOf(`\nfunction ${name}(`)
+  assert.ok(start >= 0, `${name} not found`)
+  const rest = source.slice(start + 1)
+  const end = rest.search(/\n(export )?function /)
+  return end < 0 ? rest : rest.slice(0, end)
+}
+
+/** The body of the JSX handler `prop={...}` inside `source`. */
+function handlerSource(source: string, prop: string): string {
+  const start = source.indexOf(`${prop}={`)
+  assert.ok(start >= 0, `${prop} not found`)
+  let depth = 0
+  for (let i = start + prop.length + 1; i < source.length; i++) {
+    if (source[i] === '{') depth++
+    else if (source[i] === '}' && --depth === 0) return source.slice(start, i + 1)
+  }
+  throw new Error(`${prop} is not closed`)
+}
+
+check('a right-click on a library tile opens the card menu and does not select it', () => {
+  const tile = functionSource(libraryPage, 'LibraryTile')
+  const handler = handlerSource(tile, 'onContextMenu')
+  assert.match(handler, /preventDefault\(\)/)
+  assert.match(handler, /openContextMenu\(event\.clientX, event\.clientY, media\)/)
+  assert.ok(!handler.includes('onSelect'), 'the right-click handler selects the tile')
+})
+
+check('a library tile has a "..." button that opens the menu without selecting', () => {
+  const tile = functionSource(libraryPage, 'LibraryTile')
+  const at = tile.indexOf('More actions for')
+  assert.ok(at >= 0, 'no "..." button on the tile')
+  const button = tile.slice(tile.lastIndexOf('<button', at), at)
+  assert.match(button, /stopPropagation\(\)[\s\S]*openContextMenu\(/)
+})
+
+check('the library side panel can take a title off the plan on its own', () => {
+  const panel = functionSource(libraryPage, 'LibraryDetails')
+  assert.match(panel, /myList\.has\(media\.id\) &&/)
+  assert.match(panel, /toggleMyList\(media, false\)[\s\S]*Remove from plan/)
 })
 
 console.log(`\n${pass} passed`)

@@ -148,8 +148,11 @@ Playback is mpv, embedded inside the app's own window on Windows; there is no tr
 ### 4. Keep track — needs nothing
 
 - **One status per title:** not watched, planned, or watched. A pill on a title's page, in the
-  library side panel and on the Home hero cycles through the three; the right-click menu offers
-  **Plan to watch** and **Mark watched** (**Mark all watched** on a series) as separate items. Marking a whole series watched marks
+  library side panel and on the Home hero cycles through the three; the right-click menu (or the
+  **...** button on a card, in the Movies, Series and Anime grids too) offers
+  **Plan to watch** and **Mark watched** (**Mark all watched** on a series) as separate items, and
+  **Not interested**. A planned title can be taken off the plan from the same menu, or with
+  **Remove from plan** in the library side panel. Marking a whole series watched marks
   every aired episode, and clearing it offers an undo. Plan to watch and **Not interested** each
   show a toast with an **Undo** for a few seconds. On the episode list, **Mark season watched**
   acts on a season's aired episodes, and <kbd>Ctrl</kbd>- or <kbd>Shift</kbd>-clicking episodes
