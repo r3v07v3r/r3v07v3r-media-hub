@@ -30,6 +30,7 @@ import path from 'node:path'
 import { createDatabase } from '../src/main/media-hub/database'
 import {
   HISTORY_PENDING_MAX_ATTEMPTS,
+  HISTORY_PENDING_TTL_MS,
   historyPendingKey,
   historyRetryBatches,
   readHistoryPending,
@@ -37,6 +38,7 @@ import {
   holdRemovalsOnTheWay,
   removalsInFlight,
   removalsOwed,
+  retryFailure,
   settleHistoryRetry,
   writeHistoryPending,
   type HistoryPushOutcome,
@@ -216,6 +218,38 @@ check('a retry that fails counts an attempt, and ten are the limit', () => {
   assert.deepEqual(last.pending, {})
   assert.equal(last.abandoned.length, 1)
   assert.equal(last.abandoned[0].lastError, 'Request failed (502)')
+})
+
+check('a retry that never reached the service costs no attempt', () => {
+  // Offline or timed out: the service said nothing about the change. A
+  // machine left awake and offline must not spend every owed push's tries.
+  const pending = recordHistoryPush({}, outcome(), T0)
+  const [batch] = historyRetryBatches(pending, new Set(['tt0000001:1:2'])).batches
+  const settled = settleHistoryRetry(pending, batch, 'fetch failed', {
+    counted: false,
+    now: T0 + 60_000
+  })
+  assert.equal(settled.pending['simkl|tt0000001|1|2'].attempts, 0)
+  assert.equal(settled.pending['simkl|tt0000001|1|2'].lastError, 'fetch failed')
+  assert.equal(settled.abandoned.length, 0)
+  // An outage that outlasts the record lets the entry go all the same.
+  const late = settleHistoryRetry(pending, batch, 'fetch failed', {
+    counted: false,
+    now: T0 + HISTORY_PENDING_TTL_MS
+  })
+  assert.deepEqual(late.pending, {})
+  assert.equal(late.abandoned.length, 1)
+})
+
+check('which failures stop a service for the rest of the pass', () => {
+  // No answer, a 429 that outlasted its retry, or a 5xx: the service is
+  // not taking requests, and the rest of its batches wait for the next pass.
+  assert.deepEqual(retryFailure(undefined), { counts: false, stopsService: true })
+  assert.deepEqual(retryFailure(503), { counts: true, stopsService: true })
+  assert.deepEqual(retryFailure(429), { counts: true, stopsService: true })
+  // A 4xx is about that one request; the next batch is still worth sending.
+  assert.deepEqual(retryFailure(404), { counts: true, stopsService: false })
+  assert.deepEqual(retryFailure(401), { counts: true, stopsService: false })
 })
 
 check('a retry that gets through, or cannot be expressed, clears its entries', () => {

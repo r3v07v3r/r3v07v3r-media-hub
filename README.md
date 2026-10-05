@@ -188,7 +188,7 @@ allows an account 500 requests a day, shared with a linked phone.
 
 A mark, un-mark, season or whole title that does not reach a service (offline, an expired token, a
 rate limit) is kept and sent again with each sync, every half hour and on **Sync now**, up to ten
-times. The Tracking panel says how many are still waiting.
+times (a try made while offline does not count). The Tracking panel says how many are still waiting.
 
 - **Bring an existing history in** from **Control centre → General → Your library**: IMDb's ratings
   export (needs nothing) and a Letterboxd "Export Your Data" zip (needs TMDB connected, to match

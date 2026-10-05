@@ -223,17 +223,47 @@ export function historyRetryBatches(
 }
 
 /**
+ * What a failed retry means for the rest of the pass, from the HTTP status
+ * it failed with (undefined when there was no answer at all: offline, a
+ * timeout, a refused connection).
+ *
+ * `counts`: whether it costs the entries an attempt. A service that was
+ * never reached has said nothing about the change, and a machine left
+ * awake and offline for an afternoon would otherwise spend every owed
+ * push's ten tries on its own outage.
+ *
+ * `stopsService`: whether the service's remaining batches wait for the next
+ * pass. No answer, a 429 that outlasted its one delayed retry, or a 5xx
+ * says the service is not taking requests now, and every batch sent anyway
+ * would wait out the request timeout in turn while "Sync now" spins. A
+ * 4xx is about that one request, and the next batch is still worth sending.
+ */
+export function retryFailure(status: number | undefined): {
+  counts: boolean
+  stopsService: boolean
+} {
+  return {
+    counts: status !== undefined,
+    stopsService: status === undefined || status === 429 || status >= 500
+  }
+}
+
+/**
  * Folds a retry's outcome back in. `error` undefined is success and clears
  * the batch's entries; `null` is a push that could not be expressed to the
  * service at all, which no retry will change, so they are dropped as well.
- * A failure counts an attempt, and an entry that reaches the cap is let go
- * and returned as abandoned. Only entries still as the batch read them are
+ * A failure counts an attempt (unless `counted` is false: see retryFailure),
+ * and an entry that reaches the cap is let go and returned as abandoned. A
+ * failure that is not counted still lets go of an entry written longer ago
+ * than HISTORY_PENDING_TTL_MS before `now`, so an outage that never ends
+ * does not keep it for ever. Only entries still as the batch read them are
  * touched: a newer push for the same episode wins.
  */
 export function settleHistoryRetry(
   pending: PendingHistoryPushes,
   batch: HistoryRetryBatch,
-  error: string | null | undefined
+  error: string | null | undefined,
+  { counted = true, now = Date.now() }: { counted?: boolean; now?: number } = {}
 ): { pending: PendingHistoryPushes; abandoned: PendingHistoryPush[] } {
   const next = { ...pending }
   const abandoned: PendingHistoryPush[] = []
@@ -242,6 +272,15 @@ export function settleHistoryRetry(
     if (!entry || entry.at !== at) continue
     if (typeof error !== 'string') {
       delete next[key]
+      continue
+    }
+    if (!counted) {
+      if (now - entry.at >= HISTORY_PENDING_TTL_MS) {
+        delete next[key]
+        abandoned.push({ ...entry, lastError: error })
+      } else {
+        next[key] = { ...entry, lastError: error }
+      }
       continue
     }
     const attempts = entry.attempts + 1

@@ -33,7 +33,7 @@ import {
   resolveAnimeGroupTarget
 } from './animeSeasons'
 import { getDatabase } from './dbState'
-import { fetchJson } from './httpClient'
+import { fetchJson, type HttpError } from './httpClient'
 import { crossIdsForKitsu, kitsuIdForExternal } from './idBridge'
 import { handle } from './ipcGuard'
 import { backupBeforeRewrite } from './autoBackup'
@@ -155,10 +155,16 @@ function malTitleOf(kitsuId: string): { id: string; members?: string[]; season: 
   return { id: target.id, members: [target.id, ...siblings], season: target.season }
 }
 
+/** How a MAL progress push went. `malHttpStatus` is the HTTP status of a
+ *  failure, when MAL answered at all (tracking.ts's history retry reads it). */
+export interface MalPushResult {
+  malSynced: boolean
+  malError?: string
+  malHttpStatus?: number
+}
+
 /** One entry's PATCH — the way every MAL progress push lands. */
-async function patchMalListStatus(
-  push: MalEntryPush
-): Promise<{ malSynced: boolean; malError?: string }> {
+async function patchMalListStatus(push: MalEntryPush): Promise<MalPushResult> {
   try {
     const malId = await resolveMalIdForKitsu(push.id)
     if (!malId) return { malSynced: false }
@@ -173,7 +179,12 @@ async function patchMalListStatus(
     return { malSynced: true }
   } catch (error) {
     logError('mal:push-progress', error)
-    return { malSynced: false, malError: (error as Error).message }
+    const status = (error as HttpError)?.status
+    return {
+      malSynced: false,
+      malError: (error as Error).message,
+      ...(typeof status === 'number' ? { malHttpStatus: status } : {})
+    }
   }
 }
 
@@ -188,17 +199,20 @@ function pushIsForActiveProfile(profile: string | undefined): boolean {
 }
 
 /** One after another — a group is a handful of entries, and MAL paces its API. */
-async function sendMalPushes(
-  pushes: MalEntryPush[]
-): Promise<{ malSynced: boolean; malError?: string }> {
+async function sendMalPushes(pushes: MalEntryPush[]): Promise<MalPushResult> {
   let malSynced = false
-  let malError: string | undefined
+  let failure: MalPushResult | undefined
   for (const push of pushes) {
     const result = await patchMalListStatus(push)
     malSynced = malSynced || result.malSynced
-    malError = malError ?? result.malError
+    if (result.malError && !failure) failure = result
   }
-  return malError ? { malSynced, malError } : { malSynced }
+  if (!failure) return { malSynced }
+  return {
+    malSynced,
+    malError: failure.malError,
+    ...(failure.malHttpStatus !== undefined ? { malHttpStatus: failure.malHttpStatus } : {})
+  }
 }
 
 /**
@@ -239,7 +253,7 @@ export async function pushMalProgress(
      *  was made — see pushIsForActiveProfile. */
     profile?: string
   } = {}
-): Promise<{ malSynced: boolean; malError?: string }> {
+): Promise<MalPushResult> {
   if (item.type !== 'anime' || !String(item.id).startsWith('kitsu:')) return { malSynced: false }
   if (!malCredentials().accessToken) return { malSynced: false }
   if (!pushIsForActiveProfile(profile)) return { malSynced: false }
@@ -279,7 +293,7 @@ export async function pushMalTitleProgress(
     /** As pushMalProgress's. */
     profile?: string
   }
-): Promise<{ malSynced: boolean; malError?: string }> {
+): Promise<MalPushResult> {
   if (item.type !== 'anime' || !String(item.id).startsWith('kitsu:')) return { malSynced: false }
   if (!malCredentials().accessToken) return { malSynced: false }
   if (!pushIsForActiveProfile(profile)) return { malSynced: false }

@@ -284,7 +284,12 @@ which is sent a recount) in a durable record per profile
 (`historyRetry.ts`), stamped with the account it was owed to. It is sent
 again at the start of every half-hourly pass and every "Sync now", one
 request per service, title and direction, on the title's own push chain;
-ten failed tries and it is let go, and the log says so. A later push for
+ten failed tries and it is let go, and the log says so. A try that never
+reached the service (offline, a timeout) is not counted, though an entry
+is still let go 30 days after it was written; and a service that does not
+answer, or answers 429 or 5xx, is sent nothing more in that pass, so a
+service that is down holds up "Sync now" for one request, not one per
+title. A later push for
 the same episode replaces it, whichever way it went, and one that got
 through clears it. An owed change local has since moved away from (an add
 for an episode no longer watched here, a removal for one watched again) is

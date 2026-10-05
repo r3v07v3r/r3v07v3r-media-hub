@@ -100,7 +100,7 @@ import {
   unplanBecauseWatched,
   type PlannedSyncReport
 } from './watchlists'
-import { fetchJson, retryOnceOn429 } from './httpClient'
+import { fetchJson, retryOnceOn429, type HttpError } from './httpClient'
 import { mapWithLimit, type TaskPriority } from './taskScheduler'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
@@ -129,6 +129,7 @@ import {
   recordHistoryPush,
   removalsInFlight,
   removalsOwed,
+  retryFailure,
   settleHistoryRetry,
   watchKeyOf,
   writeHistoryPending,
@@ -188,6 +189,8 @@ import { imdbForSimklKeyedId, isSimklKeyedId } from './simklKeyedHistory'
 interface SimklSyncResult {
   simklSynced: boolean
   simklError?: string
+  /** The HTTP status of a failure, when Simkl answered at all. */
+  simklStatus?: number
 }
 
 /** Runs a Simkl sync/history POST, translating "not connected" vs. a caught error vs. success into the same three-way shape every mark/unmark handler returns. */
@@ -273,7 +276,12 @@ async function syncSimklHistory(
     return { simklSynced: true }
   } catch (error) {
     logError(`simkl:${pathname}`, error)
-    return { simklSynced: false, simklError: (error as Error).message }
+    const status = (error as HttpError)?.status
+    return {
+      simklSynced: false,
+      simklError: (error as Error).message,
+      ...(typeof status === 'number' ? { simklStatus: status } : {})
+    }
   }
 }
 
@@ -362,13 +370,14 @@ function keptMal(
   })
 }
 
-/** Sends one batch of owed changes. Undefined is success; a string is the
- *  failure; null is a push that cannot be expressed to that service at all. */
+/** Sends one batch of owed changes. `error` undefined is success; a string
+ *  is the failure, with the HTTP status when the service answered; null is
+ *  a push that cannot be expressed to that service at all. */
 async function sendHistoryRetry(
   batch: HistoryRetryBatch,
   profile: string,
   priority: TaskPriority
-): Promise<string | null | undefined> {
+): Promise<{ error: string | null | undefined; status?: number }> {
   const item = { ...batch.item, year: batch.item.year ?? '' }
   const seasons = bySeason(
     batch.rows
@@ -383,20 +392,23 @@ async function sendHistoryRetry(
         ? historyPayload(item, {})
         : titleHistoryPayload(item, seasons, animeSiblingsWhenGrouped())
       const result = await syncSimklHistory(path, body, priority)
-      return result.simklSynced ? undefined : (result.simklError ?? null)
+      if (result.simklSynced) return { error: undefined }
+      return { error: result.simklError ?? null, status: result.simklStatus }
     }
     case 'trakt': {
       const result = film
         ? await pushTraktHistory(item, {}, batch.action)
         : await pushTraktTitleHistory(item, seasons, batch.action)
-      return result.sent ? undefined : (result.error ?? null)
+      if (result.sent) return { error: undefined }
+      return { error: result.error ?? null, status: result.status }
     }
     case 'mal': {
       const result = await pushMalTitleProgress(item, {
         seasons: [...new Set(batch.rows.map((row) => row.season ?? 1))],
         profile
       })
-      return result.malSynced ? undefined : (result.malError ?? null)
+      if (result.malSynced) return { error: undefined }
+      return { error: result.malError ?? null, status: result.malHttpStatus }
     }
   }
 }
@@ -408,6 +420,11 @@ let historyRetryInFlight: Promise<void> | null = null
  * per service, title and direction, each on its title's own chain so it
  * stays in order with the pushes made since. Run at the start of every
  * watch-sync pass and every manual Sync. One at a time.
+ *
+ * A service that does not answer, or answers 429 or 5xx, gets no more of
+ * this pass's batches (retryFailure): with a dozen titles owed to a service
+ * that is down, sending each in turn would hold "Sync now" for the request
+ * timeout a dozen times over before it reported anything.
  */
 function retryHistoryPushes(priority: TaskPriority): Promise<void> {
   if (historyRetryInFlight) return historyRetryInFlight
@@ -435,17 +452,31 @@ async function runHistoryRetry(priority: TaskPriority): Promise<void> {
     for (const key of dropped) if (now[key]?.at === pending[key].at) delete now[key]
     writeHistoryPending(db, profile, now)
   }
+  const stopped = new Set<HistoryService>()
   for (const batch of batches) {
+    if (stopped.has(batch.service)) continue
     await titlePushQueue.run(titlePushKey(batch.item), async () => {
       // Whose history and whose account this is about, checked again after
       // the wait for the chain: a switch in between leaves it for later.
       if (db.activeProfile() !== profile) return
       if (trackingAccountMarks()[batch.service] !== marks[batch.service]) return
-      const error = await sendHistoryRetry(batch, profile, priority)
+      const { error, status } = await sendHistoryRetry(batch, profile, priority)
+      const failure = retryFailure(status)
+      if (typeof error === 'string' && failure.stopsService) stopped.add(batch.service)
+      if (error === null) {
+        logError(
+          'history:push-dropped',
+          new Error(
+            `dropped ${batch.action === 'add' ? 'adding' : 'removing'} ${batch.item.id} at ` +
+              `${batch.service}: it can no longer be expressed to that service`
+          )
+        )
+      }
       const settled = settleHistoryRetry(
         readHistoryPending(db, profile, trackingAccountMarks()),
         batch,
-        error
+        error,
+        { counted: failure.counts, now: Date.now() }
       )
       writeHistoryPending(db, profile, settled.pending)
       for (const entry of settled.abandoned) {

@@ -25,7 +25,7 @@ import type {
 } from '../../shared/media-hub/types'
 import { animeGroupingReady, resolveAnimeGroupTarget } from './animeSeasons'
 import { backupBeforeRewrite } from './autoBackup'
-import { fetchJson, retryOnceOn429 } from './httpClient'
+import { fetchJson, retryOnceOn429, type HttpError } from './httpClient'
 import { kitsuIdForExternal } from './idBridge'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
@@ -293,6 +293,8 @@ export async function traktStatus(): Promise<TraktStatus> {
 export interface TraktPushResult {
   sent: boolean
   error?: string
+  /** The HTTP status of a failure, when Trakt answered at all. */
+  status?: number
 }
 
 /** Sends one history body, logging and reporting a failure rather than
@@ -307,7 +309,12 @@ async function sendTraktHistory(
     return { sent: true }
   } catch (error) {
     logError(scope, error)
-    return { sent: false, error: (error as Error)?.message || String(error) }
+    const status = (error as HttpError)?.status
+    return {
+      sent: false,
+      error: (error as Error)?.message || String(error),
+      ...(typeof status === 'number' ? { status } : {})
+    }
   }
 }
 
