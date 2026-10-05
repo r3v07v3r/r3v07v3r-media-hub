@@ -110,6 +110,11 @@ episode you have not watched. Shows Simkl lists as watching, and shows you
 play on the phone, are added to the phone's own list. It only adds; see
 `docs/WATCHLIST-SYNC.md`.
 
+A title's page has **My List** and **Not interested** beside Play. Not
+interested keeps the title out of the phone's recommendations, and offers an
+Undo for a few seconds; press it again to take it back. It is kept on the
+phone only, like the desktop's.
+
 ## Debugging
 
 - `adb logcat -s R3Backend` — the backend's own output.
@@ -122,4 +127,6 @@ play on the phone, are added to the phone's own list. It only adds; see
   show them yet.
 - Episodes watched on the phone reaching the desktop's own history: the catch-up
   runs from Simkl into the phone only.
+- Not interested marks shared between the phone and the desktop: each keeps its
+  own, and neither is sent to the tracking services.
 - 32-bit devices (`armeabi-v7a`): needs Termux's `arm` Node staged the same way.

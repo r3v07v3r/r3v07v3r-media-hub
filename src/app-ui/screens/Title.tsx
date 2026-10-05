@@ -125,6 +125,28 @@ function CheckIcon() {
   )
 }
 
+function ThumbsDownIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="18"
+      height="18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.7a2 2 0 0 0-2 1.7l-1.4 9A2 2 0 0 0 4.3 15H10z" />
+      <path d="M17 2h3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-3" />
+    </svg>
+  )
+}
+
+/** How long the Undo after Not interested stays, as on the desktop's toast. */
+const DISLIKE_UNDO_MS = 8000
+
 /** The small mark beside a watched episode's number — the check from My
  *  List, scaled down to sit inside the row rather than compete with it. */
 function WatchedTick() {
@@ -380,6 +402,62 @@ export default function Title() {
     )
   }, [item, isTracked, trackedLoaded, stateForItem, refreshWatchState])
 
+  // Not interested: the same local dislike the desktop's card menu sets
+  // (disliked:add / disliked:remove on this device's own database). It
+  // keeps the title out of this device's recommendations; nothing is sent
+  // to the tracking services, and the desktop keeps its own. Read from the
+  // disliked list for this title, with an optimistic override held against
+  // the answer it was made over, the same way My List's is above.
+  const dislikedState = useAsync<{ id: string; disliked: boolean } | null>(() => {
+    if (!itemId) return Promise.resolve(null)
+    const mediaHub = api()
+    if (!mediaHub) return Promise.reject(new Error('Not connected to a backend.'))
+    return mediaHub.disliked
+      .list()
+      .then(({ disliked }) => ({ id: itemId, disliked: disliked.some((row) => row.id === itemId) }))
+  }, [itemId])
+  const dislikedForItem = itemId && dislikedState.data?.id === itemId ? dislikedState.data : null
+  const [pendingDisliked, setPendingDisliked] = useState<{
+    id: string
+    disliked: boolean
+    basis: typeof dislikedForItem
+  } | null>(null)
+  const isDisliked =
+    item && pendingDisliked?.id === item.id && pendingDisliked.basis === dislikedForItem
+      ? pendingDisliked.disliked
+      : Boolean(dislikedForItem?.disliked)
+  // The one-tap way back after Not interested, for a few seconds. The
+  // button itself also takes it back, but the line says what happened.
+  const [dislikeUndoFor, setDislikeUndoFor] = useState<string | null>(null)
+  useEffect(() => {
+    if (!dislikeUndoFor) return
+    const timer = setTimeout(() => setDislikeUndoFor(null), DISLIKE_UNDO_MS)
+    return () => clearTimeout(timer)
+  }, [dislikeUndoFor])
+  const refreshDisliked = dislikedState.refresh
+  const setDisliked = useCallback(
+    (disliked: boolean) => {
+      if (!item || !dislikedForItem) return
+      const mediaHub = api()
+      if (!mediaHub) return
+      const basis = dislikedForItem
+      setPendingDisliked({ id: item.id, disliked, basis })
+      setDislikeUndoFor(disliked ? item.id : null)
+      const write = disliked ? mediaHub.disliked.add(item) : mediaHub.disliked.remove(item.id)
+      write.then(
+        (result) => {
+          setPendingDisliked({ id: item.id, disliked: result.disliked, basis })
+          refreshDisliked()
+        },
+        () => {
+          setPendingDisliked({ id: item.id, disliked: !disliked, basis })
+          setDislikeUndoFor(null)
+        }
+      )
+    },
+    [item, dislikedForItem, refreshDisliked]
+  )
+
   const [overviewExpanded, setOverviewExpanded] = useState(false)
 
   if (!kind || !id) return <StatusNote tone="error">Title not found.</StatusNote>
@@ -515,7 +593,25 @@ export default function Title() {
             >
               {isTracked ? <CheckIcon /> : <PlusIcon />}
             </button>
+            <button
+              type="button"
+              className="title-screen__mylist title-screen__dislike"
+              aria-pressed={isDisliked}
+              aria-label={isDisliked ? 'Remove Not interested' : 'Not interested'}
+              onClick={() => setDisliked(!isDisliked)}
+              disabled={!dislikedForItem}
+            >
+              <ThumbsDownIcon />
+            </button>
           </div>
+          {isDisliked && item && dislikeUndoFor === item.id && (
+            <p className="status-note title-screen__undo" role="status">
+              Marked Not interested. It won&apos;t be recommended here.
+              <button type="button" onClick={() => setDisliked(false)}>
+                Undo
+              </button>
+            </p>
+          )}
           {playStatus.stage === 'resolving' && <StatusNote>Resolving stream…</StatusNote>}
           {playStatus.stage === 'starting' && <StatusNote>Starting playback…</StatusNote>}
           {playStatus.stage === 'found' && <StatusNote>{playStatus.message}</StatusNote>}

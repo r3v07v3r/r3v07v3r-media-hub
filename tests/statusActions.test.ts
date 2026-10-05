@@ -26,6 +26,10 @@
 // launch is the fresh answer. The library side panel keeps the title it
 // was showing when that title leaves every shelf (librarySelection.ts).
 //
+// The phone and TV Title screen has a Not interested button beside My
+// List, on the bridge's disliked:add / disliked:remove (the same preload
+// api app-ui is typed against), with a one-tap Undo after a dislike.
+//
 // Run with: npx tsx tests/statusActions.test.ts
 
 import assert from 'node:assert/strict'
@@ -42,6 +46,8 @@ import { hideDislikedDefault, logoutSettings } from '../src/main/media-hub/prefe
 import { holdEntries, holdTouchedEntries } from '../src/renderer/src/lib/mediaHub/heldFeed'
 import { resolveLibrarySelection } from '../src/renderer/src/lib/mediaHub/librarySelection'
 import type { HomeRail, MediaItem, Recommendation } from '../src/renderer/src/types'
+import { createApi, type ApiTransport } from '../src/preload/api'
+import { MEDIA_HUB_CHANNELS } from '../src/shared/media-hub/ipc-channels'
 import {
   applyWatchStateFilters,
   filterStateFromSearchParams
@@ -352,6 +358,43 @@ check('the side panel keeps the selected title after it leaves every shelf', () 
   assert.equal(resolveLibrarySelection([[hero, fresh]], picked, hero), fresh)
   assert.equal(resolveLibrarySelection([[hero]], picked, hero), picked)
   assert.equal(resolveLibrarySelection([[hero]], null, hero), hero)
+})
+
+// --- the phone's Not interested ---------------------------------------------
+
+check('the api app-ui is typed against reaches the disliked channels', () => {
+  const calls: { channel: string; args: unknown[] }[] = []
+  const transport: ApiTransport = {
+    invoke: <T>(channel: string, ...args: unknown[]) => {
+      calls.push({ channel, args })
+      return Promise.resolve(undefined as T)
+    },
+    on: () => () => {},
+    send: () => {}
+  }
+  const api = createApi(transport).mediaHub
+  const item = { id: 'tt1', type: 'movie', title: 'Dune' } as Parameters<typeof api.disliked.add>[0]
+  void api.disliked.add(item)
+  void api.disliked.remove('tt1')
+  void api.disliked.list()
+  assert.deepEqual(
+    calls.map((call) => call.channel),
+    [
+      MEDIA_HUB_CHANNELS.dislikedAdd,
+      MEDIA_HUB_CHANNELS.dislikedRemove,
+      MEDIA_HUB_CHANNELS.dislikedList
+    ]
+  )
+  assert.deepEqual(calls[1].args, [{ id: 'tt1' }])
+})
+
+check('the phone Title screen sets and takes back Not interested, with an Undo', () => {
+  const title = fs.readFileSync(path.resolve(__dirname, '../src/app-ui/screens/Title.tsx'), 'utf8')
+  assert.match(title, /mediaHub\.disliked\.add\(item\)/)
+  assert.match(title, /mediaHub\.disliked\.remove\(item\.id\)/)
+  const button = title.slice(title.indexOf('title-screen__dislike'))
+  assert.match(button, /onClick=\{\(\) => setDisliked\(!isDisliked\)\}/)
+  assert.match(button, /setDisliked\(false\)\}>\s*Undo/)
 })
 
 console.log(`\n${pass} passed`)
