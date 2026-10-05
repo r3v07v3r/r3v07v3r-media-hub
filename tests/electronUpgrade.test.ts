@@ -1,6 +1,6 @@
-// What the unit tests may not do with the `electron` package: load it.
+// What moving from Electron 39 to 44 must not break. Three parts.
 //
-// From Electron 42 the package has no postinstall, and its index.js downloads
+// The unit tests may not load the `electron` package. From Electron 42 the package has no postinstall, and its index.js downloads
 // the ~100 MB binary the first time anything requires it with no binary
 // present. The service modules that resolve Electron lazily (logger.ts,
 // settingsStore.ts, streamCache.ts, watchProviders.ts) used to require it and
@@ -19,7 +19,14 @@
 // itself and stops when it is missing, which is what a fresh install leaves
 // from Electron 42 on. It is driven here against a fake package directory
 // whose install.js only counts its runs, never against the real one.
-// Run with: npx tsx tests/electronBinary.test.ts
+//
+// And clipboard.writeText returns a promise from Electron 44. The
+// clipboard:write handler in appIpc.ts awaits it, so the renderer's "copied"
+// is not sent before the write, and a failed write reaches the caller. That
+// part loads appIpc.ts with `electron` answered by the headless stand-in,
+// the arrangement the phone backend runs in, and drives the handler through
+// its ipcMain the way the bridge does.
+// Run with: npx tsx tests/electronUpgrade.test.ts
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -27,14 +34,19 @@ import Module from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 
+const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-electron-upgrade-'))
+process.env.R3_USER_DATA = scratch
+
 const requested: string[] = []
 const standIn = { standIn: true }
+/** What `require('electron')` answers; the clipboard part swaps in the headless stand-in. */
+let electronAnswer: unknown = standIn
 const loader = Module as unknown as { _load: (request: string, ...rest: unknown[]) => unknown }
 const realLoad = loader._load
 loader._load = function (request: string, ...rest: unknown[]) {
   if (request === 'electron') {
     requested.push(request)
-    return standIn
+    return electronAnswer
   }
   return realLoad.call(this, request, ...rest)
 }
@@ -153,6 +165,71 @@ fs.writeFileSync(path.join(__dirname, 'path.txt'), 'electron')`
     assert.equal(scripts.predev, 'node scripts/ensure-electron.mjs')
     assert.equal(scripts.prestart, 'node scripts/ensure-electron.mjs')
   })
+
+  console.log('\nclipboard:write on Electron 44')
+  const shim = await import('../src/headless/electronShim')
+  electronAnswer = shim
+  const { registerAppIpc } = await import('../src/main/media-hub/appIpc')
+  const { MEDIA_HUB_CHANNELS } = await import('../src/shared/media-hub/ipc-channels')
+  registerAppIpc()
+  // Who is calling, built the way src/headless/bridge.ts builds it.
+  const window = new shim.BrowserWindow()
+  const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame }
+  const copy = (text: string): Promise<unknown> =>
+    shim.ipcMain.dispatchInvoke(event, MEDIA_HUB_CHANNELS.clipboardWrite, [text])
+  const clipboard = shim.clipboard as { writeText: (text: string) => unknown }
+  const syncWriteText = clipboard.writeText
+
+  await check('ok is not answered until the write has finished', async () => {
+    let finish: () => void = () => undefined
+    const written: string[] = []
+    clipboard.writeText = (text: string) =>
+      new Promise<void>((resolve) => {
+        finish = () => {
+          written.push(text)
+          resolve()
+        }
+      })
+    try {
+      let answered = false
+      const pending = copy('magnet:?xt=one').then((value) => {
+        answered = true
+        return value
+      })
+      await new Promise((resolve) => setImmediate(resolve))
+      assert.equal(answered, false, 'answered before the clipboard write settled')
+      finish()
+      assert.deepEqual(await pending, { ok: true })
+      assert.deepEqual(written, ['magnet:?xt=one'])
+    } finally {
+      clipboard.writeText = syncWriteText
+    }
+  })
+
+  await check('a failed write reaches the caller instead of an unhandled rejection', async () => {
+    clipboard.writeText = () => Promise.reject(new Error('clipboard is busy'))
+    try {
+      await assert.rejects(copy('anything'), /clipboard is busy/)
+    } finally {
+      clipboard.writeText = syncWriteText
+    }
+  })
+
+  await check(
+    'the synchronous writeText of Electron 39 and the shim still answers ok',
+    async () => {
+      const written: string[] = []
+      clipboard.writeText = (text: string) => {
+        written.push(text)
+      }
+      try {
+        assert.deepEqual(await copy('plain text'), { ok: true })
+        assert.deepEqual(written, ['plain text'])
+      } finally {
+        clipboard.writeText = syncWriteText
+      }
+    }
+  )
 
   console.log(`\n${pass} passed`)
 }
