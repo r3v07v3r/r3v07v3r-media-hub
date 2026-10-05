@@ -53,8 +53,13 @@ const ERROR_TTL_MS = 10_000
  * anywhere. Such a toast now stays until the action is taken or it is
  * dismissed with its own close control (NotificationLayer offers one).
  */
-function notificationTtlMs(notification: Pick<AppNotification, 'tone' | 'action'>): number | null {
-  // Anything offering an action stays until it is used or dismissed: an
+// eslint-disable-next-line react-refresh/only-export-components -- exported for tests/statusActions.test.ts
+export function notificationTtlMs(
+  notification: Pick<AppNotification, 'tone' | 'action' | 'durationMs'>
+): number | null {
+  // A toast that names its own lifetime keeps it — see durationMs.
+  if (notification.durationMs !== undefined) return notification.durationMs
+  // Anything else offering an action stays until it is used or dismissed: an
   // "Undo" that vanishes four seconds after a sixty-episode mark is not a
   // way back. The close button is always there.
   if (notification.action) return null

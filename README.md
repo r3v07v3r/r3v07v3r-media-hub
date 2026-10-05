@@ -150,7 +150,8 @@ Playback is mpv, embedded inside the app's own window on Windows; there is no tr
 - **One status per title:** not watched, planned, or watched. A pill on a title's page, in the
   library side panel and on the Home hero cycles through the three; the right-click menu offers
   **Plan to watch** and **Mark watched** (**Mark all watched** on a series) as separate items. Marking a whole series watched marks
-  every aired episode, and clearing it offers an undo. On the episode list, **Mark season watched**
+  every aired episode, and clearing it offers an undo. Plan to watch and **Not interested** each
+  show a toast with an **Undo** for a few seconds. On the episode list, **Mark season watched**
   acts on a season's aired episodes, and <kbd>Ctrl</kbd>- or <kbd>Shift</kbd>-clicking episodes
   selects several to mark at once. Lists are separate from status.
 - **Rate what you have seen** out of 10 on a title's page. Each profile keeps its own scores, and

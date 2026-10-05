@@ -53,6 +53,7 @@ import {
   forgetContinueWatching,
   rememberTrackedId
 } from '@renderer/lib/mediaHub/startupSnapshot'
+import { plannedToast } from '@renderer/lib/mediaHub/statusToasts'
 import {
   startupContinueWatchingFallback,
   startupTrackedIdsFallback,
@@ -180,7 +181,10 @@ interface AppStateValue {
   // optimistic local update on toggle so the UI doesn't wait on the IPC
   // round trip.
   myList: Set<string>
-  toggleMyList: (media: MediaItem) => void
+  /** Plans or un-plans a title. With `to`, a no-op when the title is
+   *  already there: what an Undo calls, so a late press cannot flip it the
+   *  other way. Putting a title on the plan raises a toast with an Undo. */
+  toggleMyList: (media: MediaItem, to?: boolean) => void
   /**
    * The one status a title has — not watched, plan to watch, watched —
    * set as a whole. Main decides what that takes (every aired episode of
@@ -240,7 +244,9 @@ interface AppStateValue {
    *  create/delete: a backup from another machine carries that machine's
    *  profile ids, and they are merged into settings by the import. */
   refreshProfiles: () => void
-  toggleDisliked: (media: MediaItem) => void
+  /** Same shape as toggleMyList, `to` included. The toast and its Undo are
+   *  raised by the caller, which knows which way the click went. */
+  toggleDisliked: (media: MediaItem, to?: boolean) => void
 
   // Continue Watching — seeded from the media-hub backend's
   // home:personalized (episode-level watch tracking, not a mock array —
@@ -525,6 +531,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // neutral starting point: it renders saved titles as unsaved, and the
   // Add control it produces calls a toggle that removes them.
   const [myList, setMyList] = useState<Set<string>>(startupTrackedIdsFallback)
+  // What toggleMyList's `to` is checked against. An Undo runs seconds after
+  // the render that created it, so it reads the plan from here rather than
+  // from the closure.
+  const myListRef = useRef(myList)
+  useEffect(() => {
+    myListRef.current = myList
+  }, [myList])
   const [dislikedIds, setDislikedIds] = useState<Set<string>>(new Set())
   // Seeded from the same remembered feed useMediaHubHomeFeed falls back
   // to, so the row this component owns and the row that hook reports
@@ -893,8 +906,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     })
   }, [refreshPartyStatus, pushNotification])
 
+  // The plan toast's Undo calls toggleMyList from inside toggleMyList, so
+  // it goes through a ref, filled in once toggleMyList exists just below.
+  const toggleMyListRef = useRef<(media: MediaItem, to?: boolean) => void>(() => {})
   const toggleMyList = useCallback(
-    (media: MediaItem) => {
+    (media: MediaItem, to?: boolean) => {
+      if (to !== undefined && myListRef.current.has(media.id) === to) return
       // This used to refuse the click outright when `media.id` was not
       // expressible to a tracking service, on the grounds that such an id
       // could only have come from mockData's demo pool (the source of the
@@ -946,6 +963,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             forgetContinueWatching(media.id)
           }
           homeFeed.refresh()
+          // A plan is one click from a card's menu, and on a recommendation
+          // row it is also what takes the card out of the row; the toast's
+          // Undo is the one-click way back. See statusToasts.ts.
+          if (result?.tracked === true) {
+            pushNotification(
+              plannedToast(media, activeProfileId, () => toggleMyListRef.current(media, false))
+            )
+          }
         })
         .catch(() => {
           // Best-effort — the optimistic local toggle above already reflects
@@ -953,11 +978,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // refresh, not a broken UI in the moment.
         })
     },
-    [homeFeed]
+    [homeFeed, pushNotification, activeProfileId]
   )
+  useEffect(() => {
+    toggleMyListRef.current = toggleMyList
+  }, [toggleMyList])
 
   const toggleDisliked = useCallback(
-    (media: MediaItem) => {
+    (media: MediaItem, to?: boolean) => {
       const api = window.api?.mediaHub
       // The write goes out once the optimistic set is decided, then the hook
       // is re-read so its own copy — the one that reseeds this state on the
@@ -967,6 +995,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         void write?.then(() => dislikedIdsResult.refresh()).catch(() => {})
       }
       setDislikedIds((prev) => {
+        if (to !== undefined && prev.has(media.id) === to) return prev
         const next = new Set(prev)
         if (next.has(media.id)) {
           next.delete(media.id)
@@ -1986,6 +2015,15 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // which no single press puts back, and when clearing it dropped
           // every dated viewing, which the next press would replace with
           // one stamped now.
+          // A plan from the pill gets the same toast and Undo as one from
+          // the card menu. Only a title that was not planned before: the
+          // Undo takes it off the plan, which is not where it started
+          // otherwise.
+          if (status === 'planned' && !wasPlanned && !episodes) {
+            pushNotification(
+              plannedToast(media, result.profileId, () => toggleMyList(media, false))
+            )
+          }
           const worthAToast =
             !episodes &&
             viewings > 0 &&
@@ -2061,7 +2099,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           })
         })
     },
-    [homeFeed, watchedIdsResult, pushNotification, myList]
+    [homeFeed, watchedIdsResult, pushNotification, myList, toggleMyList]
   )
 
   const partyPanelReportedOpen = useRef<boolean | null>(null)
