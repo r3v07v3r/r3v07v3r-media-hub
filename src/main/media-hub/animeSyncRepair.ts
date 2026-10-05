@@ -10,6 +10,12 @@
 // show (tracking.ts's underShow); version 2 of this repair moves the rows
 // already written.
 //
+// A third thing strands rows without writing any: the grouping itself
+// changing which id fronts a show, or the order of its seasons. From the
+// first pass after the ledger exists that is followed as it happens
+// (keepAnimeHistoryWithShows below, animeRegroup.ts). Version 3 of the
+// repair places what such a change left behind before then.
+//
 // WHAT WENT WRONG. Until those landed, MAL's reconcile-apply wrote every
 // episode it pulled down under whichever Kitsu id MAL itself had matched,
 // at a hardcoded season 1. For a franchise this app merges into one show
@@ -37,10 +43,25 @@
 // instead, so it can wait for grouping and simply try again next launch if
 // it is not ready yet.
 
+import type { CatalogItem } from '../../shared/media-hub/types'
 import type { ContentIdRemap } from './database'
-import { animeGroupingReady, resolveAnimeGroupTarget } from './animeSeasons'
+import {
+  animeGroupRecordsOf,
+  followAnimeRegroup,
+  strandedSeasonMoves,
+  type AnimeHistoryMove
+} from './animeRegroup'
+import {
+  animeGroupingReady,
+  cachedTvdbSeries,
+  currentAnimeGroups,
+  groupedIdsFor,
+  resolveAnimeGroupTarget,
+  seasonMatchesPage
+} from './animeSeasons'
 import { getDatabase } from './dbState'
 import { logError } from './logger'
+import { requestRecommendationsRebuild } from './recommendations'
 import { notifyLibraryChanged } from './rendererBridge'
 import { readSettings, writeSettings } from './settingsStore'
 
@@ -52,11 +73,101 @@ import { readSettings, writeSettings } from './settingsStore'
  *
  * 2: rows written from a later season's own page, which went on being
  * written after version 1 ran.
+ *
+ * 3: the seasons of an id that once fronted its show. Version 2 could place
+ * only that id's own season and left the rest; where each of the rest
+ * belongs can be worked out, they are placed (animeRegroup.ts's
+ * placeStrandedSeasons).
  */
-const REPAIR_VERSION = 2
+const REPAIR_VERSION = 3
 
 function animeRepairDone(): boolean {
   return Number(readSettings().animeIdRepairVersion || 0) >= REPAIR_VERSION
+}
+
+/**
+ * Moves anime rows to where the grouping now in the catalog puts them, and
+ * notes that grouping as the one they are filed under — animeRegroup.ts
+ * has the rules. Returns how many rows moved.
+ *
+ * Called by catalog.ts at the two moments the grouping in the catalog
+ * changes hands: when a pass lands, and just before a new crawl overwrites
+ * a grouped catalog with a raw one (the last chance to note a grouping no
+ * pass since the ledger existed has reported). The repair job calls it as
+ * well, for a pass that landed and whose rows never moved because the app
+ * closed between the two writes. With nothing changed it is one small read
+ * and a comparison.
+ *
+ * Never throws: it runs inside the grouping pass's own completion, and a
+ * failure here must not cost the catalog the grouping it just earned. The
+ * ledger is only written with the moves, so a failed run is simply retried
+ * by the next caller.
+ */
+export function keepAnimeHistoryWithShows(): number {
+  try {
+    // A raw catalog has no groups in it. Compared against that, every show
+    // on record would look as if it had come apart. See animeGroupingReady.
+    if (!animeGroupingReady()) return 0
+    // And no catalog at all has no groups for the same wrong reason.
+    const groups = currentAnimeGroups()
+    if (!groups) return 0
+    const result = followAnimeRegroup(
+      getDatabase(),
+      animeGroupRecordsOf(groups, cachedTvdbSeries),
+      seasonMatchesPage
+    )
+    for (const miss of result.left) {
+      logError('anime:regroup', `${miss.id} left where it is: ${miss.why}`)
+    }
+    if (result.moved > 0) {
+      // Same reset as the repair below: nothing on screen keyed by the old
+      // ids or seasons is right any more, and the ranking read those rows.
+      notifyLibraryChanged('anime-regroup', 'all')
+      requestRecommendationsRebuild()
+    }
+    return result.moved
+  } catch (error) {
+    logError('anime:regroup', error)
+    return 0
+  }
+}
+
+/**
+ * What placeStrandedSeasons needs to know about the show `id` is a later
+ * season of now. The episode counts are read only if asked for: they cost a
+ * parse of the whole catalog, and almost no id has anything stranded.
+ */
+function strandedShow(id: string, showId: string): Parameters<typeof strandedSeasonMoves>[2] {
+  const db = getDatabase()
+  const members = [showId, ...(groupedIdsFor(showId) || [])]
+  let counts: Map<string, number> | null = null
+  const episodesOf = (member: string): number | null => {
+    if (!counts) {
+      counts = new Map()
+      // Every member but the first has an index row that is its own: only
+      // the id fronting a show is ever refreshed with the whole show's
+      // totals. The first member's own count is its catalog entry's
+      // episode list, which grouping leaves as it was.
+      for (const item of db.indexByIds(members).items) {
+        if (item.type === 'anime' && item.id !== showId) {
+          counts.set(item.id, item.episodeCounts?.totalEpisodes ?? 0)
+        }
+      }
+      const front = (
+        db.getCache<CatalogItem[]>('catalog:v2:anime', { allowExpired: true }) || []
+      ).find((item) => String(item.id) === showId)
+      if (front) counts.set(showId, front.videos?.length ?? 0)
+    }
+    return counts.get(member) || null
+  }
+  return {
+    group: { id: showId, members, series: cachedTvdbSeries(showId) },
+    episodesOf,
+    // The siblings the index remembers this id having, from when it
+    // fronted the show: grouped_ids is written for a fronting id and never
+    // cleared.
+    remembered: db.indexByIds([id]).items.find((item) => item.type === 'anime')?.groupedIds
+  }
 }
 
 /**
@@ -78,18 +189,22 @@ export function repairAnimeSyncIds(): { repaired: number; ran: boolean } {
   try {
     const db = getDatabase()
     const mappings = new Map<string, ContentIdRemap>()
-    // history() is scoped to the active profile, but the ids it turns up
-    // are not profile-specific facts — "this kitsu id is season 3 of that
-    // show" is true for everybody. remapContentIds then applies each
-    // mapping across every profile, which is what lets one pass repair an
-    // install whose other profiles nobody has opened yet.
-    for (const entry of db.history()) {
-      const id = String(entry.id || '')
-      if (!id.startsWith('kitsu:') || mappings.has(id)) continue
+    const stranded: AnimeHistoryMove[] = []
+    // Every profile's ids, not the active one's: "this kitsu id is season 3
+    // of that show" is true for everybody, remapContentIds applies each
+    // mapping across every profile, and an id only another profile holds
+    // rows under needs the repair as much.
+    for (const id of db.animeHistoryIds()) {
+      if (mappings.has(id)) continue
       const target = resolveAnimeGroupTarget(id)
       // Same id back means this title is not a merged sibling — either the
       // canonical show itself or an ungrouped title, both already correct.
       if (target.id === id) continue
+      // Its place in the group has to be its season on the show's page, or
+      // the rows would land on a different season and mark it watched (see
+      // seasonMatchesPage). Where that cannot be shown they stay where they
+      // are, under an id that still opens as itself.
+      if (!seasonMatchesPage(target.id, id, target.season)) continue
       // Every row of a later season is that one season of the show,
       // whatever season the row carries: the old sync wrote a 1, but a row
       // written from the season's own page carries Kitsu's label for the
@@ -98,9 +213,18 @@ export function repairAnimeSyncIds(): { repaired: number; ran: boolean } {
       // the one kind of row this cannot be said of — an id that once
       // fronted the whole show — rather than guess where it goes.
       mappings.set(id, { fromId: id, toId: target.id, season: target.season })
+      // That one kind of row: worked out here, while the rows are still as
+      // they were written, and moved after the remap has taken the id's own
+      // season. What cannot be placed is named in the log and stays.
+      const seasons = strandedSeasonMoves(db, id, strandedShow(id, target.id))
+      stranded.push(...seasons.moves)
+      for (const miss of seasons.left) {
+        logError('anime:sync-repair', `${miss.id} left where it is: ${miss.why}`)
+      }
     }
 
-    const repaired = mappings.size ? db.remapContentIds([...mappings.values()]) : 0
+    let repaired = mappings.size ? db.remapContentIds([...mappings.values()]) : 0
+    if (stranded.length) repaired += db.moveAnimeHistory({ moves: stranded }).history
     const settings = readSettings()
     settings.animeIdRepairVersion = REPAIR_VERSION
     writeSettings(settings)

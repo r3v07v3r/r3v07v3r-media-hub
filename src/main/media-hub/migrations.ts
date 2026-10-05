@@ -512,6 +512,35 @@ const titleSearchKey: Migration = {
   }
 }
 
+/**
+ * Migration 6 — the grouping anime rows are filed under.
+ *
+ * A merged anime's history is addressed by the id that fronts the show and
+ * a season that is the member's position in it, and both change when the
+ * grouping pass comes out differently (animeRegroup.ts). Moving the rows
+ * needs the grouping they were written under, and by the time a new one
+ * lands the old one is gone: the catalog blob that held it was overwritten
+ * by the raw crawl minutes earlier.
+ *
+ * A table rather than a catalog_cache row because it is not a cache.
+ * Nothing can refetch it, the cache is pruned by age, and what it describes
+ * is the history table's own rows. One row holding the whole list: it is
+ * only ever read and replaced whole, in the transaction that moves the rows.
+ *
+ * Starts empty. No grouping exists yet when a migration runs; the first
+ * pass after it records one.
+ */
+const animeGroupLedger: Migration = {
+  name: 'anime-group-ledger',
+  apply(sql) {
+    sql.exec(`CREATE TABLE anime_group_ledger(
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      groups_json TEXT NOT NULL,
+      recorded_at TEXT NOT NULL
+    )`)
+  }
+}
+
 /** Ordered, and the order IS the version. Append only. */
 const MIGRATIONS: readonly Migration[] = [
   baseline,
@@ -519,7 +548,8 @@ const MIGRATIONS: readonly Migration[] = [
   catalogIndex,
   airedEpisodes,
   demoGhostHistoryCleanup,
-  titleSearchKey
+  titleSearchKey,
+  animeGroupLedger
 ]
 
 /** How many migrations exist — a database at this version is fully current. */

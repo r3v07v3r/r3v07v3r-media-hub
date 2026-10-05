@@ -116,6 +116,15 @@ be split into "nothing answered" (do nothing) and "everything answered,
 with nothing in it" (a removal), or the one case this half exists for is
 the one case it never handles.
 
+**A list that was not read has not answered either.** The background pull
+leaves Simkl's lists unread when Simkl says nothing has changed (see "When
+Simkl's lists are read", below). Simkl then counts exactly as a service
+that errored: it is not evidence this pass, no title that came from it can
+be removed, and the tags its last real read left behind are carried over,
+where they can only hold a removal back. It is never counted as having
+answered with an empty list, which would remove every title this app ever
+pulled from it.
+
 ### 6. A removal that has not landed yet suppresses its own undo
 
 A delete a service rejects is queued — `planned:pending-removals` — and
@@ -207,6 +216,50 @@ carried stays: the status reads planned again. Taking it off the plan is
 "Remove from plan", the evidence-gated removal of rule 3, on purpose a
 separate action.
 
+## When Simkl's lists are read
+
+Simkl counts requests per person, not per device (500 a day on a free
+account), and a phone linked to the desktop uses the desktop's own Simkl
+sign-in, so every device draws on one allowance. Simkl also asks every
+client to read `/sync/activities`, one small request, before fetching any
+list, and suspends clients that fetch lists without it.
+
+So the half-hourly background sync (`src/main/media-hub/watchSync.ts`)
+asks that one question first and reads only what moved:
+
+- **The three plan-to-watch lists** are fetched when Simkl's activity
+  stamp for films, shows or anime differs from the one they were last read
+  under, and once a day even if none does. The daily read is there because
+  some things on this side change what a read would do without touching
+  Simkl: a queued removal given up on (rule 6), sync switched back on, a
+  title that came from Simkl and has since left Trakt as well.
+- **The watched library the desktop's review panel is compared against**
+  is fetched when the films stamp moved, or when the set of films watched
+  here changed (a film marked here whose push to Simkl failed moves only
+  this side), and only if the app's interface has asked for that panel
+  since it started. The phone and TV app never do, so there it is never
+  fetched.
+- **Trakt and MyAnimeList** have no such question to ask, and are read
+  every half hour as before.
+
+On a day when nothing changes that is one Simkl request per half hour
+instead of five. What is **owed** is not gated: plan changes a service
+refused (rule 6) and watch-history decisions still queued are retried on
+every pass, whatever Simkl said.
+
+If the question itself fails, nothing behind it is fetched and Simkl is
+reported with that error. A refusal Simkl sent (a spent allowance, a
+server error) is waited out for longer each time it repeats, up to four
+hours; a refused sign-in is asked again every six hours; a request that
+never reached Simkl (this machine was offline) is simply asked again at
+the next half hour.
+
+"Sync now" is not gated. It reads every connected service, every time.
+
+The record of what was read is kept per profile and per Simkl account, and
+is shared with the phone and TV app's catch-up (below), so the two of them
+read Simkl's lists once per change between them rather than once each.
+
 ## What this deliberately does not do
 
 - **No merging of what a "list" means.** Trakt's watchlist, Simkl's
@@ -232,23 +285,35 @@ when the app opens, when it comes back to the front, and straight after
 linking to a desktop. The desktop app never runs it. A call within two
 minutes of the last pass, or while one is running, is answered with that
 pass's report; nothing runs while something is playing; a fresh link skips
-the two-minute wait.
+the two-minute wait. All of that is per profile: a pass for one profile
+never answers for another, which gets its own.
 
 **What it reads.** First the watchlist pull above, so the plan is settled
 before any history lands: the pull refuses to plan anything with local
 history, so the other order would refuse a title for a viewing the same
-pass wrote. Then Simkl's watched history, one kind at a time (films, shows,
-anime), but only for a kind whose activity stamp at `/sync/activities` has
-moved since it was last fully applied. If that request fails, nothing is
-fetched and it is tried again after a pause that lengthens up to an hour;
-a 401 or 403 stops the catch-up's own Simkl requests until the account is
-linked again (the half-hourly background sync and the history pushes are
-separate, and keep trying). A kind whose fetch or write fails waits out its
-own, longer, pause without holding up the others. A library answer that was
-cut off part way counts as a failure, not as an empty library. When Trakt
-or MAL is connected, the pull also runs at most every ten minutes on its
-own. Anime waits until the catalog has been organised into its seasons, and
-is asked for again a few minutes later.
+pass wrote. Simkl's lists are skipped in that pull if they were already
+read under the same activity stamps ("When Simkl's lists are read", above).
+Then Simkl's watched history, one kind at a time (films, shows, anime), but
+only for a kind whose activity stamp at `/sync/activities` has moved since
+it was last fully applied. A kind is fetched whole the first time and with
+`date_from` after that, which is what Simkl asks of a client that keeps in
+step: only what changed since the stamp its last applied fetch was made
+under. Once a week the fetch that is due anyway is whole again, in case an
+incremental answer left something out. A kind Simkl gives no stamp for is
+read once a day, not on every pass. If the activities request fails,
+nothing is fetched and it is tried again after a pause that lengthens up to
+an hour; a 401 or 403 stops the catch-up's own Simkl requests until this
+device is linked again or six hours have passed, whichever comes first (the
+half-hourly background sync asks again every six hours too, and the history
+pushes are separate and keep trying). A kind whose fetch or write fails
+waits out its own, longer, pause without holding up the others, and a kind
+that was fetched but could not be placed in full (an id lookup nobody could
+answer) is left ten minutes. Those pauses belong to the account and profile
+that earned them. A library answer, or a plan-to-watch list, that was cut
+off part way counts as a failure, never as an empty one. When Trakt or MAL
+is connected, the pull also runs at most every ten minutes on its own, and
+at once after a fresh link. Anime waits until the catalog has been
+organised into its seasons, and is asked for again a few minutes later.
 
 **It only ever adds.** It writes viewings this device has no record of and
 never removes one, however the Simkl library looks. A viewing already held
@@ -313,6 +378,9 @@ whole title, a scrobble) is translated first, by `toSimklAnimeEpisode` in
   group's _s_-th member, under that member's own Kitsu id and with no
   season number. A change that spans seasons is one entry per season, the
   same split `planMalPushes` makes for MAL.
+- Only where that member can be shown to BE season _s_ of the page (see
+  "When a member's place is not its season", below). Otherwise the season
+  is not sent.
 - A title that was never merged is its own entry.
 - Specials (season 0) are not sent. They are TMDB's list for the whole
   franchise and belong to no entry this app can name.
@@ -337,10 +405,41 @@ The tests model an account that behaves as that guide says. No request has
 been made to the live API from a development machine, so whether Simkl
 files these as described is still to be confirmed on a real account.
 
+### When a member's place is not its season
+
+"Season = the member's place in the group" is true of history, and not
+always of the page. A merged show's page is numbered in one of two ways
+(`buildGroupedAnimeVideos` in `animeSeasons.ts`):
+
+- A show whose first member has no TheTVDB mapping is built from its
+  members in order. Season _N_ is member _N_.
+- A show whose first member has one is numbered by TMDB. Season _N_ is
+  TMDB's season _N_, whichever member sits at _N_. The two agree only for a
+  member whose own TheTVDB season is its place. A film or an OVA among the
+  seasons, or a later season Kitsu has no mapping for, breaks it: My Hero
+  Academia's fourth season is the group's seventh member, and season 7 on
+  its page is TMDB's seventh.
+
+So everything in this section that turns a member into a season of the
+show, or a season into a member, asks first whether the two can be shown to
+agree (`animeSeasonMatchesPage` in `serviceIds.ts`, read from the cached
+mappings with no request). Where they cannot:
+
+- that season is not sent to Simkl, rather than sent to whatever member
+  holds that place;
+- a later season opened by its own id opens and saves as itself, as it did
+  before, and its rows are not moved under the show.
+
+In one real library, 290 of 698 later seasons could be shown to agree. The
+catch-up, the MAL import and the MAL push still go by place alone; that is
+unchanged here and is wrong for the same shows.
+
 ### A later season under its own id
 
 A later season of a merged show still has an id of its own. One thing
-keeps using it, and nothing else does.
+keeps using it, and nothing else does. All of this applies to a later
+season whose place is its season on the page (above); any other still
+behaves as a title of its own.
 
 - **The plan uses it.** A service lists a season under that season's id,
   so a watchlist pull plans it under that id, as its own card. That is on
@@ -370,15 +469,18 @@ grid badges as watched or completed is the tile the filter takes out, and
 the total above the grid counts what is left. My Stuff filters after the
 badge is worked out, and always hid it.
 
-Recommendations leave a later season out altogether. The suggestion row and
-the For You shelves draw on the index as well as the catalog, and the index
-keeps a row for every season, so a later season used to be offered as a
-title of its own, including one already watched to the end (its viewings
-are under the show, not under the id that was checked). The show's own row
-is the one that competes for a place now. A later season is dropped as a
-candidate, dropped again when a stored list is read, and is not offered as
-what comes next either: the next season of a merged show is inside the
-show.
+Recommendations go by membership, not by place. The suggestion row and the
+For You shelves draw on the index as well as the catalog, and the index
+keeps a row for every member of a merged show, so a later season used to be
+offered as a title of its own, including one already watched to the end
+(its viewings are under the show, not under the id that was checked). No
+member is offered now, and the show's own row is the one that competes for
+a place. A member is dropped as a candidate, dropped again when a stored
+list is read, and is not offered as what comes next either: the next season
+of a merged show is inside the show. This is every member, not only the
+ones whose place is their season, since nothing here acts on the place: a
+film or an OVA the grouping filed among the seasons is not suggested on its
+own either.
 
 Home follows the same split. A later season on the plan with nothing of it
 watched is in Plan to Watch as its own card. Once an episode of it has been
@@ -392,15 +494,86 @@ once, in the background, after the anime catalog has been organised
 (`animeSyncRepair.ts`). Nothing is sent to a service when they move;
 MyAnimeList hears the right count the next time that season changes here.
 
-One kind of row is left where it is. When the grouping changes which
-season fronts a show, the id that used to front it becomes a later season,
-and the rows under it are the whole show's in the old season order, which
-nothing records. Its own season can still be placed and is moved; the rest
-cannot be, and stay under that id rather than be guessed onto one season.
-
 Until the catalog has been organised into its seasons nothing can tell a
 later season from a title that stands alone, so in that window a later
 season still opens, and saves, as itself.
+
+### When the grouping changes
+
+The grouping is worked out again every time the anime catalog is
+refreshed, and it does not always come out the same. Which season fronts a
+show, and the order of the rest, depend on lookups (a TheTVDB mapping,
+AniList's broadcast dates) that answer on one run and not on the next, and
+a season can enter or leave the crawl. In one real library, five weeks
+changed the members or order of 62 of 286 shows and put a different id in
+front of 43.
+
+History is addressed by both of those things: the id in front, and the
+season's place in the order. So the app keeps a record of the grouping the
+rows are filed under (the ledger, one row in the database), and when a
+refresh lands a different one, the rows are moved in the same moment
+(`animeRegroup.ts`). History, plays, resume points and the rating move,
+for every profile, in one transaction. Nothing is sent to a service.
+
+What moves depends on how the show's page numbers its seasons:
+
+- **A show with no TheTVDB mapping** is numbered by its members: season 3
+  is the third member's episodes. Its rows follow their member. A new
+  front, a new order, a member leaving (its season goes back under its own
+  id) and a member joining are all followed.
+- **A show with a TheTVDB mapping** has its page filled from TMDB: season 3
+  is TMDB's season 3, whichever member sits third. A member changing place
+  does not change what season 3 shows, so its rows stay at their numbers.
+  Only a new id in front is followed, with the season numbers kept, and
+  only when both ids map to the same series.
+- **Anything else is left where it is**, and named in the log: a show that
+  gained or lost its mapping between two runs, or one whose lookup has
+  never answered. A wrong move puts rows on another season's, where the
+  ones already there win and the arrivals are dropped.
+- **A title that stood alone and joins a show as a later season** is moved
+  under the show only where its place is its season on the page ("When a
+  member's place is not its season", above). On a show numbered by TMDB
+  that is often not so, a film or an OVA taking a place among the seasons;
+  such a title still opens and saves as itself, and keeps its rows.
+
+The plan is not moved. A planned title keeps its own id whatever the
+grouping does, for the reason given above.
+
+A row already at the place a move lands on is kept, and the arriving copy
+of that episode is dropped. Plays are all kept, except a viewing already
+there at the same instant.
+
+A backup carries the ledger, and a restore puts it back with the rows, so
+rows restored after the grouping has moved on are brought to where it is
+now. A backup from before the ledger has none; its rows are taken to be
+filed the way the install's own are.
+
+**Rows from before the ledger.** The first run only records the grouping;
+it has nothing to compare it with. An id that fronted its show before then
+and is a later season now still holds the whole show's rows, in an order
+nothing recorded. The repair places them once, where the old order can be
+shown rather than guessed:
+
+- Its own season is always placed (it was the first).
+- The catalog index still remembers the siblings an id had when it fronted
+  a show. Where no season under the id contradicts that order, each season
+  watched in full goes to the member the order names, if that member has
+  exactly that many episodes.
+- Without a usable remembered order, lengths alone decide, and only for
+  all the seasons together: every one watched in full, each matching
+  exactly one member's episode count, no member twice. Five episodes
+  marked could be a five-episode season or the start of a longer one, so
+  one season that cannot be placed leaves the rest as well.
+- Only on a show numbered by its members.
+
+What cannot be placed stays under the old id, and the log names it.
+
+**Not covered.** On a show numbered by TMDB, the page and the services
+disagree about a season number wherever the members are not exactly the TV
+seasons in order (a film or an OVA among them, or one TMDB season that
+Kitsu splits in two): the page shows TMDB's season, while Simkl and
+MyAnimeList are sent the member at that position. This change does not
+alter that, and it is why such a show's rows are not moved by member.
 
 ### Pushes made before the mapping
 

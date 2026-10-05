@@ -146,42 +146,43 @@ export interface LiveExclusions {
   trackedIds: Set<string>
   dislikedIds: Set<string>
   /**
-   * Every later season of a merged anime, by the season's own id
-   * (animeSeasons.ts's laterSeasons). Absent while the catalog is not
-   * grouped, when no id can be told from one that stands alone.
+   * Every title a merged anime fronts, by its own id: its later seasons,
+   * and whatever else the grouping filed among them (animeSeasons.ts's
+   * animeSiblingIds). Absent while the catalog is not grouped, when no id
+   * can be told from one that stands alone.
    *
-   * A later season is never a suggestion of its own. The franchise is one
-   * show here: its own row is the title that competes for a place, and a
-   * tile for "Season 3" only ever opened that show's page. Its viewings are
+   * None of them is ever a suggestion of its own. The franchise is one
+   * title in the catalog, and that title's own row is what competes for a
+   * place. They only became candidates because the index, which the pool
+   * also draws on, keeps a row for every one. A later season's viewings are
    * kept under the show as well, so the three sets above never held it —
-   * which is how a season watched to the end kept being offered — and the
-   * index the candidates are drawn from keeps a row for every season.
+   * which is how a season watched to the end kept being offered.
    */
-  laterSeasonIds?: { has(id: string): boolean }
+  siblingIds?: { has(id: string): boolean }
 }
 
 /**
  * Builds the exclusion sets from a history already in hand, plus the two
- * small tables. `laterSeasonIds` is handed in as the history is — see
+ * small tables. `siblingIds` is handed in as the history is — see
  * LiveExclusions — so everything here but the rebuild stays clear of the
  * catalog (see rebuildRecommendations on late imports).
  */
 export function liveExclusions(
   history: HistoryEntry[],
-  laterSeasonIds?: LiveExclusions['laterSeasonIds']
+  siblingIds?: LiveExclusions['siblingIds']
 ): LiveExclusions {
   const db = getDatabase()
   return {
     watchedIds: new Set(history.map((entry) => String(entry.id))),
     trackedIds: new Set(db.tracked().map((item) => String(item.id))),
     dislikedIds: new Set(db.disliked().map((item) => String(item.id))),
-    laterSeasonIds
+    siblingIds
   }
 }
 
 /** What rules a title out whatever else is true of it — a continuation included. */
 function ruledOut(id: string, exclusions: LiveExclusions): boolean {
-  return exclusions.dislikedIds.has(id) || exclusions.laterSeasonIds?.has(id) === true
+  return exclusions.dislikedIds.has(id) || exclusions.siblingIds?.has(id) === true
 }
 
 /** Whether a title may be suggested at all: not seen, not saved, not hidden, and a title of its own. */
@@ -199,8 +200,8 @@ export function recommendable(item: CatalogItem, exclusions: LiveExclusions): bo
  * the one kind of entry allowed to be something already seen or already
  * planned: that is precisely what "rewatching the series" and "the sequel
  * is on my list" look like. "Not interested" still wins, and so does being
- * a later season: the next season of a merged show is inside the show, not
- * a title after it.
+ * one of a merged show's own members: its next season is inside the show,
+ * not a title after it.
  */
 function keepCandidate(item: CatalogItem, continues: boolean, exclusions: LiveExclusions): boolean {
   return continues ? !ruledOut(String(item.id), exclusions) : recommendable(item, exclusions)
@@ -380,15 +381,16 @@ export function readStoredRecommendations(
     requestRecommendationsRebuild()
     return null
   }
-  // A later season in the stored list means it was ranked before the
-  // catalog was grouped, or by a build that still offered them. Dropping it
-  // above keeps the row right, but nothing takes its place until the list
-  // is ranked again — and on a real library a fifth of a stored list was
-  // later seasons, three quarters of its anime.
-  const holdsLaterSeason =
-    exclusions.laterSeasonIds !== undefined &&
-    stored.entries.some((entry) => exclusions.laterSeasonIds!.has(String(entry?.item?.id)))
-  if (holdsLaterSeason || Date.now() - (stored.builtAt || 0) > REBUILD_AFTER_MS) {
+  // A merged show's member in the stored list means it was ranked before
+  // the catalog was grouped, or by a build that still offered them.
+  // Dropping it above keeps the row right, but nothing takes its place
+  // until the list is ranked again — and on a real library a fifth of a
+  // stored list was such members, three quarters of its anime.
+  const siblingIds = exclusions.siblingIds
+  const holdsSibling =
+    siblingIds !== undefined &&
+    stored.entries.some((entry) => siblingIds.has(String(entry?.item?.id)))
+  if (holdsSibling || Date.now() - (stored.builtAt || 0) > REBUILD_AFTER_MS) {
     requestRecommendationsRebuild()
   }
 
@@ -480,7 +482,7 @@ export async function rebuildRecommendations(
   // rebuild request — and a top-level import here would take all of it down
   // with the one function that genuinely needs a catalog.
   const { catalogData } = await import('./catalog')
-  const { laterSeasons } = await import('./animeSeasons')
+  const { animeSiblingIds } = await import('./animeSeasons')
   const { continuationsFor, defaultSources } = await import('./continuations')
   const [movies, series, anime] = await Promise.all(
     (['movie', 'series', 'anime'] as const).map((kind) =>
@@ -504,9 +506,9 @@ export async function rebuildRecommendations(
   // it for itself.
   const profile = db.activeProfile()
   const history = db.history()
-  // The index half of the pool holds a row for every season of a merged
-  // anime — see LiveExclusions.laterSeasonIds.
-  const exclusions = liveExclusions(history, laterSeasons())
+  // The index half of the pool holds a row for every member of a merged
+  // anime — see LiveExclusions.siblingIds.
+  const exclusions = liveExclusions(history, animeSiblingIds())
   const preferredGenres = db.preferredGenres(4)
 
   // What this person keeps coming back to, learned from the credits of

@@ -100,8 +100,51 @@ export function hasExpressibleSimklId(id: string): boolean {
  * or nothing for an id that fronts no group — a title that was never
  * merged, and equally a merged franchise's later season asked about by its
  * own id. animeSeasons.ts's groupedIdsFor.
+ *
+ * A place holds null where the member there cannot be shown to be that
+ * season of the show's page (see animeSeasonMatchesPage): nothing is sent
+ * for such a season, rather than sent to an entry that may be another one.
  */
-export type AnimeSiblings = (id: string) => readonly string[] | undefined
+export type AnimeSiblings = (id: string) => readonly (string | null)[] | undefined
+
+/**
+ * What is known of a Kitsu id's place in TheTVDB: the series and season it
+ * maps to, 'none' when Kitsu was asked and maps it to nothing, or null when
+ * nobody has asked yet.
+ */
+export type AnimeTvdbSeason = (id: string) => { seriesId: string; season: number } | 'none' | null
+
+/**
+ * Whether a member's place in its group is also the season the show's PAGE
+ * gives it. "Season = the member's position" is only half the story, and
+ * everything that turns a member into a season of the show, or a season of
+ * the show into a member, has to ask this first.
+ *
+ * The page numbers a merged show in one of two ways (animeSeasons.ts's
+ * buildGroupedAnimeVideos). A show whose first member has no TheTVDB
+ * mapping is built from its members in order, so season N IS member N. A
+ * show whose first member has one is numbered by TMDB: season N is TMDB's
+ * season N, whichever member happens to sit at N. The two agree only for a
+ * member whose own TheTVDB season is its position. Where a film or an OVA
+ * sits among the seasons, or a later season has no mapping (My Hero
+ * Academia's fourth season is the group's seventh member), they do not —
+ * and acting on the position would mark, open or send the wrong season.
+ *
+ * Unknown is no: a mapping nobody has looked up proves nothing.
+ */
+export function animeSeasonMatchesPage(
+  showId: string,
+  memberId: string,
+  season: number,
+  tvdbOf: AnimeTvdbSeason
+): boolean {
+  const show = tvdbOf(showId)
+  if (show === null) return false
+  if (show === 'none') return true
+  const member = tvdbOf(memberId)
+  if (member === null || member === 'none') return false
+  return member.seriesId === show.seriesId && member.season === season
+}
 
 /** Where a raw anime id belongs: the show its history is kept under, and
  *  its season there. animeSeasons.ts's resolveAnimeGroupTarget. */

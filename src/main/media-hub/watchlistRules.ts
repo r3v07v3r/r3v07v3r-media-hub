@@ -33,7 +33,8 @@ export interface RemovalInput {
   /** Which services hold each title, as this pull just found them. */
   sources: Record<string, PlannedSource[]>
   /** Services that answered successfully this pass. A service that
-   *  errored is not evidence of anything. */
+   *  errored, or that was not asked, is not evidence of anything — see
+   *  answeredServices. */
   answered: ReadonlySet<PlannedSource>
   /** The account mark currently connected for each service. An origin
    *  stamped with anything else was written under a different login, and
@@ -147,6 +148,33 @@ export function removalEvidence(
 }
 
 /**
+ * Which services are EVIDENCE this pass: connected, asked, and answered.
+ *
+ * Three ways not to be, and the third is the one that is easy to forget. A
+ * service whose list was deliberately left unread (`skipped` — the pull was
+ * told Simkl has not changed, or could not find out) has said nothing this
+ * pass, exactly like one that errored. It must never be counted as having
+ * answered with an empty list: every title this app once pulled from it
+ * would then be absent from a successful answer, which is the shape rule 2
+ * removes on. Left out of this set, its tags from the last real read are
+ * carried over instead, and those can only ever hold a removal back.
+ */
+export function answeredServices(
+  services: readonly {
+    service: PlannedSource
+    connected: boolean
+    error?: string
+    skipped?: boolean
+  }[]
+): Set<PlannedSource> {
+  return new Set(
+    services
+      .filter((entry) => entry.connected && !entry.error && !entry.skipped)
+      .map((entry) => entry.service)
+  )
+}
+
+/**
  * Which locally-planned titles should be un-planned because they have
  * left the service they came from.
  *
@@ -162,7 +190,8 @@ export function removalEvidence(
  *     attributed to anyone.
  *  3. That origin's service ANSWERED this pass (rule 5). Absence has to
  *     be a successful answer that did not contain it, not the absence of
- *     an answer — an outage must never read as an emptied watchlist.
+ *     an answer — an outage must never read as an emptied watchlist, and
+ *     neither must a list this pass chose not to read.
  *  4. No service still holds it. Still on Simkl means it has not left
  *     anywhere that counts.
  *  5. It is still on the local list, or there is nothing to remove.

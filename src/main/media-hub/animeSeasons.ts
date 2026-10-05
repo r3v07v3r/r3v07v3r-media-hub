@@ -61,7 +61,7 @@
 // neither external source has anything to say.
 
 import type { CatalogItem, Episode } from '../../shared/media-hub/types'
-import { animeSeasonOf } from '../../shared/media-hub/serviceIds'
+import { animeSeasonMatchesPage, animeSeasonOf } from '../../shared/media-hub/serviceIds'
 import { fetchJson } from './httpClient'
 import { mapWithLimit, type TaskPriority } from './taskScheduler'
 import { logError } from './logger'
@@ -79,6 +79,27 @@ interface TvdbMapping {
 // can't also mean "cached, and the answer is no" without every miss being
 // re-fetched forever. An empty seriesId string is never a valid mapping.
 const NO_TVDB_MAPPING: TvdbMapping = { seriesId: '', season: -1 }
+
+/**
+ * What the cache already holds of an id's TheTVDB mapping, with no request:
+ * the mapping, 'none' when Kitsu was asked and has none, null when it was
+ * never asked. Expired entries count — the mapping essentially never
+ * changes, and an aged answer is still the one the page was built from.
+ */
+function cachedTvdbMapping(catalogId: string): TvdbMapping | 'none' | null {
+  const kitsuId = String(catalogId).replace(/^kitsu:/, '')
+  const cached = getDatabase().getCache<TvdbMapping>(`kitsu:tvdb:${kitsuId}`, {
+    allowExpired: true
+  })
+  if (!cached) return null
+  return cached.seriesId ? cached : 'none'
+}
+
+/** Whether `memberId`, at `season` of `showId` by its place in the group, is
+ *  that season on the show's page too — see animeSeasonMatchesPage. */
+export function seasonMatchesPage(showId: string, memberId: string, season: number): boolean {
+  return animeSeasonMatchesPage(showId, memberId, season, cachedTvdbMapping)
+}
 
 /** Cached (30d — this cross-reference essentially never changes once
  *  published) Kitsu-to-TheTVDB mapping for one anime id. Returns null (not
@@ -108,6 +129,8 @@ export async function kitsuTvdbMapping(
     const mapping: TvdbMapping =
       seriesId && Number.isInteger(season) && season >= 0 ? { seriesId, season } : NO_TVDB_MAPPING
     db.putCache(key, mapping, 30 * 24 * 60 * 60 * 1000)
+    // A mapping is half of what seasonMatchesPage decides on.
+    animeLaterSeasonIndex = null
     // Side effect, not a second request: the same /mappings response also
     // carries an `anilist/anime` entry for most non-obscure titles (see
     // anilist.ts), which groupAnimeCatalog's needsEdgeCheck step below
@@ -120,6 +143,23 @@ export async function kitsuTvdbMapping(
     logError('anime:tvdb-mapping', error)
     return null
   }
+}
+
+/**
+ * The TheTVDB series an anime is mapped to, as far as kitsuTvdbMapping has
+ * already found out: '' when Kitsu has no mapping for it, null when the
+ * lookup has never answered. No request.
+ *
+ * An expired answer counts. The mapping "essentially never changes", and
+ * the question asked of it (animeRegroup.ts: is this show numbered by TMDB
+ * or by its members?) is better served by last month's answer than by none.
+ */
+export function cachedTvdbSeries(catalogId: string): string | null {
+  const cached = getDatabase().getCache<TvdbMapping>(
+    `kitsu:tvdb:${String(catalogId).replace(/^kitsu:/, '')}`,
+    { allowExpired: true }
+  )
+  return cached ? String(cached.seriesId || '') : null
 }
 
 /** Cached (30d) TheTVDB-series-id -> TMDB-tv-id bridge via TMDB's own
@@ -568,7 +608,18 @@ let animeGroupIndex: Map<string, string[]> | null = null
 /** See animeGroupIndex's own doc — built together in one pass since both read the same cached catalog blob. */
 let animeGroupPositionIndex: Map<string, { id: string; season: number }> | null = null
 
-/** The later seasons among those positions, by the season's own id — see laterSeasons. Built with the other two. */
+/** How many titles the catalog the two indexes were built from held. Zero
+ *  is "no catalog", which is not the same answer as "a catalog with no
+ *  merged shows" — see currentAnimeGroups. */
+let animeGroupIndexSize = 0
+
+/**
+ * The later seasons among those positions, by the season's own id — see
+ * laterSeasons. Built on first use, since it reads a cached TheTVDB mapping
+ * for every member, and dropped whenever either thing it is made from
+ * changes: the grouping (invalidateAnimeGroupIndex) or a mapping
+ * (kitsuTvdbMapping).
+ */
 let animeLaterSeasonIndex: Map<string, { id: string; season: number }> | null = null
 
 /**
@@ -626,16 +677,14 @@ export function invalidateAnimeGroupIndex(): void {
 }
 
 /**
- * The lookups a grouped catalog gives: each canonical id's siblings, each
- * member's place in its group, and the later seasons among those members
- * (every place but a show's own). No database in it, so the mapping to and
- * from Simkl's per-season entries (serviceIds.ts) can be tested against the
- * same construction the app runs on.
+ * The two lookups a grouped catalog gives: each canonical id's siblings,
+ * and each member's place in its group. No database in it, so the mapping
+ * to and from Simkl's per-season entries (serviceIds.ts) can be tested
+ * against the same construction the app runs on.
  */
 export function animeGroupIndexesOf(items: readonly Pick<CatalogItem, 'id' | 'groupedIds'>[]): {
   siblings: Map<string, string[]>
   positions: Map<string, { id: string; season: number }>
-  laterSeasons: Map<string, { id: string; season: number }>
 } {
   const siblings = new Map<string, string[]>()
   const positions = new Map<string, { id: string; season: number }>()
@@ -651,27 +700,81 @@ export function animeGroupIndexesOf(items: readonly Pick<CatalogItem, 'id' | 'gr
       positions.set(String(siblingId), { id, season: index + 2 })
     })
   }
-  // From the finished positions, so this says of every id exactly what
-  // animeSeasonOf (serviceIds.ts) says of it one at a time.
+  return { siblings, positions }
+}
+
+/**
+ * The later seasons among `positions`, by the season's own id: every member
+ * a show fronts whose place is also its season on the show's page.
+ *
+ * laterSeasonOf for the whole catalog at once, and the same answer for each
+ * id: `matchesPage` is its gate (seasonMatchesPage), handed in so this can
+ * be tested without a database.
+ */
+export function laterSeasonsOf(
+  positions: ReadonlyMap<string, { id: string; season: number }>,
+  matchesPage: (showId: string, memberId: string, season: number) => boolean
+): Map<string, { id: string; season: number }> {
   const laterSeasons = new Map<string, { id: string; season: number }>()
   for (const [memberId, place] of positions) {
-    if (place.id !== memberId && memberId.startsWith('kitsu:')) laterSeasons.set(memberId, place)
+    if (place.id === memberId || !memberId.startsWith('kitsu:')) continue
+    if (matchesPage(place.id, memberId, place.season)) laterSeasons.set(memberId, place)
   }
-  return { siblings, positions, laterSeasons }
+  return laterSeasons
 }
 
 function buildAnimeGroupIndexes(): void {
   const items =
     getDatabase().getCache<CatalogItem[]>('catalog:v2:anime', { allowExpired: true }) || []
-  const { siblings, positions, laterSeasons } = animeGroupIndexesOf(items)
+  const { siblings, positions } = animeGroupIndexesOf(items)
   animeGroupIndex = siblings
   animeGroupPositionIndex = positions
-  animeLaterSeasonIndex = laterSeasons
+  animeGroupIndexSize = items.length
+  animeLaterSeasonIndex = null
 }
 
 export function groupedIdsFor(catalogId: string): string[] | undefined {
   if (!animeGroupIndex) buildAnimeGroupIndexes()
   return animeGroupIndex!.get(String(catalogId))
+}
+
+/**
+ * Every merged show in the cached catalog, with its siblings — or null when
+ * there is no catalog to read them from (its cache row aged out, or was
+ * never written). Read from the index, so asking again costs nothing until
+ * the index is next invalidated.
+ *
+ * Null rather than an empty list because the caller compares this against
+ * the grouping watch history is filed under (animeRegroup.ts). "No shows
+ * are merged" would be read as every show having come apart, and their
+ * seasons moved back out under their own ids.
+ */
+export function currentAnimeGroups(): { id: string; groupedIds: string[] }[] | null {
+  if (!animeGroupIndex) buildAnimeGroupIndexes()
+  if (!animeGroupIndexSize) return null
+  return [...animeGroupIndex!].map(([id, groupedIds]) => ({ id, groupedIds }))
+}
+
+/**
+ * Whether a season list built with `builtWith` as the title's siblings is
+ * out of date: the catalog now gives it other siblings, another order, or
+ * none.
+ *
+ * "None" only counts once the catalog is grouped. A raw one has no siblings
+ * for anybody (see animeGroupingReady), and re-resolving every merged show
+ * as a single season for those minutes is the opposite of the point.
+ */
+export function animeGroupingMovedOn(
+  catalogId: string,
+  builtWith: readonly string[] | undefined
+): boolean {
+  const siblings = groupedIdsFor(catalogId)
+  if (!siblings?.length) {
+    return Boolean(builtWith?.length) && animeGroupIndexSize > 0 && animeGroupingReady()
+  }
+  return (
+    siblings.length !== builtWith?.length || siblings.some((id, index) => id !== builtWith[index])
+  )
 }
 
 /**
@@ -683,9 +786,18 @@ export function groupedIdsFor(catalogId: string): string[] | undefined {
  * later season to the canonical id's own entry — the first season's. Handed
  * nothing instead, toSimklAnimeEpisode (serviceIds.ts) places a first season
  * only and sends no later one. See animeGroupingReady.
+ *
+ * A member whose place is not its season on the show's page is blanked
+ * (seasonMatchesPage): the season being pushed is the page's, and the
+ * member at that place may be a different season, or an OVA.
  */
-export function animeSiblingsWhenGrouped(): ((id: string) => string[] | undefined) | undefined {
-  return animeGroupingReady() ? groupedIdsFor : undefined
+export function animeSiblingsWhenGrouped():
+  ((id: string) => (string | null)[] | undefined) | undefined {
+  if (!animeGroupingReady()) return undefined
+  return (id) =>
+    groupedIdsFor(id)?.map((member, index) =>
+      seasonMatchesPage(id, member, index + 2) ? member : null
+    )
 }
 
 /**
@@ -714,29 +826,64 @@ export function resolveAnimeGroupTarget(catalogId: string): { id: string; season
  * else about it belongs to the show: a page that opens it opens the show
  * (catalog.ts's meta handler), and a viewing written under it is kept under
  * the show (tracking.ts).
+ *
+ * Null as well for a later season whose place in the group is not its
+ * season on the show's page (seasonMatchesPage). Such a season still opens
+ * and saves as itself: sent to "its" season of the show it would open, mark
+ * and move rows onto a different one.
  */
 export function laterSeasonOf(catalogId: string): { id: string; season: number } | null {
   const id = String(catalogId)
   if (!id.startsWith('kitsu:') || !animeGroupingReady()) return null
-  return animeSeasonOf(id, resolveAnimeGroupTarget)
+  const show = animeSeasonOf(id, resolveAnimeGroupTarget)
+  return show && seasonMatchesPage(show.id, id, show.season) ? show : null
 }
 
 /**
  * laterSeasonOf for the whole catalog at once: every later season of a
  * merged franchise, by the season's own id — or nothing while the catalog is
- * not grouped.
+ * not grouped. The same answer laterSeasonOf gives for each id, gate
+ * included: a member whose place is not its season on the show's page keeps
+ * its own rows, and is not in here.
  *
- * For the callers that cannot ask one id at a time. The library's
+ * For the caller that cannot ask one id at a time. The library's
  * watch-state filters run inside the index query, which needs the whole
  * mapping to count a later season's viewings where they are kept
- * (database.ts's indexQuery); the recommendation row asks about every
- * candidate (recommendations.ts). The grouping marker is a database read,
- * asked once here rather than once per id.
+ * (database.ts's indexQuery).
+ *
+ * Kept between calls. The gate reads two cache rows a member — 8 ms for the
+ * 698 members of a real catalog — and that query is a keystroke-driven
+ * path.
  */
 export function laterSeasons(): ReadonlyMap<string, { id: string; season: number }> | undefined {
   if (!animeGroupingReady()) return undefined
-  if (!animeLaterSeasonIndex) buildAnimeGroupIndexes()
-  return animeLaterSeasonIndex!
+  if (!animeLaterSeasonIndex) {
+    if (!animeGroupPositionIndex) buildAnimeGroupIndexes()
+    animeLaterSeasonIndex = laterSeasonsOf(animeGroupPositionIndex!, seasonMatchesPage)
+  }
+  return animeLaterSeasonIndex
+}
+
+/**
+ * Which ids a merged show fronts: every member of a group but its first —
+ * or nothing while the catalog is not grouped.
+ *
+ * Membership only, with no gate, because nothing here acts on the member's
+ * place: it does not matter to this question whether a member is the season
+ * its position says, another season, or a film the grouping filed among
+ * them. The catalog lists the franchise as one title either way, and that
+ * is what the recommendation row asks (recommendations.ts).
+ */
+export function animeSiblingIds(): { has(id: string): boolean } | undefined {
+  if (!animeGroupingReady()) return undefined
+  if (!animeGroupPositionIndex) buildAnimeGroupIndexes()
+  const positions = animeGroupPositionIndex!
+  return {
+    has: (id) => {
+      const place = positions.get(String(id))
+      return place !== undefined && place.id !== String(id)
+    }
+  }
 }
 
 /**

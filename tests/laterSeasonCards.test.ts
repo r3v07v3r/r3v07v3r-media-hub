@@ -19,7 +19,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { animeGroupIndexesOf } from '../src/main/media-hub/animeSeasons'
+import { animeGroupIndexesOf, laterSeasonsOf } from '../src/main/media-hub/animeSeasons'
 import { createDatabase } from '../src/main/media-hub/database'
 import { watchedLaterSeasons } from '../src/shared/media-hub/serviceIds'
 import type { CatalogItem, Episode, HistoryEntry } from '../src/shared/media-hub/types'
@@ -53,12 +53,16 @@ const OTHER = 'kitsu:500'
 const OTHER_SECOND = 'kitsu:600'
 const siblingsOf = (id: string): string[] | undefined => (id === SHOW ? [SECOND, THIRD] : undefined)
 // What the index is handed: every later season, by its own id, from the
-// construction the app itself runs on.
-const { laterSeasons } = animeGroupIndexesOf([
-  { id: SHOW, groupedIds: [SECOND, THIRD] },
-  { id: OTHER, groupedIds: [OTHER_SECOND] },
-  { id: ALONE }
-])
+// construction the app itself runs on. Every member here is the season its
+// place says (the gate has its own checks in simklAnime.test.ts).
+const laterSeasons = laterSeasonsOf(
+  animeGroupIndexesOf([
+    { id: SHOW, groupedIds: [SECOND, THIRD] },
+    { id: OTHER, groupedIds: [OTHER_SECOND] },
+    { id: ALONE }
+  ]).positions,
+  () => true
+)
 
 const PAST = '2000-01-01T00:00:00.000Z'
 const FUTURE = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString()
@@ -488,6 +492,32 @@ check('another profile’s viewings hide nothing', () => {
     ids: [...EVERY_ROW].sort(),
     total: 6
   })
+  db.close()
+})
+
+check('a member that is not the season its place says is read by its own id', () => {
+  // The second member sits at season 2 of the group, and the show's page
+  // gives that season to something else (a film filed among the seasons,
+  // say). It opens and saves as itself, so its tile is watched when it has
+  // rows of its own, and the show's season 2 says nothing about it.
+  const db = library()
+  const gated = laterSeasonsOf(
+    animeGroupIndexesOf([{ id: SHOW, groupedIds: [SECOND, THIRD] }]).positions,
+    (_show, member) => member !== SECOND
+  )
+  assert.deepEqual([...gated.keys()], [THIRD])
+  const watchedOff = browse(db, { hideWatched: true }, gated).ids
+  assert.ok(watchedOff.includes(SECOND), 'the show’s season 2 is not this tile’s')
+  assert.ok(!watchedOff.includes(THIRD))
+  assert.ok(browse(db, { hideCompleted: true }, gated).ids.includes(SECOND))
+  assert.deepEqual(db.indexQuery({ kind: 'anime' }, gated).completedIds, [])
+
+  for (const episode of [1, 2, 3]) {
+    db.markWatched({ id: SECOND, type: 'anime', title: SECOND }, { season: 1, episode })
+  }
+  assert.ok(!browse(db, { hideWatched: true }, gated).ids.includes(SECOND))
+  assert.ok(!browse(db, { hideCompleted: true }, gated).ids.includes(SECOND))
+  assert.deepEqual(db.indexQuery({ kind: 'anime' }, gated).completedIds, [SECOND])
   db.close()
 })
 

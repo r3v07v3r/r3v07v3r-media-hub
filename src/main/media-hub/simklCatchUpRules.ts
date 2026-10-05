@@ -258,6 +258,9 @@ export interface CatchUpState {
   stamps: SimklActivityStamps
   /** Per kind: when it was last fetched, ms. Paces refetching when Simkl gives no stamp. */
   fetchedAt: { movies: number; shows: number; anime: number }
+  /** Per kind: when it was last fetched WHOLE rather than only what changed
+   *  since the stored stamp — see librarySince. 0 before it ever has been. */
+  fullAt: { movies: number; shows: number; anime: number }
   /** ref -> titleSignature as last fully applied. */
   seen: Record<string, string>
 }
@@ -267,6 +270,7 @@ export function emptyCatchUpState(account: string): CatchUpState {
     account,
     stamps: { movies: null, shows: null, anime: null },
     fetchedAt: { movies: 0, shows: 0, anime: 0 },
+    fullAt: { movies: 0, shows: 0, anime: 0 },
     seen: {}
   }
 }
@@ -290,6 +294,14 @@ export function catchUpStateFor(stored: unknown, account: string): CatchUpState 
   if (typeof value.account !== 'string' || value.account !== account) return fresh
   const stamps = record(value.stamps)
   const fetchedAt = record(value.fetchedAt)
+  // Read leniently, unlike the rest: a record with no usable time here is
+  // one whose kinds have never been fetched whole as far as anybody can
+  // tell, and the answer to that is a whole fetch, not a fresh start.
+  const fullAt = record(value.fullAt)
+  const wholeAt = (key: (typeof STATE_KEYS)[number]): number => {
+    const at = fullAt[key]
+    return typeof at === 'number' && Number.isFinite(at) && at > 0 ? at : 0
+  }
   const seen = value.seen
   if (!seen || typeof seen !== 'object' || Array.isArray(seen)) return fresh
   for (const key of STATE_KEYS) {
@@ -310,6 +322,7 @@ export function catchUpStateFor(stored: unknown, account: string): CatchUpState 
       shows: fetchedAt.shows as number,
       anime: fetchedAt.anime as number
     },
+    fullAt: { movies: wholeAt('movies'), shows: wholeAt('shows'), anime: wholeAt('anime') },
     seen: { ...(seen as Record<string, string>) }
   }
 }
@@ -326,9 +339,31 @@ export function titleSignature(title: SimklLibraryTitle): string {
   return `${title.lastWatchedAt ?? ''}|${title.watchedCount ?? ''}|${title.status}`
 }
 
-/** How long a kind Simkl gives no activity stamp for waits before it is
- *  fetched again. Without a stamp there is no cheaper way to know. */
-export const UNSTAMPED_REFETCH_MS = 30 * 60 * 1000
+/**
+ * How long a kind Simkl gives no activity stamp for waits before it is
+ * fetched again.
+ *
+ * A day, not minutes. An account that has never watched any anime may have
+ * no anime stamp at all, permanently, and reading "no stamp" as "changed"
+ * would fetch that library on every pass for everybody who does not watch
+ * anime — the polling the gate exists to stop. What a day leaves open is a
+ * payload this app has stopped understanding, with every stamp missing for
+ * good; that still gets one read a day.
+ */
+export const UNSTAMPED_REFETCH_MS = 24 * 60 * 60 * 1000
+
+/**
+ * How long incremental fetches are trusted before a kind is read whole
+ * again.
+ *
+ * After its first fetch a kind is asked for with `date_from`: only what
+ * changed since the stored stamp, which is what Simkl asks of a client that
+ * keeps in step with it. That rests on Simkl's own account of what changed.
+ * Once a week the next fetch that is due anyway asks for everything, so a
+ * title an incremental answer left out is picked up without anybody having
+ * to notice it was missing. It costs no extra request, only a larger one.
+ */
+export const FULL_REFETCH_MS = 7 * 24 * 60 * 60 * 1000
 
 const KIND_STAMP: Record<SimklLibraryKind, keyof SimklActivityStamps> = {
   movie: 'movies',
@@ -339,11 +374,13 @@ const KIND_STAMP: Record<SimklLibraryKind, keyof SimklActivityStamps> = {
 /**
  * Which kinds' libraries to fetch this pass.
  *
- * A kind is fetched when Simkl's stamp for it moved since the last fetch
- * that was fully applied — or, when Simkl gave no stamp at all, when it was
- * last fetched half an hour ago or more. The activities gate is what Simkl
- * asks every client to use; a client that polls all-items without it is
- * one Simkl suspends.
+ * A kind is fetched when it never has been, or when Simkl's stamp for it
+ * differs from the one stored by the last fetch that was fully applied —
+ * a missing stamp compared like any other, so an account with no anime is
+ * not refetched for having none. A kind Simkl gives no stamp for is read
+ * again once a day (UNSTAMPED_REFETCH_MS). The activities gate is what
+ * Simkl asks every client to use; a client that polls all-items without it
+ * is one Simkl suspends.
  */
 export function kindsToFetch(
   state: CatchUpState,
@@ -354,13 +391,41 @@ export function kindsToFetch(
   for (const kind of ['movie', 'show', 'anime'] as const) {
     const key = KIND_STAMP[kind]
     const stamp = current[key]
-    if (typeof stamp === 'string') {
-      if (stamp !== state.stamps[key]) out.push(kind)
-    } else if (nowMs - state.fetchedAt[key] >= UNSTAMPED_REFETCH_MS) {
+    const fetchedAt = state.fetchedAt[key]
+    if (fetchedAt <= 0 || stamp !== state.stamps[key]) {
+      out.push(kind)
+    } else if (stamp === null && (nowMs < fetchedAt || nowMs - fetchedAt >= UNSTAMPED_REFETCH_MS)) {
+      // A clock set back leaves fetchedAt in the future, where no age is
+      // ever reached; that reads as due.
       out.push(kind)
     }
   }
   return out
+}
+
+/**
+ * The `date_from` to fetch a kind with: the stamp its last fully applied
+ * fetch was made under, or null to fetch it whole.
+ *
+ * Whole when there is no such stamp (a first fetch, or one that was never
+ * completed), and whole again once FULL_REFETCH_MS has passed since the
+ * last whole fetch. The stamp is the one read BEFORE that fetch, so a
+ * change that landed while it ran is after it, and is asked for again here
+ * rather than missed. The import only ever adds, so the one thing an
+ * incremental answer cannot say — that something was removed — is nothing
+ * it would have acted on.
+ */
+export function librarySince(
+  state: CatchUpState,
+  kind: SimklLibraryKind,
+  nowMs: number
+): string | null {
+  const key = KIND_STAMP[kind]
+  const stamp = state.stamps[key]
+  const fullAt = state.fullAt[key]
+  if (typeof stamp !== 'string' || fullAt <= 0) return null
+  if (nowMs < fullAt || nowMs - fullAt >= FULL_REFETCH_MS) return null
+  return stamp
 }
 
 export interface ResolvedTitle {

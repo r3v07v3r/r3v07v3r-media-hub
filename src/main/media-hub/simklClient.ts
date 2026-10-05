@@ -97,12 +97,22 @@ const LIBRARY_TIMEOUT_MS = 90 * 1000
  * timeout or a dropped connection into `{}`, which is exactly how an empty
  * library looks. The catch-up would record the kind as applied and not
  * fetch it again until something else changed at Simkl.
+ *
+ * `since` is Simkl's `date_from`: only what changed after that moment (an
+ * activity stamp, passed back exactly as Simkl gave it). Simkl asks a client
+ * that keeps in step to fetch whole once and by `date_from` afterwards, and
+ * says it suspends ones that go on downloading everything. Null fetches the
+ * kind whole — see simklCatchUpRules.ts's librarySince for when.
  */
 export function simklLibrary(
   kind: SimklLibraryKind,
-  priority: TaskPriority = 'background'
+  priority: TaskPriority = 'background',
+  since: string | null = null
 ): Promise<unknown> {
-  return simklRequest<unknown>(LIBRARY_PATHS[kind], {}, priority, {
+  const path = since
+    ? `${LIBRARY_PATHS[kind]}&date_from=${encodeURIComponent(since)}`
+    : LIBRARY_PATHS[kind]
+  return simklRequest<unknown>(path, {}, priority, {
     timeoutMs: LIBRARY_TIMEOUT_MS,
     strictBody: true
   })
@@ -188,6 +198,14 @@ interface SimklWatchedSnapshot {
    * account that never actually disagreed.
    */
   complete: boolean
+  /**
+   * True only when this call read the library from Simkl itself — not from
+   * the cache, fresh or stale, and not for want of an account. The
+   * recurring watch-sync pass (watchSync.ts) records Simkl's activity stamp
+   * against what it diffed, and a snapshot that may predate that stamp
+   * cannot vouch for it.
+   */
+  fetched: boolean
 }
 
 /**
@@ -206,9 +224,9 @@ export async function simklWatchedSnapshot(
   // everything below is checked against it rather than against whatever
   // happens to be connected by the time each step runs.
   const account = simklAccountMark()
-  if (!account) return { entries: [], complete: true }
+  if (!account) return { entries: [], complete: true, fetched: false }
   const cached = cachedHistoryFor(account)
-  if (cached) return { entries: cached, complete: true }
+  if (cached) return { entries: cached, complete: true, fetched: false }
 
   try {
     // Two whole-library reads that take seconds each. The default above
@@ -234,14 +252,14 @@ export async function simklWatchedSnapshot(
     // library — writing it now would repopulate the key that sign-out just
     // cleared, and hand the NEW account twenty minutes of somebody else's
     // watch history to be diffed and "corrected" against.
-    if (simklAccountMark() !== account) return { entries: [], complete: false }
+    if (simklAccountMark() !== account) return { entries: [], complete: false, fetched: false }
     const entries = watchedFromAllItems(movies, shows)
     getDatabase().putCache(
       WATCHED_HISTORY_CACHE_KEY,
       { account, entries } satisfies CachedWatchedHistory,
       20 * 60 * 1000
     )
-    return { entries, complete: true }
+    return { entries, complete: true, fetched: true }
   } catch (error) {
     logError('simkl:watched-history', error)
     // Re-read the mark for the same reason as above — the account can have
@@ -251,7 +269,9 @@ export async function simklWatchedSnapshot(
     // whole point of keeping expired rows readable; anything else is a
     // real "we don't know."
     const stale = cachedHistoryFor(simklAccountMark(), true)
-    return stale ? { entries: stale, complete: true } : { entries: [], complete: false }
+    return stale
+      ? { entries: stale, complete: true, fetched: false }
+      : { entries: [], complete: false, fetched: false }
   }
 }
 
