@@ -78,7 +78,8 @@ import {
 import { keepAnimeHistoryWithShows } from './animeSyncRepair'
 import { omdbRottenTomatoesRating } from './omdb'
 import { withUpcomingEpisodes } from './episodeAiring'
-import { searchCredits, titleCredits, titlesFeaturing } from './credits'
+import { titleCredits, titlesFeaturing } from './credits'
+import { invalidateSearchPool, searchByCredits } from './searchPool'
 import { titleCollection } from './collection'
 import { contentRating } from './contentRating'
 import { watchRegion } from './watchProviders'
@@ -274,6 +275,7 @@ function runAnimeGrouping(items: CatalogItem[], generation: number): void {
       // silently roll it back.
       if (!grouped.length || generation !== animeCatalogGeneration) return
       getDatabase().putCache('catalog:v2:anime', grouped, CATALOG_TTL_MS)
+      invalidateSearchPool('anime')
       getDatabase().putCache(ANIME_GROUPED_KEY, true, CATALOG_TTL_MS)
       // The whole point of the pass that just finished is the groupedIds
       // it worked out, so the index has to drop the pre-grouping answer
@@ -598,6 +600,7 @@ async function catalogListing(
     // finds nothing new.
     if (kind === 'anime') keepAnimeHistoryWithShows()
     db.putCache(key, items, CATALOG_TTL_MS)
+    invalidateSearchPool(kind)
     // ...and into the accumulating index, which is what this blob is on its
     // way to being replaced by (see migration 2). Written alongside rather
     // than instead of it for now, on purpose: `catalog:list` still serves
@@ -1817,19 +1820,13 @@ export function registerCatalogIpc(): void {
       // AFTER the title matches and never reordering them: somebody typing a
       // title wants that title first, and a cast match is a useful second
       // thought rather than a competing answer.
+      //
+      // From the cached blob only, and kept in memory between searches (see
+      // searchPool.ts). This used to await catalogData, which on a cold
+      // install or an expired blob joined a whole catalogue crawl before the
+      // reply could go, with the title matches already in hand.
       const seen = new Set(byTitle.map((item) => String(item.id)))
-      const pool = await catalogData(kind, false, 'interactive').catch(() => [] as CatalogItem[])
-      const byId = new Map(pool.map((item) => [String(item.id), item]))
-      const { people, labels } = searchCredits(byId.keys(), q)
-      const extra: CatalogItem[] = []
-      for (const id of [...people, ...labels]) {
-        if (seen.has(id)) continue
-        const item = byId.get(id)
-        if (!item) continue
-        seen.add(id)
-        extra.push(item)
-      }
-      return [...byTitle, ...extra]
+      return [...byTitle, ...searchByCredits(kind, q, seen)]
     }
   )
 
