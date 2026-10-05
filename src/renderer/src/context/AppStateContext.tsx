@@ -55,11 +55,12 @@ import {
 } from '@renderer/lib/mediaHub/startupSnapshot'
 import {
   planToastAfterStatus,
-  planToastAfterToggle,
   plannedToast,
-  toggleApplies
+  toastAfterPlanToggle,
+  toggleApplies,
+  unplannedToast
 } from '@renderer/lib/mediaHub/statusToasts'
-import type { HeldChange } from '@renderer/lib/mediaHub/heldFeed'
+import { heldPageAfterRoute, type HeldChange } from '@renderer/lib/mediaHub/heldFeed'
 import {
   startupContinueWatchingFallback,
   startupTrackedIdsFallback,
@@ -189,7 +190,8 @@ interface AppStateValue {
   myList: Set<string>
   /** Plans or un-plans a title. With `to`, a no-op when the title is
    *  already there: what an Undo calls, so a late press cannot flip it the
-   *  other way. Putting a title on the plan raises a toast with an Undo. */
+   *  other way. Putting a title on the plan, or taking it off, raises a
+   *  toast with an Undo. */
   toggleMyList: (media: MediaItem, to?: boolean) => void
   /**
    * The one status a title has — not watched, plan to watch, watched —
@@ -584,13 +586,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     held.set(id, { ...held.get(id), ...change })
   }, [])
   const homeFeed = useMediaHubHomeFeed(libraryKey, heldFeedRef)
-  // Leaving the page lets them go: the set is cleared and the feed
-  // refetched, so the next page shows the ranking as it stands. Keyed on
-  // the path alone, so a library page's filter changes, which only touch
-  // the query string, keep them.
+  // Leaving the page for another top-level page lets them go: the set is
+  // cleared and the feed refetched, so the next page shows the ranking as
+  // it stands. A title's page opened on top of it, and the way back, keep
+  // them (heldPageAfterRoute). Keyed on the path alone, so a library page's
+  // filter changes, which only touch the query string, keep them too.
+  const heldPageRef = useRef<string | null>(null)
   const refreshHomeFeedForHeld = homeFeed.refresh
   useEffect(() => {
-    if (heldFeedRef.current.size === 0) return
+    const { page, release } = heldPageAfterRoute(heldPageRef.current, location.pathname)
+    heldPageRef.current = page
+    if (!release || heldFeedRef.current.size === 0) return
     heldFeedRef.current.clear()
     refreshHomeFeedForHeld()
   }, [location.pathname, refreshHomeFeedForHeld])
@@ -950,11 +956,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     })
   }, [refreshPartyStatus, pushNotification])
 
-  // The plan toast's Undo calls toggleMyList from inside toggleMyList, so
+  // The plan toasts' Undo calls toggleMyList from inside toggleMyList, so
   // it goes through a ref, filled in once toggleMyList exists just below.
-  const toggleMyListRef = useRef<(media: MediaItem, to?: boolean) => void>(() => {})
+  const toggleMyListRef = useRef<(media: MediaItem, to?: boolean, fromUndo?: boolean) => void>(
+    () => {}
+  )
   const toggleMyList = useCallback(
-    (media: MediaItem, to?: boolean) => {
+    (media: MediaItem, to?: boolean, fromUndo = false) => {
       if (!toggleApplies(myListRef.current.has(media.id), to)) return
       holdInFeed(media.id)
       // This used to refuse the click outright when `media.id` was not
@@ -1009,11 +1017,21 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           }
           homeFeed.refresh()
           // A plan is one click from a card's menu, and on a recommendation
-          // row it is also what takes the card out of the row; the toast's
-          // Undo is the one-click way back. See statusToasts.ts.
-          if (planToastAfterToggle(result?.tracked)) {
+          // row it is also what takes the card out of the row; Remove from
+          // plan is one click too. Each toast's Undo is the one-click way
+          // back, and an Undo raises no toast of its own. See statusToasts.ts.
+          const toast = toastAfterPlanToggle(result?.tracked, fromUndo)
+          if (toast === 'planned') {
             pushNotification(
-              plannedToast(media, activeProfileId, () => toggleMyListRef.current(media, false))
+              plannedToast(media, activeProfileId, () =>
+                toggleMyListRef.current(media, false, true)
+              )
+            )
+          } else if (toast === 'unplanned') {
+            pushNotification(
+              unplannedToast(media, activeProfileId, () =>
+                toggleMyListRef.current(media, true, true)
+              )
             )
           }
         })
@@ -2065,7 +2083,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // the card menu; planToastAfterStatus says when.
           if (planToastAfterStatus(status, wasPlanned, episodes)) {
             pushNotification(
-              plannedToast(media, result.profileId, () => toggleMyList(media, false))
+              plannedToast(media, result.profileId, () => toggleMyList(media, false, true))
             )
           }
           // A whole show in one click is worth a word, and a way back: the

@@ -198,6 +198,9 @@ export interface MediaHubRawSettings {
   hideWatchedDefault?: boolean
   hideCompletedDefault?: boolean
   hideDislikedDefault?: boolean
+  /** Whether this install has had the one-time Hide Disliked upgrade: see
+   *  preferences.ts's upgradeHideDislikedDefault. Kept through a sign-out. */
+  hideDislikedDefaultMigrated?: boolean
   profiles?: ProfileRecord[]
   activeProfileId?: string
   [key: string]: unknown

@@ -5,9 +5,10 @@
 // the reversal it was given, and it goes away by itself after a few seconds
 // rather than waiting to be dismissed like the whole-show Undo does
 // (statusToasts.ts, notificationTtl.ts). An Undo pressed after the title
-// already went back another way does nothing (toggleApplies). Removing a
-// plan or a dislike offers no Undo: Plan, or Not interested, is already
-// the way back.
+// already went back another way does nothing (toggleApplies). Remove from
+// plan, from the card menu or the library side panel, has the same Undo,
+// and an Undo raises no toast of its own. Removing a dislike offers no
+// Undo: Not interested is already the way back.
 //
 // The Movies, Series and Anime grids (LibraryTile in AnimeLibraryPage.tsx)
 // open the same card menu as MediaCard, on right-click and on a "..."
@@ -18,13 +19,18 @@
 // build to render, and what matters is which handler each event reaches.
 //
 // Disliked titles are hidden from browsing unless the person switched Hide
-// Disliked off (preferences.ts's hideDislikedDefault), a page can still
+// Disliked off (preferences.ts's hideDislikedDefault; a false stored before
+// that default is turned on once, by upgradeHideDislikedDefault at startup,
+// and a choice made after it sticks), a page can still
 // show them with its own toggle, and a disliked card is marked wherever it
 // is shown: MediaCard, a library tile, the detail page's More like this
-// cards, the hero and the assistant's title tiles.
+// cards, the hero and the assistant's title tiles. My Stuff's Planned and
+// Lists tabs never hide one: a title planned and also disliked stays there,
+// marked.
 //
 // A card acted on from Home's Recommended row, a For You rail or the hero
-// keeps its slot, with its new state, until the route changes
+// keeps its slot, with its new state, until the route moves to a different
+// top-level page; a title's page opened on top and the way back keep it
 // (heldFeed.ts): the fresh feed has the title back at its old index, the
 // other entries keep their order, and the snapshot remembered for the next
 // launch is the fresh answer. The library side panel keeps the title it
@@ -43,14 +49,23 @@ import path from 'node:path'
 import {
   dislikedToast,
   planToastAfterStatus,
-  planToastAfterToggle,
   plannedToast,
   QUICK_UNDO_MS,
-  toggleApplies
+  toastAfterPlanToggle,
+  toggleApplies,
+  unplannedToast
 } from '../src/renderer/src/lib/mediaHub/statusToasts'
 import { notificationTtlMs } from '../src/renderer/src/lib/notificationTtl'
-import { hideDislikedDefault, logoutSettings } from '../src/main/media-hub/preferences'
-import { holdEntries, holdTouchedEntries } from '../src/renderer/src/lib/mediaHub/heldFeed'
+import {
+  hideDislikedDefault,
+  logoutSettings,
+  upgradeHideDislikedDefault
+} from '../src/main/media-hub/preferences'
+import {
+  heldPageAfterRoute,
+  holdEntries,
+  holdTouchedEntries
+} from '../src/renderer/src/lib/mediaHub/heldFeed'
 import { resolveLibrarySelection } from '../src/renderer/src/lib/mediaHub/librarySelection'
 import type { HomeRail, MediaItem, Recommendation } from '../src/renderer/src/types'
 import { createApi, type ApiTransport } from '../src/preload/api'
@@ -80,6 +95,17 @@ check('a plan toast names the title, is bound to the profile and undoes the plan
   assert.match(toast.message, /"Dune" is on your plan/)
   assert.equal(toast.profileId, 'p1')
   assert.equal(toast.action?.label, 'Undo')
+  toast.action?.run()
+  assert.equal(undone, 1)
+})
+
+check('a removal from the plan names the title and its Undo puts it back', () => {
+  let undone = 0
+  const toast = unplannedToast({ title: 'Dune' }, 'p1', () => undone++)
+  assert.match(toast.message, /"Dune" is off your plan/)
+  assert.equal(toast.profileId, 'p1')
+  assert.equal(toast.action?.label, 'Undo')
+  assert.equal(notificationTtlMs(toast), QUICK_UNDO_MS)
   toast.action?.run()
   assert.equal(undone, 1)
 })
@@ -151,16 +177,29 @@ check('both toggles in AppStateContext check the Undo target before acting', () 
   )
   assert.match(context, /if \(!toggleApplies\(myListRef\.current\.has\(media\.id\), to\)\) return/)
   assert.match(context, /if \(!toggleApplies\(prev\.has\(media\.id\), to\)\) return prev/)
-  assert.match(context, /if \(planToastAfterToggle\(result\?\.tracked\)\)/)
+  assert.match(context, /toastAfterPlanToggle\(result\?\.tracked, fromUndo\)/)
   assert.match(context, /if \(planToastAfterStatus\(status, wasPlanned, episodes\)\)/)
+  // Every Undo that runs the plan toggle says so, so it raises no toast.
+  assert.match(context, /plannedToast\([^;]*toggleMyListRef\.current\(media, false, true\)/)
+  assert.match(context, /unplannedToast\([^;]*toggleMyListRef\.current\(media, true, true\)/)
+  assert.match(
+    context,
+    /plannedToast\(media, result\.profileId, \(\) => toggleMyList\(media, false, true\)\)/
+  )
 })
 
-check('the card menu raises the plan toast for a plan and not for a removal', () => {
-  assert.equal(planToastAfterToggle(true), true)
-  assert.equal(planToastAfterToggle(false), false)
-  // No answer from the write (no bridge, or a failed call): no toast.
-  assert.equal(planToastAfterToggle(undefined), false)
-})
+check(
+  'the plan toggle raises the plan toast for a plan and the removal toast for a removal',
+  () => {
+    assert.equal(toastAfterPlanToggle(true, false), 'planned')
+    assert.equal(toastAfterPlanToggle(false, false), 'unplanned')
+    // No answer from the write (no bridge, or a failed call): no toast.
+    assert.equal(toastAfterPlanToggle(undefined, false), null)
+    // An Undo is not offered another.
+    assert.equal(toastAfterPlanToggle(true, true), null)
+    assert.equal(toastAfterPlanToggle(false, true), null)
+  }
+)
 
 check('the status pill raises the plan toast only for a new plan', () => {
   assert.equal(planToastAfterStatus('planned', false, undefined), true)
@@ -249,6 +288,48 @@ check('Hide Disliked is on unless the person turned it off', () => {
   assert.equal(logoutSettings({ hideDislikedDefault: false }).hideDislikedDefault, false)
 })
 
+check('a stored false from before the default is turned on once, then the choice sticks', () => {
+  // Switched off in Settings, or written by an earlier version's sign-out.
+  const upgraded = upgradeHideDislikedDefault({ theme: 'neon', hideDislikedDefault: false })
+  assert.deepEqual(upgraded, {
+    theme: 'neon',
+    hideDislikedDefault: true,
+    hideDislikedDefaultMigrated: true
+  })
+  assert.equal(hideDislikedDefault(upgraded ?? {}), true)
+  // Never stored: nothing to turn on, only the record.
+  assert.deepEqual(upgradeHideDislikedDefault({}), { hideDislikedDefaultMigrated: true })
+  // Switched off after the upgrade: left alone on every later launch.
+  assert.equal(
+    upgradeHideDislikedDefault({ hideDislikedDefault: false, hideDislikedDefaultMigrated: true }),
+    null
+  )
+  // A sign-out keeps the record with the choice, or the next launch would
+  // turn it on again.
+  const signedOut = logoutSettings({
+    hideDislikedDefault: false,
+    hideDislikedDefaultMigrated: true
+  })
+  assert.equal(signedOut.hideDislikedDefault, false)
+  assert.equal(signedOut.hideDislikedDefaultMigrated, true)
+  assert.equal(upgradeHideDislikedDefault(signedOut), null)
+  assert.equal('hideDislikedDefaultMigrated' in logoutSettings({}), false)
+  // The desktop and the headless backend both start through startBackend,
+  // which runs the upgrade before anything reads the setting.
+  const backend = fs.readFileSync(path.resolve(__dirname, '../src/main/backend.ts'), 'utf8')
+  const start = backend.slice(
+    backend.indexOf('export function startBackend('),
+    backend.indexOf('export function stopBackend(')
+  )
+  assert.match(
+    start,
+    /upgradeHideDislikedDefault\(readSettings\(\)\)[\s\S]*writeSettings\(upgraded\)/
+  )
+  assert.ok(
+    start.indexOf('upgradeHideDislikedDefault(') < start.lastIndexOf('registerMediaHubIpc()')
+  )
+})
+
 check('a browse page starts from the default and its own toggle can show disliked titles', () => {
   const defaults = { hideWatched: false, hideCompleted: false, hideDisliked: true }
   const fresh = filterStateFromSearchParams(new URLSearchParams(), defaults)
@@ -264,6 +345,28 @@ check('a browse page starts from the default and its own toggle can show dislike
     ['b']
   )
   assert.equal(applyWatchStateFilters(items as never[], shown).length, 2)
+})
+
+check('My Stuff keeps a disliked title on the Planned and Lists tabs', () => {
+  const myStuff = fs.readFileSync(
+    path.resolve(__dirname, '../src/renderer/src/routes/MyStuffPage.tsx'),
+    'utf8'
+  )
+  // The one filter those two tabs read, with Hide Disliked off whatever the
+  // setting says; the cards they draw are MediaCard, which marks it.
+  const filters = myStuff.match(/const hideFilters = useMemo\([\s\S]*?\n {2}\)/)?.[0] ?? ''
+  assert.match(filters, /hideDisliked: false/)
+  assert.doesNotMatch(filters, /hideDislikedDefault/)
+  assert.match(myStuff, /applyWatchStateFilters\(listRows, hideFilters\)/)
+  assert.match(myStuff, /tab === 'planned' && <ListsView watchlist=\{listItems\}/)
+  assert.match(myStuff, /tab === 'list' && <ListsView watchlist=\{listItems\}/)
+  // Not for me lists them all, unfiltered.
+  assert.match(myStuff, /useCatalogByIds\(dislikedIds, adaptCatalogItems, indexRevision\)/)
+  // The Mood pages keep the setting.
+  for (const file of ['components/home/MoodBrowser.tsx', 'routes/MoodExplorePage.tsx']) {
+    const source = fs.readFileSync(path.resolve(__dirname, '../src/renderer/src', file), 'utf8')
+    assert.match(source, /hideDisliked: mediaHubSettings\?\.hideDislikedDefault \?\? true/, file)
+  }
 })
 
 check('every renderer reader of the setting falls back to on', () => {
@@ -432,7 +535,31 @@ check('the home feed holds only within one library, and remembers the fresh answ
   assert.match(hooksSource, /rememberHomeFeed\(\{\s*featured: next\.featured,/)
 })
 
-check('the status actions hold the title, and a route change lets it go and refetches', () => {
+check('a title page opened on top keeps the holds; another top-level page lets them go', () => {
+  // Home, a title's page, a person's page from it, and back.
+  let state = heldPageAfterRoute(null, '/')
+  assert.deepEqual(state, { page: '/', release: false })
+  for (const pathname of ['/movies/tt0111161', '/people/Frank%20Darabont', '/series/tt1']) {
+    state = heldPageAfterRoute(state.page, pathname)
+    assert.deepEqual(state, { page: '/', release: false }, pathname)
+  }
+  state = heldPageAfterRoute(state.page, '/')
+  assert.deepEqual(state, { page: '/', release: false })
+  // A different top-level page, straight or by way of a title's page.
+  assert.deepEqual(heldPageAfterRoute('/', '/movies'), { page: '/movies', release: true })
+  state = heldPageAfterRoute('/', '/anime/kitsu:1')
+  assert.deepEqual(heldPageAfterRoute(state.page, '/settings'), {
+    page: '/settings',
+    release: true
+  })
+  assert.deepEqual(heldPageAfterRoute('/', '/my-stuff'), { page: '/my-stuff', release: true })
+  // Opened on a title, then to Home: nothing on screen before to leave.
+  state = heldPageAfterRoute(null, '/movies/tt1')
+  assert.deepEqual(state, { page: null, release: false })
+  assert.deepEqual(heldPageAfterRoute(state.page, '/'), { page: '/', release: false })
+})
+
+check('the status actions hold the title, and leaving the page lets it go and refetches', () => {
   for (const name of ['toggleMyList', 'toggleDisliked', 'setTitleStatus']) {
     const start = contextSource.indexOf(`const ${name} = useCallback(`)
     assert.ok(start >= 0, `${name} not found`)
@@ -441,7 +568,7 @@ check('the status actions hold the title, and a route change lets it go and refe
   }
   assert.match(
     contextSource,
-    /heldFeedRef\.current\.clear\(\)\s*refreshHomeFeedForHeld\(\)\s*\}, \[location\.pathname,/
+    /heldPageAfterRoute\(heldPageRef\.current, location\.pathname\)[\s\S]*?if \(!release \|\| heldFeedRef\.current\.size === 0\) return\s*heldFeedRef\.current\.clear\(\)\s*refreshHomeFeedForHeld\(\)\s*\}, \[location\.pathname,/
   )
 })
 

@@ -12,8 +12,9 @@
 //   - a title found only by that search gets an index row once it is
 //     opened (metadata(), from the network or from its cached entry) or
 //     tracked through any of the tracking handlers (plan, mark watched, mark
-//     a season, set a status, not for me), so the grids and My Stuff, which
-//     read the index by id, can show it; un-planning writes nothing;
+//     a season, set a status, not for me) or pulled from a service's
+//     plan-to-watch, so the grids and My Stuff, which read the index by id,
+//     can show it; un-planning writes nothing;
 //   - the crawl announces the index it wrote, which is what lets the phone's
 //     Browse grid, empty on a fresh install, fill in when the crawl lands.
 //
@@ -34,6 +35,9 @@ import type { CatalogItem, CatalogSearchResult } from '../src/shared/media-hub/t
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-catalog-search-'))
 process.env.R3_USER_DATA = scratch
+// The settings the watchlist pull reads (settingsStore.ts) reach electron
+// lazily; this tells electronModule.ts the stand-in below is in place.
+process.env.R3_ELECTRON_SHIM = '1'
 const shim = pathToFileURL(
   path.join(__dirname, '..', 'src', 'headless', 'electronShim', 'index.ts')
 )
@@ -88,6 +92,11 @@ globalThis.fetch = (async (input: string | URL) => {
       metas: [{ id: `tt80${String(n).padStart(5, '0')}`, type: 'series', name: `S${n}` }]
     })
   }
+  // Trakt, for the watchlist pull: one film on the plan-to-watch list.
+  if (url.startsWith('https://api.trakt.tv/sync/watchlist/movies')) {
+    return json([{ movie: { title: 'Pulled Harbour', year: 2019, ids: { imdb: 'tt7200001' } } }])
+  }
+  if (url.startsWith('https://api.trakt.tv/')) return json([])
   const meta = url.match(/\/meta\/movie\/(tt\d+)\.json$/)
   if (meta) {
     return json({
@@ -297,6 +306,28 @@ async function main(): Promise<void> {
       poster: 'http://x/p.jpg'
     })
     assert.equal(db.indexByIds(['simkl:9', 'tt7000003']).items.length, 0)
+  })
+
+  await check("a title pulled from a service's plan-to-watch gets a row", async () => {
+    // Trakt connected, with a token far from its refresh window. The
+    // shim's safeStorage is unavailable, so the stored form is the tagged
+    // plain one settingsStore writes in that case.
+    const { writeSettings, readSettings } = await import('../src/main/media-hub/settingsStore')
+    const { syncPlannedFromServices } = await import('../src/main/media-hub/watchlists')
+    const plain = (value: string): string => `plain:${Buffer.from(value).toString('base64')}`
+    writeSettings({
+      ...readSettings(),
+      traktClientId: 'client',
+      traktAccessToken: plain('token'),
+      traktExpiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000
+    })
+    const report = await syncPlannedFromServices('interactive')
+    assert.equal(report.added, 1, JSON.stringify(report))
+    assert.ok(db.isTracked('tt7200001'), 'the pull planned it')
+    const row = db.indexByIds(['tt7200001']).items
+    assert.equal(row[0]?.title, 'Pulled Harbour')
+    assert.equal(row[0]?.type, 'movie')
+    assert.equal(row[0]?.year, '2019')
   })
 
   await check('the crawl announces the index it wrote', async () => {

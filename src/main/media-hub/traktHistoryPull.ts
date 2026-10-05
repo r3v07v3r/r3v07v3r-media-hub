@@ -19,11 +19,15 @@
 //    stamped with Trakt's own time, which the import would record as a
 //    second play. The catch-up skips Simkl's echo the same way
 //    (simklCatchUpRules.ts).
-//  - With nothing on record for this profile and account, the first pass
-//    pulls nothing. It records Trakt's stamps and the time, and history
-//    from then on arrives by itself; the account's past is the import
-//    button's, as before. An import that finishes records its own start as
-//    where the pull carries on from.
+//  - With nothing on record for this profile and account (no import has
+//    been run for it, and no pull), the first pass reads the account's
+//    whole past once, through the import button's own path and with its
+//    backup (traktClient.ts's importTraktLibrary), keeping the rule above:
+//    a viewing already held here is skipped. Then it records Trakt's stamps
+//    and the time, and history from then on arrives by itself. Somebody
+//    who connects Trakt gets their history without pressing Import. An
+//    import that finishes records its own start as where the pull carries
+//    on from, so a pass after one never reads the whole account again.
 //
 // Each pull reaches back a few days before the last one (OVERLAP_MS), for
 // a viewing that reached Trakt late with an earlier date; a row already
@@ -97,6 +101,16 @@ export function markTraktHistoryPulled(
   writeState(db, profile, { account, stamps: null, since: new Date(atMs).toISOString() })
 }
 
+/** The key a viewing is held under here, as db.history() rows give it. */
+function playKey(row: { id: string; season?: number | null; episode?: number | null }): string {
+  return `${row.id}:${row.season ?? 'movie'}:${row.episode ?? 'movie'}`
+}
+
+/** The rows of `rows` whose viewing is not in `held` (playKey form). */
+export function playsNotHeld<T extends ImportedPlay>(rows: T[], held: ReadonlySet<string>): T[] {
+  return rows.filter((row) => !held.has(playKey(row)))
+}
+
 export interface TraktPullDeps {
   db: Pick<
     MediaHubDatabase,
@@ -114,6 +128,11 @@ export interface TraktPullDeps {
    *  filed back in from Trakt before the removal lands. Optional so a test
    *  that is not about it can leave it out. */
   removalsOwed?(): ReadonlySet<string>
+  /** The import button's whole-account read and write (traktClient.ts's
+   *  importTraktLibrary, its backup included), skipping the viewings `held`
+   *  answers with when it is about to write. For a first pass with nothing
+   *  on record. How many viewings it wrote. */
+  fullImport(held: () => ReadonlySet<string>): Promise<{ plays: number }>
   /** Where the import files Trakt's plays (traktClient.ts's fileTraktPlays). */
   file(rows: ImportedPlay[]): Promise<ImportedPlay[]>
   /** The backup before history rows are written (autoBackup.ts). */
@@ -148,6 +167,10 @@ export async function pullTraktHistory(deps: TraktPullDeps): Promise<TraktPullRe
   const account = deps.account()
   if (!account) return { plays: 0, read: false }
   const moved = (): boolean => db.activeProfile() !== profile || deps.account() !== account
+  // What is held here now: every viewing in the history, and every one whose
+  // removal Trakt has not taken yet. Read when about to write.
+  const held = (): ReadonlySet<string> =>
+    new Set([...db.history().map(playKey), ...(deps.removalsOwed?.() ?? [])])
   try {
     const startedAt = deps.now()
     const stamps = parseTraktActivities(await deps.lastActivities())
@@ -157,9 +180,15 @@ export async function pullTraktHistory(deps: TraktPullDeps): Promise<TraktPullRe
       account
     )
     if (!state) {
-      // Nothing on record: start from now. See the header.
+      // Nothing on record: the account's past, once, by the import's path.
+      // A failure (the anime catalog still being organised, a profile
+      // switch) throws to the catch below and records nothing, so the next
+      // pass tries again. See the header.
+      const imported = await deps.fullImport(held)
+      if (moved()) return { plays: 0, read: true }
       writeState(db, profile, { account, stamps, since: new Date(startedAt).toISOString() })
-      return { plays: 0, read: false }
+      if (imported.plays) deps.announce()
+      return { plays: imported.plays, read: true }
     }
     if (sameStamps(state.stamps, stamps)) return { plays: 0, read: false }
 
@@ -171,13 +200,7 @@ export async function pullTraktHistory(deps: TraktPullDeps): Promise<TraktPullRe
     const filed = await deps.file(parsed.rows)
     if (moved()) return { plays: 0, read: true }
 
-    const held = new Set([
-      ...db.history().map((row) => `${row.id}:${row.season ?? 'movie'}:${row.episode ?? 'movie'}`),
-      ...(deps.removalsOwed?.() ?? [])
-    ])
-    const fresh = filed.filter(
-      (row) => !held.has(`${row.id}:${row.season ?? 'movie'}:${row.episode ?? 'movie'}`)
-    )
+    const fresh = playsNotHeld(filed, held())
     let plays = 0
     if (fresh.length) {
       deps.backup()

@@ -1010,6 +1010,13 @@ export interface MediaHubDatabase {
   /** The highest rank any row of this kind holds — the floor above which
    *  deep-scanned rows must land to stay UNDER the curated ordering. */
   indexMaxRank(kind: MediaKind): number
+  /** Every id some profile has tracked, watched, rated or marked Not for
+   *  me that has no catalog_index row under that id, with the kind and
+   *  title its own rows carry (null for an id known only by its rating).
+   *  Across all profiles, unlike every other read here: it feeds the
+   *  one-time index backfill (indexBackfill.ts), which is once per
+   *  database. Null when the read failed. */
+  indexBackfillCandidates(): Array<{ id: string; type: string | null; title: string | null }> | null
   trackedUpdates(details: CatalogItem[], now?: Date): TrackedUpdate[]
   close(): void
   filename: string
@@ -3345,6 +3352,32 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         // has no genres", which is a claim, not an absence.
         logError('catalog:index:facets', error)
         return { genres: [], years: [], statuses: [] }
+      }
+    },
+
+    indexBackfillCandidates() {
+      try {
+        // MAX skips the NULLs a rating contributes, so an id that is also
+        // tracked or watched takes its kind and title from that row.
+        const rows = sql
+          .prepare(
+            `SELECT id, MAX(type) AS type, MAX(title) AS title FROM (
+               SELECT content_id AS id, type, title FROM tracked
+               UNION ALL SELECT content_id, type, title FROM watch_history
+               UNION ALL SELECT content_id, type, title FROM disliked
+               UNION ALL SELECT content_id, NULL, NULL FROM ratings
+             ) WHERE id NOT IN (SELECT id FROM catalog_index)
+             GROUP BY id ORDER BY id`
+          )
+          .all() as Row[]
+        return rows.map((row) => ({
+          id: String(row.id),
+          type: row.type == null ? null : String(row.type),
+          title: row.title == null ? null : String(row.title)
+        }))
+      } catch (error) {
+        logError('catalog:index:backfill-candidates', error)
+        return null
       }
     },
 

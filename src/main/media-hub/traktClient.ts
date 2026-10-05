@@ -53,7 +53,12 @@ import {
   writeSettings
 } from './settingsStore'
 import { notifyLibraryChanged } from './rendererBridge'
-import { markTraktHistoryPulled, pullTraktHistory, type TraktPullReport } from './traktHistoryPull'
+import {
+  markTraktHistoryPulled,
+  playsNotHeld,
+  pullTraktHistory,
+  type TraktPullReport
+} from './traktHistoryPull'
 
 const API = 'https://api.trakt.tv'
 
@@ -575,14 +580,23 @@ function remapAnimeRatings<T extends { id: string; type: 'movie' | 'series' }>(
   })
 }
 
+export interface TraktImportOptions {
+  /** Viewings to leave out, in db.history()'s `id:season:episode` form, read
+   *  just before the write. The history pull's first pass passes what is
+   *  held here (traktHistoryPull.ts), so a viewing played here and echoed
+   *  back by Trakt is not a second play; the Import button passes nothing. */
+  skipHeld?: () => ReadonlySet<string>
+}
+
 /**
  * Brings a Trakt account's watched history and ratings into this profile.
  *
  * Gap-filling, never overwriting, and repeatable — see db.importWatched.
  * Pressing Import twice does nothing the second time, which matters because
- * the honest thing to do about a partial import is to run it again.
+ * the honest thing to do about a partial import is to run it again. Also
+ * the history pull's first pass for an account with nothing on record.
  */
-export async function importTraktLibrary(): Promise<ImportSummary> {
+export async function importTraktLibrary(options: TraktImportOptions = {}): Promise<ImportSummary> {
   const db = getDatabase()
   // The profile this import is FOR, captured before the first request. Every
   // page below is an await, and a switch mid-import would otherwise pour one
@@ -629,7 +643,8 @@ export async function importTraktLibrary(): Promise<ImportSummary> {
     throw new Error('Profile changed while importing — nothing was written.')
   }
 
-  const remappedPlays = remapAnimePlays(plays.rows, animeTargets)
+  const filedPlays = remapAnimePlays(plays.rows, animeTargets)
+  const remappedPlays = options.skipHeld ? playsNotHeld(filedPlays, options.skipHeld()) : filedPlays
   const remappedRatings = rated.flatMap((parsed) => remapAnimeRatings(parsed.rows, animeTargets))
 
   // A whole account's history is about to be written into this one: a
@@ -680,6 +695,7 @@ export function pullTraktHistoryNow(
     lastActivities: () => traktRequest('/sync/last_activities', {}, priority),
     history: (startAt) => readAllPages(`/sync/history?start_at=${encodeURIComponent(startAt)}`),
     removalsOwed,
+    fullImport: (held) => importTraktLibrary({ skipHeld: held }),
     file: fileTraktPlays,
     // At most once a day: this runs every half hour, and its backups must
     // not push the ones taken before a regroup out of the rotation.

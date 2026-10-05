@@ -3,7 +3,8 @@
 // Plan to watch and Not interested are one click from a card's menu or the
 // status pill, and both make a card leave lists: a plan takes it out of the
 // recommendations, a dislike takes it out of the recommendations and, with
-// Hide Disliked on, out of browsing too. A mis-click used to
+// Hide Disliked on, out of browsing too. Remove from plan is one click too,
+// and takes a title off a list somebody built, so it has the same Undo. A mis-click used to
 // mean finding the title again (My Stuff > Not for me, for a dislike) before
 // anything could reverse it. The Undo here reverses exactly the change the
 // toast reports. The callers in AppStateContext make it a no-op once the
@@ -24,11 +25,18 @@ export function toggleApplies(current: boolean, to?: boolean): boolean {
   return to === undefined || current !== to
 }
 
-/** Whether the card menu's plan toggle gets the plan toast: only when the
- *  write answered that the title is now tracked. Remove from plan gets no
- *  toast; Plan on the same card is the way back. */
-export function planToastAfterToggle(tracked: boolean | undefined): boolean {
-  return tracked === true
+/** Which toast the plan toggle (the card menu's Plan and Remove from plan,
+ *  the library side panel's Remove from plan) raises, from the write's
+ *  answer: the plan toast when the title is now tracked, the removal toast
+ *  when it is not. None when the write gave no answer, and none when the
+ *  toggle was itself a toast's Undo: a second toast would offer back the
+ *  change just undone. */
+export function toastAfterPlanToggle(
+  tracked: boolean | undefined,
+  fromUndo: boolean
+): 'planned' | 'unplanned' | null {
+  if (fromUndo || typeof tracked !== 'boolean') return null
+  return tracked ? 'planned' : 'unplanned'
 }
 
 /** Whether the status pill's change gets the plan toast. Only a move to
@@ -56,6 +64,22 @@ export function plannedToast(
   return {
     tone: 'success',
     message: `"${media.title}" is on your plan.`,
+    profileId,
+    durationMs: QUICK_UNDO_MS,
+    action: { label: 'Undo', run: undo }
+  }
+}
+
+/** After Remove from plan, from the card menu or the library side panel.
+ *  The Undo puts the title back on the plan. */
+export function unplannedToast(
+  media: Pick<MediaItem, 'title'>,
+  profileId: string,
+  undo: () => void
+): Toast {
+  return {
+    tone: 'info',
+    message: `"${media.title}" is off your plan.`,
     profileId,
     durationMs: QUICK_UNDO_MS,
     action: { label: 'Undo', run: undo }

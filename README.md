@@ -55,13 +55,17 @@ trending feed (either one alone fills the grid), anime from Kitsu. No key is req
   rating, plus runtime for movies, number of seasons and episode length for series, episode count
   for anime, and status. Hide what you have started or watched, shows you are caught up on, and
   titles you marked **Not interested** (they collect under My Stuff → Not for me), in any
-  combination, and choose which of those start switched on
-  from the Settings page's Browsing card. Hiding Not interested titles starts on, except where
-  that setting was already saved as off (switched off in Settings, or stored by signing out on an
-  earlier version); a page's own toggle shows them again, dimmed and marked. Save any filter combination as a named view; it comes back as
+  combination, and choose which of those start switched on from the Settings page's Browsing card.
+  Hiding Not interested titles starts on. An install that had it saved as off before this default
+  (switched off in Settings, or stored by signing out on an earlier version) has it switched on
+  once, on the first launch of this version; switching it off after that sticks. A page's own toggle
+  shows them again, dimmed and marked. Save any filter combination as a named view; it comes back as
   a chip. **Scan deeper** on a category page pulls in more of the catalog than loaded by itself.
-  A title found only by search joins the library once you open or track it, so it shows in the
-  grids, My Stuff and the Planned row like anything else.
+  A title found only by search joins the library once you open or track it, and one pulled from a
+  service's plan-to-watch joins it when the pull brings it in, so it shows in the grids, My Stuff
+  and the Planned row like anything else (its poster arrives the first time it is opened). Titles
+  tracked, watched, rated or marked Not interested before this was the case are added once, in the
+  background, when the app is idle.
   An anime whose seasons are merged into one show is one tile in the Anime library and in search,
   on the desktop and the phone, with an "N seasons" chip on its poster; its rating is its first
   season's. Its seasons are tabs on its page, and searching a later season's own name finds the
@@ -73,7 +77,8 @@ trending feed (either one alone fills the grid), anime from Kitsu. No key is req
   ratings steer it: a genre you watch often but enjoy little stops leading. An anime whose
   seasons are merged into one show is suggested as that show, never as one of its later seasons.
   A suggestion you plan, mark watched or mark Not interested from Home's row, a For You shelf or
-  the hero stays where it is, with its new badge, until you leave the page.
+  the hero stays where it is, with its new badge, until you go to another page; opening a title and
+  coming back keeps it there.
 - **Cast and crew are clickable** once a TMDB key is connected: names open what else of theirs
   the catalog holds, and typing a director's name in search finds their films rather than films
   with their name in the title.
@@ -170,8 +175,8 @@ Playback is mpv, embedded inside the app's own window on Windows; there is no tr
   **Plan to watch** and **Mark watched** (**Mark all watched** on a series) as separate items, and
   **Not interested**. A planned title can be taken off the plan from the same menu, or with
   **Remove from plan** in the library side panel. Marking a whole series watched marks
-  every aired episode, and clearing it offers an undo. Plan to watch and **Not interested** each
-  show a toast with an **Undo** for a few seconds. On the episode list, **Mark season watched**
+  every aired episode, and clearing it offers an undo. Plan to watch, Remove from plan and **Not
+  interested** each show a toast with an **Undo** for a few seconds. On the episode list, **Mark season watched**
   acts on a season's aired episodes, and <kbd>Ctrl</kbd>- or <kbd>Shift</kbd>-clicking episodes
   selects several to mark at once. Lists are separate from status.
 - **Rate what you have seen** out of 10 on a title's page. Each profile keeps its own scores, and
@@ -180,7 +185,8 @@ Playback is mpv, embedded inside the app's own window on Windows; there is no tr
   with anything not out yet pulled to the top), **In progress**, **Watched**, **Lists** (your named
   lists, plus any lists on a connected Trakt or Simkl account, read-only), **Rated**, **History**
   (the 500 most recent viewings; any single viewing can be removed without un-watching the
-  episode), **Stats**, and **Not for me**.
+  episode), **Stats**, and **Not for me**. Hide Disliked does not apply to Planned and Lists: a
+  title you planned and also marked Not interested stays there, marked.
 - **Profiles**, including PIN-protected ones. Each keeps its own list, history, ratings and resume
   points. A profile can be marked **Kids**, which today only shows a badge next to its name; it does
   not yet restrict what that profile can browse or play.
@@ -214,7 +220,8 @@ how many are still waiting.
 
 - **Bring an existing history in** from **Control centre → General → Your library**: IMDb's ratings
   export (needs nothing) and a Letterboxd "Export Your Data" zip (needs TMDB connected, to match
-  titles). A connected Trakt account imports from **Accounts**. Viewings keep the dates you watched
+  titles). A connected Trakt account imports from **Accounts**, and is imported once by itself the
+  first time its history is pulled if you have not pressed Import. Viewings keep the dates you watched
   them; imported ratings keep the score but not the date. All three only fill in what is missing.
 - **Back up your library** to a single file and restore it on another machine, from the same card.
   Service credentials stay on the machine that holds them.
@@ -420,7 +427,7 @@ variables are in [daemon/README.md](daemon/README.md).
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `npm run dev`              | Start Electron with the Vite development server and hot reload.                                                                 |
 | `npm start`                | Preview an already-built application.                                                                                           |
-| `npm test`                 | Run every registered test file (89 today, plain `tsx` scripts chained in `package.json`).                                       |
+| `npm test`                 | Run every registered test file (plain `tsx` scripts chained in `package.json`).                                                 |
 | `npm run lint`             | Check JavaScript and TypeScript with ESLint.                                                                                    |
 | `npm run typecheck`        | Type-check the Electron/Node and renderer projects. The daemon is a third project, checked separately.                          |
 | `npm run typecheck:daemon` | Type-check the r3-cache daemon (`daemon/`, `src/shared/`, `src/main/media-hub/`).                                               |

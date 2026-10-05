@@ -54,6 +54,7 @@ import {
   type TaskPriority
 } from './taskScheduler'
 import { isLanCacheConnected } from './lanCache'
+import { runIndexBackfill } from './indexBackfill'
 
 /** How often the registry looks at what is due. One timer for every
  *  recurring job in the app. Coarse on purpose — nothing here is
@@ -479,6 +480,30 @@ export function startBackgroundJobs(): void {
     maxPressure: 'busy',
     run: async () => {
       getDatabase().pruneExpiredCache()
+    }
+  })
+
+  registerRecurringJob({
+    name: 'index-backfill',
+    label: 'Adding your titles to the library',
+    // Once per database (see indexBackfill.ts): titles tracked, watched,
+    // rated or marked Not for me before those actions gave a title an index
+    // row get one, so they show in the grids and My Stuff without being
+    // opened again. Every run after the pass has finished is one cache
+    // read. Held to idle and stopped between chunks when the app gets
+    // busy; an unfinished pass runs again an hour later. Registered last
+    // so the other jobs' stagger is unchanged.
+    everyMs: 60 * 60 * 1000,
+    firstRunAfterMs: 2 * 60 * 1000,
+    priority: 'maintenance',
+    maxPressure: 'idle',
+    run: async () => {
+      const report = await runIndexBackfill({
+        db: getDatabase(),
+        stillIdle: () => currentPressure() === 'idle',
+        yieldTurn: () => new Promise((resolve) => setImmediate(resolve))
+      })
+      if (report.indexed > 0) notifyLibraryChanged('index-backfill', 'index')
     }
   })
 

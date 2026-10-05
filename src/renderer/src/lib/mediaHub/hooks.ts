@@ -871,7 +871,8 @@ export interface HomeFeedResult {
 export function useMediaHubHomeFeed(
   libraryKey: string,
   /** Titles changed on the page now on screen, kept at their place in
-   *  the recommendations until the route changes — see heldFeed.ts. */
+   *  the recommendations until a different top-level page is opened — see
+   *  heldFeed.ts. */
   held?: RefObject<ReadonlyMap<string, HeldChange>>
 ): HomeFeedResult {
   const [state, setState] = useState<typeof EMPTY_HOME_FEED | null>(null)
