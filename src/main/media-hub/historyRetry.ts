@@ -31,7 +31,7 @@ export interface PendingHistoryPush {
   /** Which way the change went. For MyAnimeList the retry is a recount of
    *  the season from local history either way. */
   action: 'add' | 'remove'
-  item: { id: string; type: MediaKind; title: string; year?: string }
+  item: { id: string; type: MediaKind; title: string; year?: string; totalEpisodes?: number }
   /** Null for a film. */
   season: number | null
   /** Null for a film, and for a MyAnimeList season entry. */
@@ -44,6 +44,12 @@ export interface PendingHistoryPush {
    *  the push failed. An entry for any other account is never sent. */
   mark: string
   lastError?: string
+  /** MyAnimeList only: the list status the push chose rather than left to
+   *  the count (the whole-title clear back to plan sends plan_to_watch),
+   *  and the season's regular episode total when it was known. A retry
+   *  sends them again, or the recount would not say what the push did. */
+  malStatus?: 'plan_to_watch'
+  seasonTotal?: number
 }
 
 export type PendingHistoryPushes = Record<string, PendingHistoryPush>
@@ -88,7 +94,8 @@ function isEntry(value: unknown): value is PendingHistoryPush {
     typeof entry.item.id === 'string' &&
     typeof entry.attempts === 'number' &&
     typeof entry.at === 'number' &&
-    typeof entry.mark === 'string'
+    typeof entry.mark === 'string' &&
+    (entry.malStatus === undefined || entry.malStatus === 'plan_to_watch')
   )
 }
 
@@ -132,6 +139,9 @@ export interface HistoryPushOutcome {
   rows: readonly { season: number | null; episode: number | null }[]
   action: 'add' | 'remove'
   error?: string
+  /** MyAnimeList only, as the push sent them — see PendingHistoryPush. */
+  malStatus?: 'plan_to_watch'
+  seasonTotals?: ReadonlyMap<number, number>
 }
 
 /**
@@ -159,6 +169,7 @@ export function recordHistoryPush(
       continue
     }
     if (!outcome.mark) continue
+    const total = row.season == null ? undefined : outcome.seasonTotals?.get(row.season)
     next[key] = {
       service: outcome.service,
       action: outcome.action,
@@ -168,7 +179,9 @@ export function recordHistoryPush(
       attempts: 0,
       at: now,
       mark: outcome.mark,
-      lastError: outcome.error
+      lastError: outcome.error,
+      ...(outcome.service === 'mal' && outcome.malStatus ? { malStatus: outcome.malStatus } : {}),
+      ...(outcome.service === 'mal' && total !== undefined ? { seasonTotal: total } : {})
     }
   }
   return next
@@ -182,6 +195,10 @@ export interface HistoryRetryBatch {
   rows: { season: number | null; episode: number | null }[]
   /** The entries it settles, each with the `at` it was read at. */
   entries: { key: string; at: number }[]
+  /** MyAnimeList only: the status its entries were pushed with (a batch
+   *  holds one), and each season's total where it was known. */
+  malStatus?: 'plan_to_watch'
+  seasonTotals?: Map<number, number>
 }
 
 /**
@@ -207,16 +224,23 @@ export function historyRetryBatches(
         continue
       }
     }
-    const group = `${entry.service}|${entry.item.id}|${entry.action}`
-    const batch = batches.get(group) ?? {
+    // A MyAnimeList status goes with the whole request, so seasons pushed
+    // with one and seasons pushed without are sent apart.
+    const group = `${entry.service}|${entry.item.id}|${entry.action}|${entry.malStatus ?? ''}`
+    const batch: HistoryRetryBatch = batches.get(group) ?? {
       service: entry.service,
       action: entry.action,
       item: entry.item,
       rows: [],
-      entries: []
+      entries: [],
+      ...(entry.malStatus ? { malStatus: entry.malStatus } : {})
     }
     batch.rows.push({ season: entry.season, episode: entry.episode })
     batch.entries.push({ key, at: entry.at })
+    if (typeof entry.seasonTotal === 'number' && entry.season != null) {
+      batch.seasonTotals = batch.seasonTotals ?? new Map()
+      batch.seasonTotals.set(entry.season, entry.seasonTotal)
+    }
     batches.set(group, batch)
   }
   return { batches: [...batches.values()], dropped }

@@ -295,6 +295,9 @@ interface HistoryPushAt {
   action: 'add' | 'remove'
   /** The profile whose history the push was for, captured with it. */
   profile: string
+  /** What the MyAnimeList push was sent with besides the count, kept so a
+   *  retry sends the same (pushTitleHistory's malStatus and seasonTotals). */
+  mal?: { status?: 'plan_to_watch'; seasonTotals?: ReadonlyMap<number, number> }
 }
 
 /** A playback position as the row it is kept under — see markWatched. */
@@ -308,11 +311,13 @@ function rowOf(playback: PlaybackPosition): { season: number | null; episode: nu
 /** The title as an owed push keeps it: enough to build the request again. */
 function pendingItem(at: HistoryPushAt): PendingHistoryPush['item'] {
   const episodic = at.rows.some((row) => row.episode != null)
+  const total = (at.item as { totalEpisodes?: unknown }).totalEpisodes
   return {
     id: String(at.item.id),
     type: (at.item.type ?? (episodic ? 'series' : 'movie')) as MediaKind,
     title: String(at.item.title ?? ''),
-    ...(at.item.year ? { year: String(at.item.year) } : {})
+    ...(at.item.year ? { year: String(at.item.year) } : {}),
+    ...(typeof total === 'number' && total > 0 ? { totalEpisodes: total } : {})
   }
 }
 
@@ -334,7 +339,9 @@ function noteHistoryPush(service: HistoryService, at: HistoryPushAt, error?: str
         item: pendingItem(at),
         rows: at.rows,
         action: at.action,
-        error
+        error,
+        ...(service === 'mal' && at.mal?.status ? { malStatus: at.mal.status } : {}),
+        ...(service === 'mal' && at.mal?.seasonTotals ? { seasonTotals: at.mal.seasonTotals } : {})
       },
       Date.now()
     )
@@ -404,7 +411,9 @@ async function sendHistoryRetry(
     }
     case 'mal': {
       const result = await pushMalTitleProgress(item, {
+        status: batch.malStatus,
         seasons: [...new Set(batch.rows.map((row) => row.season ?? 1))],
+        seasonTotals: batch.seasonTotals,
         profile
       })
       if (result.malSynced) return { error: undefined }
@@ -580,7 +589,8 @@ function pushTitleHistory(
     item,
     rows: seasons.flatMap((s) => s.episodes.map((episode) => ({ season: s.season, episode }))),
     action,
-    profile
+    profile,
+    mal: { status: malStatus, seasonTotals }
   }
   queueRemotePushes(
     item,

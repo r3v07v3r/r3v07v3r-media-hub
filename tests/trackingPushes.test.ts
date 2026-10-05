@@ -125,6 +125,59 @@ check('the last push for an episode wins, whichever way it went', () => {
   assert.deepEqual(sent, {})
 })
 
+check('a MyAnimeList clear back to plan is retried as one', () => {
+  // The whole-title "not watched" of a planned anime sends plan_to_watch
+  // and each season's total. A retry with only the seasons would plan
+  // nothing.
+  let pending = recordHistoryPush(
+    {},
+    outcome({
+      service: 'mal',
+      mark: MARKS.mal,
+      item: { id: 'kitsu:1', type: 'anime', title: 'Frieren', totalEpisodes: 28 },
+      rows: [
+        { season: 1, episode: 1 },
+        { season: 2, episode: 1 }
+      ],
+      action: 'remove',
+      malStatus: 'plan_to_watch',
+      seasonTotals: new Map([
+        [1, 28],
+        [2, 12]
+      ])
+    }),
+    T0
+  )
+  assert.equal(pending['mal|kitsu:1|1'].malStatus, 'plan_to_watch')
+  assert.equal(pending['mal|kitsu:1|2'].seasonTotal, 12)
+  // A later episode push for season 2 replaces its entry, status and all.
+  pending = recordHistoryPush(
+    pending,
+    outcome({
+      service: 'mal',
+      mark: MARKS.mal,
+      item: { id: 'kitsu:1', type: 'anime', title: 'Frieren' },
+      rows: [{ season: 2, episode: 3 }]
+    }),
+    T0 + 1
+  )
+  const { batches } = historyRetryBatches(pending, new Set())
+  assert.equal(batches.length, 2, 'seasons with and without a status are sent apart')
+  const planned = batches.find((batch) => batch.malStatus === 'plan_to_watch')
+  assert.deepEqual(
+    planned?.rows.map((row) => row.season),
+    [1]
+  )
+  assert.deepEqual([...(planned?.seasonTotals ?? [])], [[1, 28]])
+  assert.equal(planned?.item.totalEpisodes, 28)
+  const plain = batches.find((batch) => !batch.malStatus)
+  assert.deepEqual(
+    plain?.rows.map((row) => row.season),
+    [2]
+  )
+  assert.equal(plain?.seasonTotals, undefined)
+})
+
 check('a push that got through clears only what it covered', () => {
   const pending = recordHistoryPush({}, outcome(), T0)
   const trakt = recordHistoryPush(pending, outcome({ service: 'trakt', mark: MARKS.trakt }), T0)
