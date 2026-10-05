@@ -56,6 +56,11 @@ interface PlayerTracking {
    *  stop-playback so the backend knows it can delete the local stream cache
    *  rather than keeping it for a likely resume. */
   markedWatched: () => boolean
+  /** Marks this title watched now, unless it already is — for the one way
+   *  of finishing an episode that can come before the threshold: moving on
+   *  to the next one from the credits. Goes through the same latch as the
+   *  threshold, so crossing it afterwards does not record a second play. */
+  markWatchedNow: () => void
   savePositionNow: () => void
 }
 
@@ -173,6 +178,11 @@ export function usePlayerTracking({
   const consumeResume = useCallback(() => setResume(null), [])
   const consumeResumeVolume = useCallback(() => setResumeVolume(null), [])
   const markedWatched = useCallback(() => markedWatchedRef.current, [])
+  const markWatchedNow = useCallback(() => {
+    if (markedWatchedRef.current) return
+    markedWatchedRef.current = true
+    onMarkWatchedRef.current()
+  }, [])
 
   // MEMOISED, and the memoisation is load-bearing rather than an
   // optimisation.
@@ -194,6 +204,7 @@ export function usePlayerTracking({
       resumeVolume: resumeVolume && resumeVolume.key === trackingKey ? resumeVolume.volume : null,
       consumeResumeVolume,
       markedWatched,
+      markWatchedNow,
       savePositionNow
     }),
     [
@@ -203,6 +214,7 @@ export function usePlayerTracking({
       consumeResume,
       consumeResumeVolume,
       markedWatched,
+      markWatchedNow,
       savePositionNow
     ]
   )

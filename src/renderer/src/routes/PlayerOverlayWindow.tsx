@@ -313,11 +313,10 @@ function PlayerControls() {
       ? Math.round((timePos / duration) * 100)
       : null
 
-  const autoplay: NextEpisodeRef | null =
-    state.eofReached === true &&
-    // A stream that stopped short is not the end of the episode, and the
-    // card that belongs to it is the resume card, not the next-episode one.
-    endedEarlyAt === null &&
+  // The next episode, whenever the card may offer one. Not tied to the file
+  // having ended: the card also goes up with the credits (cardNext, below),
+  // and both moments answer to the same three rules.
+  const upNext: NextEpisodeRef | null =
     !party.following &&
     // A sleep timer set to "end of episode" is somebody saying this is the
     // last one. Offering the next one anyway — and starting it on a countdown
@@ -326,7 +325,16 @@ function PlayerControls() {
     session?.settings.autoplayNextEnabled !== false
       ? (session?.nextUp ?? null)
       : null
-  const autoplayKey = autoplay ? `${media?.id ?? ''}:${autoplay.season}:${autoplay.episode}` : null
+  const upNextKey = upNext ? `${media?.id ?? ''}:${upNext.season}:${upNext.episode}` : null
+
+  const autoplay: NextEpisodeRef | null =
+    state.eofReached === true &&
+    // A stream that stopped short is not the end of the episode, and the
+    // card that belongs to it is the resume card, not the next-episode one.
+    endedEarlyAt === null
+      ? upNext
+      : null
+  const autoplayKey = autoplay ? upNextKey : null
 
   // Restart the countdown when the card changes subject, adjusted during render
   // rather than in an effect — the same pattern SidebarNavigation uses for its
@@ -350,7 +358,9 @@ function PlayerControls() {
     },
     [tracking, ui]
   )
-  const startingNext = autoplayKey !== null && startedNextFor === autoplayKey
+  // Against upNextKey, not autoplayKey: Play next can be pressed from the
+  // credits, and the file may then end before the next one has opened.
+  const startingNext = upNextKey !== null && startedNextFor === upNextKey
   const countdownCancelled = autoplayKey !== null && countdownCancelledFor === autoplayKey
 
   // One tick per second while the card is up. The last tick starts the episode
@@ -984,7 +994,12 @@ function PlayerControls() {
   // menu say "Searching…" rather than showing the last episode's list.
   const currentSubtitleResults = subtitleResults?.key === mediaKey ? subtitleResults.results : null
 
-  const skipWindow = ((): { label: string; end: number } | null => {
+  const skipWindow = ((): { kind: 'intro' | 'credits'; label: string; end: number } | null => {
+    // Nothing left to skip to once the file has ended. Credits that run to
+    // the last frame leave the playhead inside their window for good
+    // (--keep-open holds it there), and the button used to sit under the
+    // post-play card offering a seek to where the playhead already was.
+    if (state.eofReached === true) return null
     // Anime reads the Aniskip fetch above; everything else reads the
     // chapter-derived memo — see both sources' own comments for why they
     // are never both populated for the same title.
@@ -994,10 +1009,23 @@ function PlayerControls() {
     if (active?.key !== mediaKey) return null
     const inWindow = (w?: { start: number; end: number }): boolean =>
       Boolean(w && timePos >= w.start && timePos < w.end)
-    if (inWindow(active?.intro)) return { label: 'Skip intro', end: active!.intro!.end }
-    if (inWindow(active?.credits)) return { label: 'Skip credits', end: active!.credits!.end }
+    if (inWindow(active?.intro)) {
+      return { kind: 'intro', label: 'Skip intro', end: active!.intro!.end }
+    }
+    if (inWindow(active?.credits)) {
+      return { kind: 'credits', label: 'Skip credits', end: active!.credits!.end }
+    }
     return null
   })()
+
+  // The Up next card goes up with the credits rather than waiting for the end
+  // of the file: that is when somebody chooses between sitting through them,
+  // skipping to whatever follows them, and moving on — so Skip credits sits in
+  // the card beside the next-episode button instead of floating on its own.
+  // With no next episode to offer (a film, a finale, autoplay switched off)
+  // there is no card, and the button stands alone the way Skip intro does.
+  const creditsSkip = skipWindow?.kind === 'credits' && !locked ? skipWindow : null
+  const cardNext = autoplay ?? (creditsSkip ? upNext : null)
 
   // --- Scrub-bar thumbnail previews ----------------------------------------
   const thumbnailCache = useRef(new Map<string, string | null>())
@@ -1191,8 +1219,9 @@ function PlayerControls() {
       )}
 
       {/* Rendered outside the controls bar so it stays clickable without
-          needing the mouse moved first. */}
-      {skipWindow && !locked && (
+          needing the mouse moved first. Stands down while the Up next card
+          is showing: Skip credits is in the card then. */}
+      {skipWindow && !locked && !cardNext && (
         <button type="button" className={styles.skipButton} onClick={() => seekTo(skipWindow.end)}>
           {skipWindow.label}
         </button>
@@ -1219,27 +1248,38 @@ function PlayerControls() {
         </div>
       )}
 
-      {autoplay && autoplayKey && (
+      {/* One card for both moments it is up — the credits and the end of the
+          file — so it does not blink out and back as one becomes the other. */}
+      {cardNext && upNextKey && (
         <div
           className={styles.postPlay}
           role="dialog"
           aria-label="Up next"
           // Pointer OR keyboard focus: somebody tabbing to the button is just
           // as much in the middle of deciding as somebody reaching for it.
-          onMouseEnter={() => setCountdownCancelledFor(autoplayKey)}
-          onFocus={() => setCountdownCancelledFor(autoplayKey)}
+          // Only once the countdown exists, though. During the credits there
+          // is nothing to call off, and a hover then — pressing Skip credits
+          // is one — must not cancel the countdown that follows it.
+          onMouseEnter={autoplayKey ? () => setCountdownCancelledFor(autoplayKey) : undefined}
+          onFocus={autoplayKey ? () => setCountdownCancelledFor(autoplayKey) : undefined}
         >
           <p className={styles.postPlayLabel}>Up next</p>
           <p className={styles.postPlayTitle}>
-            {`S${String(autoplay.season).padStart(2, '0')}E${String(autoplay.episode).padStart(2, '0')}`}
-            {autoplay.title ? ` — ${autoplay.title}` : ''}
+            {`S${String(cardNext.season).padStart(2, '0')}E${String(cardNext.episode).padStart(2, '0')}`}
+            {cardNext.title ? ` — ${cardNext.title}` : ''}
           </p>
           <div className={styles.postPlayActions}>
             <button
               type="button"
               className={styles.postPlayPrimary}
               disabled={startingNext}
-              onClick={() => startNext(autoplay, autoplayKey)}
+              onClick={() => {
+                // From the credits the file has not ended, and on a short
+                // episode the watched threshold may not have been crossed
+                // yet. Moving on from the credits is having watched it.
+                if (!autoplay) tracking.markWatchedNow()
+                startNext(cardNext, upNextKey)
+              }}
             >
               {/* The card stays up while the next episode resolves — it is a
                   stream search, not an instant cut — so it says what is
@@ -1247,13 +1287,34 @@ function PlayerControls() {
                   pressed. */}
               {startingNext
                 ? 'Starting…'
-                : countdownCancelled
+                : !autoplay || countdownCancelled
                   ? 'Play next'
                   : `Play now (${countdown})`}
             </button>
-            <button type="button" className={styles.postPlaySecondary} onClick={closePlayer}>
-              Stop
-            </button>
+            {/* Keyed so the two are different buttons to React: reusing one
+                element would carry keyboard focus from Skip credits onto
+                Stop as the file ends. */}
+            {autoplay ? (
+              <button
+                key="stop"
+                type="button"
+                className={styles.postPlaySecondary}
+                onClick={closePlayer}
+              >
+                Stop
+              </button>
+            ) : (
+              creditsSkip && (
+                <button
+                  key="skip"
+                  type="button"
+                  className={styles.postPlaySecondary}
+                  onClick={() => seekTo(creditsSkip.end)}
+                >
+                  {creditsSkip.label}
+                </button>
+              )
+            )}
           </div>
         </div>
       )}

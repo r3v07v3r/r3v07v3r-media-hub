@@ -340,7 +340,9 @@ async function openPlayback(
     audioLanguage: settings.audioLanguage || 'en',
     subtitleLanguage: settings.subtitleLanguage || undefined,
     bufferSeconds: getPlaybackBufferSeconds(settings.playbackBuffer),
-    videoScaling: normalizeVideoScaling(settings.videoScaling)
+    videoScaling: normalizeVideoScaling(settings.videoScaling),
+    mediaId: cacheMeta?.catalogId,
+    mediaKind: cacheMeta?.mediaKind
   })
   activeMediaTracks = tracks
   // The ranking preferred a release that declared the wanted audio, and mpv
@@ -409,8 +411,8 @@ async function openPlayback(
   // Fire-and-forget, AFTER the snapshot above has gone out. Finding the next
   // episode is a metadata read — cached in the common case, a live Cinemeta/
   // Kitsu fetch in the cold one — and playback must never wait behind it.
-  // Nothing needs the answer until the file ends, which is at minimum an
-  // episode away.
+  // Nothing needs the answer until the credits start, which is at minimum
+  // most of an episode away.
   void resolveNextUp(sessionMedia)
 
   return {

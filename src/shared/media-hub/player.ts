@@ -182,7 +182,7 @@ export interface PlayerSessionSnapshot {
    *  present so the UI can show it, not so it can seek there itself. */
   resumeSeconds: number
   /**
-   * The episode that follows this one, for the post-play card — null for a
+   * The episode that follows this one, for the Up next card — null for a
    * movie, for the last episode of a title, and for the whole of the window
    * before it has been worked out.
    *
@@ -191,7 +191,7 @@ export interface PlayerSessionSnapshot {
    * never wait behind (see playbackSession.ts's resolveNextUp). The overlay
    * therefore has to treat this as "not known YET" rather than "there is
    * none" — which costs it nothing, since it has no use for the value until
-   * the file ends.
+   * the credits start.
    */
   nextUp: NextEpisodeRef | null
   settings: {
