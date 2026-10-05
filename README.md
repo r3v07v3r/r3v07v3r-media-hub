@@ -77,10 +77,15 @@ trending feed (either one alone fills the grid), anime from Kitsu. No key is req
 - **With a TMDB key** (optional): the age certificate for your region, cast and crew,
   the rest of a film's collection, better similar-title lists, and per-season episode data for
   grouped anime. **With an OMDb key**: the Rotten Tomatoes score.
-- **Anime franchises in story order.** An anime's page lays out its franchise (prequels, the main
-  or full story, side stories, spin-offs, recaps, sequels) from Kitsu, with no key needed. A show
-  merged from several seasons is treated as one title: what comes before it is what precedes its
-  first season, what comes after is what follows its last, and its own seasons are not listed.
+- **Anime franchises in release or story order.** An anime's page lays out its franchise
+  (prequels, the main or full story, side stories, spin-offs, recaps, sequels) from Kitsu, with no
+  key needed. A show merged from several seasons is treated as one title: what comes before it is
+  what precedes its first season, and what comes after is what follows its last. Only TV seasons
+  are merged: a film, OVA, ONA or special is a title of its own, listed on the show's page between
+  the seasons it came out between. On the desktop a Release order / Story order switch, remembered
+  on that computer, lists the whole franchise in story order instead: Kitsu's prequel and sequel
+  links decide, and air dates place what they leave unordered, so it is only as right as those
+  links. Film collections stay in release order.
 
 ### 2. Choose a source — needs TorBox or a Jellyfin server
 

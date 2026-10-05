@@ -60,7 +60,7 @@
 // tracks real release order closely enough — as the last resort when
 // neither external source has anything to say.
 
-import type { CatalogItem, Episode } from '../../shared/media-hub/types'
+import type { AnimeTimelineEntry, CatalogItem, Episode } from '../../shared/media-hub/types'
 import { animeSeasonMatchesPage, animeSeasonOf } from '../../shared/media-hub/serviceIds'
 import { fetchJson } from './httpClient'
 import { mapWithLimit, type TaskPriority } from './taskScheduler'
@@ -669,6 +669,11 @@ let animeGroupPositionIndex: Map<string, { id: string; season: number }> | null 
  *  by the id fronting it. Built with the two above, from the same blob. */
 let animeShowTotalsIndex: Map<string, { totalSeasons: number; totalEpisodes: number }> | null = null
 
+/** For each merged show: its seasons' start dates and its groupedExtras'
+ *  own catalog entries. Built with the rest, from the same blob, where the
+ *  extras are titles of their own. */
+let animeShowPartsIndex: Map<string, { starts: string[]; extras: CatalogItem[] }> | null = null
+
 /** How many titles the catalog the two indexes were built from held. Zero
  *  is "no catalog", which is not the same answer as "a catalog with no
  *  merged shows" — see currentAnimeGroups. */
@@ -735,6 +740,7 @@ export function invalidateAnimeGroupIndex(): void {
   animeGroupIndex = null
   animeGroupPositionIndex = null
   animeShowTotalsIndex = null
+  animeShowPartsIndex = null
   animeLaterSeasonIndex = null
 }
 
@@ -792,9 +798,19 @@ function buildAnimeGroupIndexes(): void {
   animeGroupIndex = siblings
   animeGroupPositionIndex = positions
   animeShowTotalsIndex = new Map()
+  animeShowPartsIndex = new Map()
+  const byId = new Map(items.map((item) => [String(item.id), item] as const))
   for (const item of items) {
     if (item.groupedIds?.length && item.episodeCounts) {
       animeShowTotalsIndex.set(String(item.id), item.episodeCounts)
+    }
+    if (item.groupedIds?.length) {
+      animeShowPartsIndex.set(String(item.id), {
+        starts: item.seasonStarts ?? [],
+        extras: (item.groupedExtras ?? [])
+          .map((id) => byId.get(String(id)))
+          .filter((extra): extra is CatalogItem => Boolean(extra))
+      })
     }
   }
   animeGroupIndexSize = items.length
@@ -833,6 +849,66 @@ export function withShowTotals(
       }
     }
   })
+}
+
+/**
+ * What a merged show's page lists beside its seasons: each season's start
+ * date (front first, as seasonStarts) and the films, OVAs and specials the
+ * grouping filed with it, as their own catalog entries. Undefined for
+ * anything that is not a merged show.
+ */
+export function animeShowParts(
+  showId: string
+): { starts: string[]; extras: CatalogItem[] } | undefined {
+  if (!animeShowPartsIndex) buildAnimeGroupIndexes()
+  return animeShowPartsIndex!.get(String(showId))
+}
+
+/**
+ * The parts of the show `showId` fronts, as its page lists them: each
+ * season, named by its own index row (every season keeps one) and dated by
+ * the grouping's seasonStarts, then each film, OVA or special filed with it
+ * (animeShowParts). A title that is not a merged show is its one part, with
+ * no season.
+ */
+export function animeShowTimelineParts(showId: string): AnimeTimelineEntry[] {
+  const members = [String(showId), ...(groupedIdsFor(showId) ?? [])]
+  const rows = new Map<string, CatalogItem>()
+  for (const item of getDatabase().indexByIds(members).items) {
+    if (item.type === 'anime') rows.set(String(item.id), item)
+  }
+  const parts = animeShowParts(showId)
+  const seasonItem = (memberId: string, index: number): CatalogItem => {
+    const row = rows.get(memberId)
+    return {
+      ...(row ?? blankAnime(memberId)),
+      // The index row has a year and no date; the grouping kept the date.
+      releaseDate: parts?.starts[index] || row?.year || ''
+    }
+  }
+  if (members.length === 1) return [{ item: seasonItem(members[0], 0) }]
+  return [
+    ...members.map((memberId, index) => ({ item: seasonItem(memberId, index), season: index + 1 })),
+    ...(parts?.extras ?? []).map((item) => ({ item }))
+  ]
+}
+
+function blankAnime(id: string): CatalogItem {
+  return {
+    id,
+    title: '',
+    type: 'anime',
+    poster: '',
+    background: '',
+    logo: '',
+    year: '',
+    description: '',
+    rating: '',
+    runtime: '',
+    genres: [],
+    videos: [],
+    trailers: []
+  }
 }
 
 /** withShowTotals over the catalog's current grouping. */

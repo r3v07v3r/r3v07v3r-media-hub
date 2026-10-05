@@ -238,10 +238,35 @@ export interface PersonCreditsResult {
   creators: CatalogItem[]
 }
 
+/**
+ * The two orders an anime's page can list its franchise in. Release order is
+ * when each part came out; story order follows Kitsu's prequel and sequel
+ * links, with the air date between parts the links do not order (see
+ * core.ts's animeStoryOrder).
+ */
+export type AnimeStoryOrder = 'release' | 'story'
+
+/** One part of a franchise, as the anime page lists it in order. */
+export interface AnimeTimelineEntry {
+  item: CatalogItem
+  /** For a season of the show the page is about: its season there. */
+  season?: number
+  /** For a title outside the show: how Kitsu relates it to the show. */
+  relation?: AnimeStoryRelation
+}
+
 export interface AnimeStoryResult {
   links: AnimeStoryLink[]
   /** False only if the remote lookup failed without a cached answer. */
   checked: boolean
+  /**
+   * The franchise in the order asked for. In release order: a merged show's
+   * seasons, with the films, OVAs and specials filed with it between the
+   * seasons they came out between — absent when it has none, since the
+   * season tabs already list the seasons. In story order: those, and every
+   * title the show's parts link to, in story order.
+   */
+  timeline?: AnimeTimelineEntry[]
 }
 
 /**

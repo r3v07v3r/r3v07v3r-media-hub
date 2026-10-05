@@ -447,7 +447,9 @@ at its place.
 
 - A film, OVA, ONA, special or music entry stays a title of its own, with
   its own page, its own rows and its own Simkl and MyAnimeList entry. It is
-  still listed in the franchise guide.
+  still listed in the franchise guide, and the show's page lists it between
+  the seasons it came out between, by Kitsu's start dates (`groupedExtras`
+  and `seasonStarts` on the show's catalog entry).
 - It still links the seasons on either side of it. A first season whose
   only recorded sequel is a film, and the film's own sequel the second
   season, are one show of two seasons.
