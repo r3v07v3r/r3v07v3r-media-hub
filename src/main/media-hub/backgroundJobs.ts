@@ -43,7 +43,7 @@ import {
   rebuildRecommendations,
   requestRecommendationsRebuild
 } from './recommendations'
-import { repairAnimeSyncIds } from './animeSyncRepair'
+import { keepAnimeHistoryWithShows, repairAnimeSyncIds } from './animeSyncRepair'
 import { checkForUpdates } from './autoUpdate'
 import {
   coalesce,
@@ -323,6 +323,12 @@ export function startBackgroundJobs(): void {
     // for a quiet moment rather than doing that underneath somebody.
     maxPressure: 'idle',
     run: async () => {
+      // First, and on every run rather than once: it catches up a grouping
+      // whose rows never moved because the app closed between the pass
+      // landing and the move, and on the first run after an update it is
+      // what notes the grouping the rows are filed under. The repair below
+      // then moves rows to places that grouping names.
+      keepAnimeHistoryWithShows()
       const result = repairAnimeSyncIds()
       // The ranking is derived from watch history, and rows have just
       // moved. The renderer has no equivalent hook — there is no

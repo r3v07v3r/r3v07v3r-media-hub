@@ -9,6 +9,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+import { followAnimeRegroup } from '../src/main/media-hub/animeRegroup'
 import { createDatabase } from '../src/main/media-hub/database'
 import { readBackup } from '../src/main/media-hub/backup'
 
@@ -239,6 +240,45 @@ db.exportBackup(backupFile, {
   restored.importBackup(older)
   assert.equal(restored.isTracked('tt1'), true, 'an older backup still restores')
   restored.close()
+}
+
+// ---------------------------------------------------------------------
+// Anime rows are filed by the grouping in force when they were written
+// (animeRegroup.ts). The backup carries that grouping, a restore puts it
+// back, and the rows can then follow the catalog to where it is now.
+// ---------------------------------------------------------------------
+{
+  const then = [{ id: 'kitsu:2', members: ['kitsu:2', 'kitsu:1'], series: '' }]
+  const now = [{ id: 'kitsu:1', members: ['kitsu:1', 'kitsu:2'], series: '' }]
+  const item = { id: 'kitsu:2', type: 'anime' as const, title: 'A show' }
+
+  const taken = createDatabase(path.join(dir, 'anime-source.sqlite'), ALICE)
+  followAnimeRegroup(taken, then)
+  taken.markWatched(item, { season: 2, episode: 5 })
+  const animeBackup = path.join(dir, 'anime.json')
+  taken.exportBackup(animeBackup, {
+    appVersion: '1.2.3',
+    profiles: [{ id: ALICE, name: 'Alice' }],
+    activeProfileId: ALICE
+  })
+  taken.close()
+  assert.deepEqual(readBackup(animeBackup).animeGroups, then)
+
+  // Restored where the catalog has since put the other id in front.
+  const target = createDatabase(path.join(dir, 'anime-target.sqlite'), ALICE)
+  followAnimeRegroup(target, now)
+  target.importBackup(animeBackup)
+  assert.deepEqual(target.animeGroupLedger(), then, 'the rows came with their own grouping')
+
+  followAnimeRegroup(target, now)
+  const rows = target.history().map((h) => `${h.id}:${h.season}:${h.episode}`)
+  assert.deepEqual(rows, ['kitsu:1:1:5'], 'and followed the catalog from there')
+
+  // A file from before the ledger says nothing about grouping, and the
+  // ledger here is left as it is.
+  target.importBackup(backupFile)
+  assert.deepEqual(target.animeGroupLedger(), now)
+  target.close()
 }
 
 db.close()

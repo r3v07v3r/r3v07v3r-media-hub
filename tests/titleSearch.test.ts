@@ -329,6 +329,9 @@ check('an index crawled before migration 5 gets its search keys backfilled', () 
   // when it next opens.
   const raw = new DatabaseSync(file)
   raw.exec('ALTER TABLE catalog_index DROP COLUMN title_key')
+  // And what later migrations added, or they would run a second time over
+  // their own work.
+  raw.exec('DROP TABLE anime_group_ledger')
   raw.exec('PRAGMA user_version = 5')
   raw.close()
   const after = createDatabase(file, 'profile-under-test')

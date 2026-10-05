@@ -27,6 +27,7 @@ import { importLetterboxdLibrary } from './letterboxdImport'
 import { readBackup } from './backup'
 import { requestRecommendationsRebuild } from './recommendations'
 import { watchRegion } from './watchProviders'
+import { keepAnimeHistoryWithShows } from './animeSyncRepair'
 import { getDatabase } from './dbState'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
@@ -352,6 +353,10 @@ export function registerAppIpc(): void {
     settings.activeProfileId = summary.activeProfileId
     writeSettings(settings)
     getDatabase().setActiveProfile(summary.activeProfileId)
+    // The anime rows just restored are filed under the grouping the backup
+    // was taken with, which came back with them. Where the catalog has
+    // moved on since, they are moved to match before anything reads them.
+    keepAnimeHistoryWithShows()
 
     return {
       restored: Object.values(summary.restored).reduce((total, n) => total + n, 0),
