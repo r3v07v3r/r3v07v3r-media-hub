@@ -462,6 +462,26 @@ export function startBackgroundJobs(): void {
     }
   })
 
+  registerRecurringJob({
+    name: 'catalog-cache-prune',
+    label: 'Clearing expired catalog data',
+    // The month-expired catalog_cache rows (pruneExpiredCache). This used to
+    // run inside createDatabase, which is before the window exists: a full
+    // scan of a table holding the catalog blobs, on time to first paint, for
+    // rows that cost only disk space. Once a session, as before, but a
+    // minute after launch (plus the registry's stagger, about five minutes
+    // in all) rather than with the stream-cache job at ten, so a short phone
+    // or TV session still reaches it. Registered last so the other jobs'
+    // stagger is unchanged.
+    everyMs: 24 * 60 * 60 * 1000,
+    firstRunAfterMs: 60 * 1000,
+    priority: 'maintenance',
+    maxPressure: 'busy',
+    run: async () => {
+      getDatabase().pruneExpiredCache()
+    }
+  })
+
   // What turns "I just finished an episode" into a rebuild. Deliberately
   // routed through the registry rather than run at the call site: this way
   // a rebuild obeys the same pressure gate and the same never-twice-at-

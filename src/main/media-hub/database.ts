@@ -921,6 +921,17 @@ export interface MediaHubDatabase {
    *  than merely old, and must not be served again. */
   deleteCache(key: string): void
   /**
+   * Reclaims cache rows nothing has refreshed for a month past their expiry,
+   * and reports how many went. See the implementation for why the grace
+   * window is that long. Not run when the database opens: catalog_cache has
+   * no index on expires_at, and the column sits after payload_json, so the
+   * scan walks every large blob's overflow pages. createDatabase runs before
+   * the window exists, so that scan was on time to first paint; the
+   * background job registry runs this instead (see backgroundJobs.ts's
+   * catalog-cache-prune job).
+   */
+  pruneExpiredCache(now?: number): number
+  /**
    * Records what a crawl saw into the accumulating title index.
    *
    * ACCUMULATES — it never deletes, and `first_seen` is never overwritten.
@@ -1020,6 +1031,12 @@ export interface MediaHubDatabase {
    *  durable bookmark on this answer: claiming everything exists would
    *  make it add nothing AND move on, permanently skipping the chunk. */
   indexExistingIds(kind: MediaKind, ids: readonly string[]): Set<string> | null
+  /** Whether this kind has a row under this exact id, by primary key alone:
+   *  no grouped-sibling pass, so it costs one indexed lookup. Null when the
+   *  lookup failed. For callers on a hot path (indexTitleIfMissing runs on
+   *  every open and every watched mark) that only need indexExistingIds'
+   *  grouped pass when there is no direct row. */
+  indexHasRow(kind: MediaKind, id: string): boolean | null
   /** The highest rank any row of this kind holds — the floor above which
    *  deep-scanned rows must land to stay UNDER the curated ordering. */
   indexMaxRank(kind: MediaKind): number
@@ -1221,37 +1238,6 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           AND (@fromSeason IS NULL OR season=@fromSeason)
           AND (@onto=0 OR (season>=1 AND (@onlyFirst=0 OR season=1)
                            AND NOT (@from=@to AND season=@toSeason)))`
-
-  // Reclaims rows nothing has read in a long time. `catalog_cache` had no
-  // eviction at all before this — every distinct key (a stream resolution,
-  // a title's metadata, a TVDB mapping, ...) accumulated forever, for the
-  // life of the install; a real user's database, inspected for the anime
-  // catalog audit this fixes, already carried 298 expired rows with entire
-  // categories (every related:v1:anime:*, meta:v3:anime:*, tmdb:season:*
-  // entry) 100% expired and never reclaimed.
-  //
-  // NOT `WHERE expires_at < now` — getCache's `allowExpired: true` callers
-  // (catalogData, metadata, similarTitles, localSimilar, relatedAnime, the
-  // TorBox stream-resolve cache, Simkl's watched-history cache — eight
-  // sites in total) deliberately serve an EXPIRED row as an emergency
-  // fallback when a live refresh fails, e.g. the network is down right
-  // when the app starts. Deleting a row the instant it expires would
-  // quietly disarm that fallback for anyone who restarts between a normal
-  // TTL lapse and their next successful refresh — turning "offline, but
-  // here's the last good answer" into "offline, here's nothing." The grace
-  // window below is generous specifically so that still works: it only
-  // reclaims rows that have been unrefreshed for a full month, well past
-  // every TTL in this app (the longest, the Kitsu/TMDB id-mapping caches,
-  // is itself 30 days) and past any realistic length of time offline.
-  const CACHE_PRUNE_GRACE_MS = 30 * 24 * 60 * 60 * 1000
-  try {
-    sql
-      .prepare('DELETE FROM catalog_cache WHERE expires_at < ?')
-      .run(Date.now() - CACHE_PRUNE_GRACE_MS)
-  } catch {
-    // Best-effort, same convention as every other cache operation in this
-    // file — a failed prune must not stop the app from opening its database.
-  }
 
   // Every statement scoped to one profile. `profile_id` is bound at call time
   // from `currentProfileId` rather than baked in, so switching profiles is a
@@ -2967,6 +2953,41 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       }
     },
 
+    pruneExpiredCache(now = Date.now()) {
+      // Reclaims rows nothing has read in a long time. `catalog_cache` had no
+      // eviction at all before this — every distinct key (a stream resolution,
+      // a title's metadata, a TVDB mapping, ...) accumulated forever, for the
+      // life of the install; a real user's database, inspected for the anime
+      // catalog audit this fixes, already carried 298 expired rows with entire
+      // categories (every related:v1:anime:*, meta:v3:anime:*, tmdb:season:*
+      // entry) 100% expired and never reclaimed.
+      //
+      // NOT `WHERE expires_at < now` — getCache's `allowExpired: true` callers
+      // (catalogData, metadata, similarTitles, localSimilar, relatedAnime, the
+      // TorBox stream-resolve cache, Simkl's watched-history cache — eight
+      // sites in total) deliberately serve an EXPIRED row as an emergency
+      // fallback when a live refresh fails, e.g. the network is down right
+      // when the app starts. Deleting a row the instant it expires would
+      // quietly disarm that fallback for anyone who restarts between a normal
+      // TTL lapse and their next successful refresh — turning "offline, but
+      // here's the last good answer" into "offline, here's nothing." The grace
+      // window below is generous specifically so that still works: it only
+      // reclaims rows that have been unrefreshed for a full month, well past
+      // every TTL in this app (the longest, the Kitsu/TMDB id-mapping caches,
+      // is itself 30 days) and past any realistic length of time offline.
+      const CACHE_PRUNE_GRACE_MS = 30 * 24 * 60 * 60 * 1000
+      try {
+        const result = sql
+          .prepare('DELETE FROM catalog_cache WHERE expires_at < ?')
+          .run(now - CACHE_PRUNE_GRACE_MS)
+        return Number(result.changes)
+      } catch {
+        // Best-effort, same convention as every other cache operation in this
+        // file — a failed prune costs disk space and nothing else.
+        return 0
+      }
+    },
+
     indexRefreshFromMetadata(kind, item, now = Date.now()) {
       const id = String(item?.id || '')
       if (!id) return
@@ -3157,6 +3178,17 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         // Zero makes the caller fall back to its own offset-derived
         // floor — depth may interleave a little, nothing is lost.
         return 0
+      }
+    },
+
+    indexHasRow(kind, id) {
+      try {
+        return Boolean(
+          sql.prepare('SELECT 1 FROM catalog_index WHERE kind = ? AND id = ?').get(kind, id)
+        )
+      } catch (error) {
+        logError('catalog:index:has-row', error)
+        return null
       }
     },
 

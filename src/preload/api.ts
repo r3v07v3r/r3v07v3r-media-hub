@@ -25,6 +25,7 @@ import type {
   DeepScanEvent,
   DeepScanReport,
   CatalogByIdsResult,
+  CatalogSearchResult,
   CatalogItem,
   CatalogListing,
   CatalogQuery,
@@ -552,6 +553,11 @@ export function createApi(transport: ApiTransport) {
           transport.invoke(MEDIA_HUB_CHANNELS.catalogMeta, { type, id }),
         search: (kind: MediaKind, query: string): Promise<CatalogItem[]> =>
           transport.invoke(MEDIA_HUB_CHANNELS.catalogSearch, { kind, query }),
+        /** The same search, answered with whether the online provider could
+         *  be reached, so a screen can say "only local results" rather than
+         *  "no matches" when it could not. */
+        searchWithStatus: (kind: MediaKind, query: string): Promise<CatalogSearchResult> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.catalogSearch, { kind, query, report: true }),
         related: (type: MediaKind, id: string): Promise<CatalogItem[]> =>
           transport.invoke(MEDIA_HUB_CHANNELS.catalogRelated, { type, id }),
         story: (type: MediaKind, id: string): Promise<AnimeStoryResult> =>

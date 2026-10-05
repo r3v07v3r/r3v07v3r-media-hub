@@ -226,6 +226,11 @@
   background: rgba(244, 203, 69, 0.07);
   font-size: 12px;
 }
+/* The search results' own notice, standing between the header and the
+   results shelf rather than inside the header like the one above. */
+.searchBanner {
+  margin-top: 20px;
+}
 .offlineBanner button {
   margin-left: auto;
   color: inherit;

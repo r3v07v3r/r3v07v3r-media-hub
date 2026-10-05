@@ -27,6 +27,7 @@ import type {
   ConnectResult,
   DeepScanEvent,
   CatalogByIdsResult,
+  CatalogSearchResult,
   DeepScanReport,
   Episode,
   MediaKind,
@@ -34,8 +35,9 @@ import type {
   TitleCollectionResult
 } from '../../shared/media-hub/types'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
-import { sendToRenderer } from './rendererBridge'
-import { planDeepScanBatch } from './deepScanRules'
+import { notifyLibraryChanged, sendToRenderer } from './rendererBridge'
+import { indexTitleIfMissing, planDeepScanBatch } from './deepScanRules'
+import { sanitizeDaemonTitleRow } from '../../shared/lancache/titleSync'
 import { fetchJson } from './httpClient'
 import { logError } from './logger'
 import { getDatabase } from './dbState'
@@ -61,7 +63,7 @@ import {
   type RawApiPayload
 } from './core'
 import { isLikelyFranchiseSibling, rankSimilarTitles } from '../../shared/media-hub/catalog-logic'
-import { mergeSearchResults } from '../../shared/media-hub/titleSearch'
+import { mergeSearchResults, settleProvider } from '../../shared/media-hub/titleSearch'
 import { coalesce, coalesceScope, PRIORITY_RANK, type TaskPriority } from './taskScheduler'
 import {
   ANIME_GROUPED_KEY,
@@ -78,7 +80,8 @@ import {
 import { keepAnimeHistoryWithShows } from './animeSyncRepair'
 import { omdbRottenTomatoesRating } from './omdb'
 import { withUpcomingEpisodes } from './episodeAiring'
-import { searchCredits, titleCredits, titlesFeaturing } from './credits'
+import { titleCredits, titlesFeaturing } from './credits'
+import { invalidateSearchPool, searchByCredits } from './searchPool'
 import { titleCollection } from './collection'
 import { contentRating } from './contentRating'
 import { watchRegion } from './watchProviders'
@@ -274,6 +277,7 @@ function runAnimeGrouping(items: CatalogItem[], generation: number): void {
       // silently roll it back.
       if (!grouped.length || generation !== animeCatalogGeneration) return
       getDatabase().putCache('catalog:v2:anime', grouped, CATALOG_TTL_MS)
+      invalidateSearchPool('anime')
       getDatabase().putCache(ANIME_GROUPED_KEY, true, CATALOG_TTL_MS)
       // The whole point of the pass that just finished is the groupedIds
       // it worked out, so the index has to drop the pre-grouping answer
@@ -511,7 +515,9 @@ async function catalogListing(
       // written, so seeding cannot disagree with crawling — it only happens
       // sooner.
       if (!db.indexCount(kind)) {
-        db.indexUpsert(kind, cached, { source: 'cache-seed' })
+        if (db.indexUpsert(kind, cached, { source: 'cache-seed' }) && cached.length) {
+          notifyLibraryChanged('cache-seed', 'index')
+        }
       }
       // A cache entry inside its TTL is current by definition — this is
       // the ordinary hit, not the expired fallback below.
@@ -598,6 +604,7 @@ async function catalogListing(
     // finds nothing new.
     if (kind === 'anime') keepAnimeHistoryWithShows()
     db.putCache(key, items, CATALOG_TTL_MS)
+    invalidateSearchPool(kind)
     // ...and into the accumulating index, which is what this blob is on its
     // way to being replaced by (see migration 2). Written alongside rather
     // than instead of it for now, on purpose: `catalog:list` still serves
@@ -611,6 +618,10 @@ async function catalogListing(
     // saw and leaves every other row alone, which is what lets the library
     // outlive any single crawl's depth.
     db.indexUpsert(kind, items, { source: kind === 'anime' ? 'kitsu' : 'cinemeta+simkl' })
+    // Said out loud, as the deep scan and the household sync already do: a
+    // screen that read an empty index on a fresh install (the phone's Browse
+    // grid) has no other way to learn the first crawl has landed.
+    notifyLibraryChanged('catalog-crawl', 'index')
     if (kind === 'anime') {
       // This catalog is raw until the pass below says otherwise. Written
       // rather than left absent so a marker from the PREVIOUS catalog
@@ -813,7 +824,17 @@ async function resolveMetadata(
     // write only happens when the stored count differs, which is what
     // keeps this affordable on the calendar's and trackers' sweeps. Never
     // from a degraded entry, exactly as the fresh path never is.
-    if (!db.getCache<boolean>(degradedKey)) db.indexRefreshAiredCount(type, served)
+    //
+    // The same goes for indexing a title that has no row (see the fresh
+    // path): the entry may predate that rule, or the title was opened once
+    // from search and is now reached from My Stuff or a sweep, and a cache
+    // hit that skipped it would leave the title missing from the grids and
+    // My Stuff for the rest of the entry's day. One primary-key lookup when
+    // the row exists.
+    if (!db.getCache<boolean>(degradedKey)) {
+      db.indexRefreshAiredCount(type, served)
+      indexIfMissing(type, served)
+    }
     return withCredits(served, type, resolvedId, priority)
   }
 
@@ -972,8 +993,38 @@ async function resolveMetadata(
   // re-list it. A full resolve is exactly the moment those counts are
   // known: every title somebody opens heals its own row. Counts only —
   // never the rank or the source a crawl assigned.
-  if (!degraded) db.indexRefreshFromMetadata(type, item)
+  if (!degraded) {
+    db.indexRefreshFromMetadata(type, item)
+    // A title the index has no row for at all — found by a remote search,
+    // or reached through a service's list — gets one now, so it shows in
+    // the grids and in My Stuff like anything the crawl found.
+    indexIfMissing(type, item)
+  }
   return withCredits(item, type, resolvedId, priority)
+}
+
+/**
+ * indexTitleIfMissing against the live database, telling the screens that
+ * read the index when it wrote a row. See deepScanRules.ts for the rule.
+ */
+function indexIfMissing(kind: MediaKind, item: CatalogItem): void {
+  if (indexTitleIfMissing(getDatabase(), kind, item)) notifyLibraryChanged('search', 'index')
+}
+
+/**
+ * A title somebody tracked (planned, marked watched, set a status on, or
+ * marked not for them), indexed if the index has no row for it. The item
+ * comes from the screen that did it — a search card, more often than not,
+ * which may never have been opened — so it is cut down to the fields and
+ * the id alphabet the index accepts from any source outside the crawl
+ * (sanitizeDaemonTitleRow) before it is written. Synchronous, so the
+ * My Stuff read that follows the write already finds the row.
+ */
+export function indexTrackedTitle(item: Partial<CatalogItem> & { id: string }): void {
+  const kind = item.type
+  if (kind !== 'movie' && kind !== 'series' && kind !== 'anime') return
+  const row = sanitizeDaemonTitleRow({ seq: 1, rank: 0, kind, item })
+  if (row) indexIfMissing(kind, row.item)
 }
 
 /** Free-text anime search against Kitsu. Grouped the same way the browse
@@ -1055,19 +1106,20 @@ async function cinemetaSearch(
 }
 
 /**
- * The provider half of catalog:search for one kind, and never a failure:
- * Kitsu for anime, Cinemeta otherwise. The index half always answers, so
- * a provider being down costs the titles it alone knew and nothing else —
- * the "one source failing contributes nothing rather than failing the
- * search" rule this file applies everywhere, applied here to the one path
- * that used to have a single source.
+ * The provider half of catalog:search for one kind: Kitsu for anime,
+ * Cinemeta otherwise. The index half always answers, so a provider being
+ * down costs the titles it alone knew and nothing else — the "one source
+ * failing contributes nothing rather than failing the search" rule this
+ * file applies everywhere. It is logged here and still rejects, so the
+ * handler can tell the person the list is local only (see settleProvider)
+ * instead of letting a failure read as "nothing matched".
  */
 async function providerSearch(kind: MediaKind, query: string): Promise<CatalogItem[]> {
   try {
     return kind === 'anime' ? await kitsuSearch(query) : await cinemetaSearch(kind, query)
   } catch (error) {
     logError('catalog:search:provider', error)
-    return []
+    throw error
   }
 }
 
@@ -1092,25 +1144,54 @@ const SEARCH_TIMEOUT_MS = 10_000
 const PROVIDER_GRACE_MS = 4_000
 
 /**
- * `promise`, or `fallback` once `ms` has passed without it settling. The
- * promise is not cancelled — the scheduler owns the request, and a late
- * answer simply goes unread — only no longer waited for. The timer is
- * cleared on settle so a prompt answer leaves nothing running.
+ * catalog:search for one kind: the local index and the provider at once,
+ * then the cast and label pass. `providerUnreachable` says the provider
+ * failed or did not answer in time, so the list is what was already on this
+ * device; the screens say that rather than "no matches". Under two
+ * characters there is nothing to search and no provider is asked.
  */
-function settleWithin<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(fallback), ms)
-    promise.then(
-      (value) => {
-        clearTimeout(timer)
-        resolve(value)
-      },
-      () => {
-        clearTimeout(timer)
-        resolve(fallback)
-      }
-    )
-  })
+async function searchCatalog(kind: MediaKind, q: string): Promise<CatalogSearchResult> {
+  if (q.length < 2) return { items: [], providerUnreachable: false }
+
+  // The index and the provider at once, then one ranked list of both.
+  // The index is what this app already has — thirty thousand titles
+  // across the crawl, the deep scan and the household sync, answered
+  // from disk in a few milliseconds with no network at all — and it is
+  // listed first so that a title both know shows as the index's richer
+  // row. The provider is what the index has not reached: a search must
+  // find anything, not only what has been browsed past.
+  //
+  // The provider is started first and read last, and how long it is
+  // waited for depends on whether the index found anything. With hits
+  // in hand it gets a short grace to add its own and no more — a
+  // title already found must not sit behind a stalled request for
+  // the whole of its timeout, which would make the offline path only
+  // as fast as the network it exists to not need. With none, the
+  // provider is the only hope, and it gets its full time.
+  const remotePending = providerSearch(kind, q)
+  const local = getDatabase().indexSearch(kind, q, INDEX_SEARCH_CANDIDATES)
+  const remote = await settleProvider(remotePending, local.length ? PROVIDER_GRACE_MS : undefined)
+  const byTitle = mergeSearchResults(q, [local, remote.items], MAX_SEARCH_RESULTS)
+
+  // Then the same query against everything already known about each
+  // title's cast, creators and story labels. This is what makes typing a
+  // director's name find their films rather than only films with their
+  // name in the title — the rows are already on disk, so it costs a map
+  // lookup rather than a request.
+  //
+  // AFTER the title matches and never reordering them: somebody typing a
+  // title wants that title first, and a cast match is a useful second
+  // thought rather than a competing answer.
+  //
+  // From the cached blob only, and kept in memory between searches (see
+  // searchPool.ts). This used to await catalogData, which on a cold
+  // install or an expired blob joined a whole catalogue crawl before the
+  // reply could go, with the title matches already in hand.
+  const seen = new Set(byTitle.map((item) => String(item.id)))
+  return {
+    items: [...byTitle, ...searchByCredits(kind, q, seen)],
+    providerUnreachable: remote.unreachable
+  }
 }
 
 /** Cached (24h) franchise-relationship anime titles (sequel/prequel/side-story/etc.) from Kitsu, falling back to a stale cache entry (or `[]`) on error rather than failing the caller. */
@@ -1690,6 +1771,9 @@ interface CatalogMetaPayload {
 interface CatalogSearchPayload {
   kind?: unknown
   query?: unknown
+  /** Answer with a CatalogSearchResult (the list and whether the provider
+   *  could be reached) instead of the bare list. */
+  report?: unknown
 }
 
 interface CatalogRelatedPayload {
@@ -1779,57 +1863,14 @@ export function registerCatalogIpc(): void {
     }
   )
 
-  handle<CatalogSearchPayload, CatalogItem[]>(
+  // The bare list unless the caller asks for the report: a caller written
+  // before the report existed reads the same answer it always has.
+  handle<CatalogSearchPayload, CatalogItem[] | CatalogSearchResult>(
     MEDIA_HUB_CHANNELS.catalogSearch,
-    async (_e, { kind, query }) => {
+    async (_e, { kind, query, report }) => {
       if (!isValidCatalogKind(kind)) throw new Error('Unsupported catalog.')
-      const q = String(query || '').trim()
-      if (q.length < 2) return []
-
-      // The index and the provider at once, then one ranked list of both.
-      // The index is what this app already has — thirty thousand titles
-      // across the crawl, the deep scan and the household sync, answered
-      // from disk in a few milliseconds with no network at all — and it is
-      // listed first so that a title both know shows as the index's richer
-      // row. The provider is what the index has not reached: a search must
-      // find anything, not only what has been browsed past.
-      //
-      // The provider is started first and read last, and how long it is
-      // waited for depends on whether the index found anything. With hits
-      // in hand it gets a short grace to add its own and no more — a
-      // title already found must not sit behind a stalled request for
-      // the whole of its timeout, which would make the offline path only
-      // as fast as the network it exists to not need. With none, the
-      // provider is the only hope, and it gets its full time.
-      const remotePending = providerSearch(kind, q)
-      const local = getDatabase().indexSearch(kind, q, INDEX_SEARCH_CANDIDATES)
-      const remote = local.length
-        ? await settleWithin(remotePending, PROVIDER_GRACE_MS, [] as CatalogItem[])
-        : await remotePending
-      const byTitle = mergeSearchResults(q, [local, remote], MAX_SEARCH_RESULTS)
-
-      // Then the same query against everything already known about each
-      // title's cast, creators and story labels. This is what makes typing a
-      // director's name find their films rather than only films with their
-      // name in the title — the rows are already on disk, so it costs a map
-      // lookup rather than a request.
-      //
-      // AFTER the title matches and never reordering them: somebody typing a
-      // title wants that title first, and a cast match is a useful second
-      // thought rather than a competing answer.
-      const seen = new Set(byTitle.map((item) => String(item.id)))
-      const pool = await catalogData(kind, false, 'interactive').catch(() => [] as CatalogItem[])
-      const byId = new Map(pool.map((item) => [String(item.id), item]))
-      const { people, labels } = searchCredits(byId.keys(), q)
-      const extra: CatalogItem[] = []
-      for (const id of [...people, ...labels]) {
-        if (seen.has(id)) continue
-        const item = byId.get(id)
-        if (!item) continue
-        seen.add(id)
-        extra.push(item)
-      }
-      return [...byTitle, ...extra]
+      const result = await searchCatalog(kind, String(query || '').trim())
+      return report === true ? result : result.items
     }
   )
 

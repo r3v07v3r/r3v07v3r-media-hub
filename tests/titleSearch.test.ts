@@ -6,7 +6,10 @@
 // itself was never asked by name. These tests pin the two halves of the
 // replacement: the ranking that one list of hits is built with
 // (src/shared/media-hub/titleSearch.ts), and the index's own name search
-// (src/main/media-hub/database.ts's indexSearch).
+// (src/main/media-hub/database.ts's indexSearch). And how the provider's half
+// is waited for (settleProvider): a provider that fails or does not answer
+// in time is reported as unreachable, so a screen can say the list is local
+// only instead of "no matches".
 //
 // Run with: npx tsx tests/titleSearch.test.ts   (or npm.cmd test)
 
@@ -21,6 +24,7 @@ import {
   comparableTitle,
   mergeSearchResults,
   searchTokens,
+  settleProvider,
   titleMatchRank
 } from '../src/shared/media-hub/titleSearch'
 import type { CatalogItem, MediaKind } from '../src/shared/media-hub/types'
@@ -344,4 +348,54 @@ check('the index search survives a bad database rather than throwing into the ha
   assert.deepEqual(db.indexSearch('series', 'foundation'), [])
 })
 
-console.log(`\n${pass} passed${process.exitCode ? ', with failures' : ''}`)
+async function checkAsync(name: string, fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn()
+    pass++
+    console.log(`  ok  ${name}`)
+  } catch (error) {
+    console.log(`FAIL  ${name}\n      ${(error as Error).message}`)
+    process.exitCode = 1
+  }
+}
+
+const never = new Promise<CatalogItem[]>(() => {})
+
+async function providerChecks(): Promise<void> {
+  await checkAsync('a provider that answers is reachable, with its hits', async () => {
+    const outcome = await settleProvider(Promise.resolve([item('tt1', 'Dune')]), 1_000)
+    assert.deepEqual(ids(outcome.items), ['tt1'])
+    assert.equal(outcome.unreachable, false)
+  })
+
+  await checkAsync('a provider that answers with nothing is reachable: no matches', async () => {
+    const outcome = await settleProvider(Promise.resolve([] as CatalogItem[]))
+    assert.deepEqual(outcome, { items: [], unreachable: false })
+  })
+
+  await checkAsync('a provider that fails is unreachable, not an empty answer', async () => {
+    const failed = Promise.reject(Object.assign(new Error('Request failed (429)'), { status: 429 }))
+    const outcome = await settleProvider<CatalogItem>(failed)
+    assert.deepEqual(outcome, { items: [], unreachable: true })
+  })
+
+  await checkAsync('a provider still out when the grace ends is unreachable', async () => {
+    const started = Date.now()
+    const outcome = await settleProvider(never, 50)
+    assert.deepEqual(outcome, { items: [], unreachable: true })
+    assert.ok(Date.now() - started < 1_000, 'the grace bounds the wait')
+  })
+
+  await checkAsync('with no grace the provider is waited for until it settles', async () => {
+    const late = new Promise<CatalogItem[]>((resolve) =>
+      setTimeout(() => resolve([item('tt2', 'Late')]), 80)
+    )
+    const outcome = await settleProvider(late)
+    assert.deepEqual(ids(outcome.items), ['tt2'])
+    assert.equal(outcome.unreachable, false)
+  })
+
+  console.log(`\n${pass} passed${process.exitCode ? ', with failures' : ''}`)
+}
+
+void providerChecks()

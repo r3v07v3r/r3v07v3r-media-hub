@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import type { CatalogItem, MediaKind } from '@shared/media-hub/types'
 import { api } from '../lib/api'
+import { browsePagingDone, indexMayHaveGrown } from '../lib/browsePaging'
 import { isMediaKind, kindLabel } from '../lib/mediaKind'
 import { toPosterItem } from '../lib/posterItem'
 import PosterCard from '../components/PosterCard'
@@ -70,8 +71,7 @@ function useBrowseCatalog(kind: MediaKind) {
         offsetRef.current += result.items.length
         setState((previous) => {
           const items = previous.items.concat(result.items)
-          const done =
-            result.items.length === 0 || items.length >= result.total || items.length >= MAX_ITEMS
+          const done = browsePagingDone(items.length, result.items.length, result.total, MAX_ITEMS)
           return { items, total: result.total, loading: false, error: null, done }
         })
       })
@@ -84,6 +84,22 @@ function useBrowseCatalog(kind: MediaKind) {
         }))
       })
   }, [kind, state.loading, state.done])
+
+  // An empty grid that has stopped paging is waiting, not finished: on a
+  // fresh install the first crawl has not landed when this screen first
+  // asks. The backend announces every index write (the crawl, the deep
+  // scan, the household sync), and the grid starts over on the first one,
+  // rather than saying "Nothing here yet" until the screen is opened again.
+  const waitingForIndex = state.done && !state.loading && !state.error && state.items.length === 0
+  useEffect(() => {
+    if (!waitingForIndex) return
+    return api()?.library.onChanged((event) => {
+      if (!indexMayHaveGrown(event)) return
+      generationRef.current += 1
+      offsetRef.current = 0
+      setState(INITIAL_STATE)
+    })
+  }, [waitingForIndex])
 
   return { ...state, loadMore }
 }

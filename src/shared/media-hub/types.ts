@@ -1967,6 +1967,16 @@ export interface CatalogByIdsResult {
   completedIds: string[]
 }
 
+/** catalog:search's answer when it is asked with `report: true`. Without
+ *  that flag the handler answers with the bare list, as it always has. */
+export interface CatalogSearchResult {
+  items: CatalogItem[]
+  /** The online provider for this kind (Cinemeta, or Kitsu for anime)
+   *  failed or had not answered in time, so `items` holds only what was
+   *  already on this device. A screen says so instead of "no matches". */
+  providerUnreachable: boolean
+}
+
 export interface DeepScanReport {
   kind: MediaKind
   /** Titles the scanned stretch returned, before dedup and skips. */

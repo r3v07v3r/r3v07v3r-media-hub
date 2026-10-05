@@ -77,7 +77,7 @@ import {
   recentlyWatchedRefs,
   relatedToItem,
   resolveSimilarTitles,
-  searchAppCatalog
+  searchAppCatalogWithStatus
 } from '@renderer/lib/mediaHub/assistantSearch'
 import { buildMediaId } from '@renderer/lib/mediaHub/streamId'
 import {
@@ -357,6 +357,11 @@ interface AppStateValue {
    *  'processing', which covers the model — the results row and the prose
    *  arrive separately and each shows its own waiting state. */
   assistantSearching: boolean
+  /** One of the online catalogs could not be reached for the current
+   *  question, so assistantResults holds only titles already in the
+   *  library. The panel says so rather than letting a missing title read
+   *  as one that does not exist. */
+  assistantProviderUnreachable: boolean
   runAssistantQuery: (query: string) => void
   closeAssistant: () => void
 
@@ -376,6 +381,10 @@ interface AppStateValue {
     results: MediaItem[]
     loading: boolean
     error: boolean
+    /** The online catalog for this kind could not be reached, so `results`
+     *  holds only what the library already had (see catalog.ts's
+     *  searchCatalog). */
+    providerUnreachable: boolean
   }
   runCategorySearch: (kind: CategoryKind, query: string) => void
   clearCategorySearch: () => void
@@ -587,6 +596,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     similar: CatalogItem[]
     similarSource: 'model' | 'catalog' | null
     searching: boolean
+    providerUnreachable?: boolean
   }>({ results: [], similar: [], similarSource: null, searching: false })
   // A STACK, not a slot. Opening a title from another title (the Rest of
   // the series / Similar / Story panels) pushes a second origin, and a
@@ -637,6 +647,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     items: CatalogItem[]
     loading: boolean
     error: boolean
+    /** Set only by an answered search; absent reads as reachable. */
+    providerUnreachable?: boolean
   }>({
     kind: null,
     query: '',
@@ -702,7 +714,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       query: categorySearchRaw.query,
       results: categorySearchRaw.items.map((item) => catalogItemToMediaItem(item, adapterContext)),
       loading: categorySearchRaw.loading,
-      error: categorySearchRaw.error
+      error: categorySearchRaw.error,
+      providerUnreachable: categorySearchRaw.providerUnreachable === true
     }),
     [categorySearchRaw, adapterContext]
   )
@@ -2652,9 +2665,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
       void (async () => {
         // --- 1. The app's own answer, with no model involved ------------
-        const found = await searchAppCatalog(question).catch((): CatalogItem[] => [])
+        const { items: found, providerUnreachable } = await searchAppCatalogWithStatus(
+          question
+        ).catch(() => ({ items: [] as CatalogItem[], providerUnreachable: false }))
         if (!current()) return
-        setAssistantFindings({ results: found, similar: [], similarSource: null, searching: false })
+        setAssistantFindings({
+          results: found,
+          similar: [],
+          similarSource: null,
+          searching: false,
+          providerUnreachable
+        })
 
         // --- 2. What the model makes of it ------------------------------
         // Asked unconditionally whenever the bridge exists, and NOT gated
@@ -2776,10 +2797,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       return
     }
     api.catalog
-      .search(kind, q)
-      .then((items) => {
+      .searchWithStatus(kind, q)
+      .then(({ items, providerUnreachable }) => {
         if (searchGeneration.current !== generation) return
-        setCategorySearchRaw({ kind, query, items, loading: false, error: false })
+        setCategorySearchRaw({
+          kind,
+          query,
+          items,
+          loading: false,
+          error: false,
+          providerUnreachable
+        })
       })
       .catch(() => {
         if (searchGeneration.current !== generation) return
@@ -2861,6 +2889,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       assistantSimilar,
       assistantSimilarSource: assistantFindings.similarSource,
       assistantSearching: assistantFindings.searching,
+      assistantProviderUnreachable: assistantFindings.providerUnreachable === true,
       runAssistantQuery,
       closeAssistant,
       categorySearch,
@@ -2957,6 +2986,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       assistantSimilar,
       assistantFindings.similarSource,
       assistantFindings.searching,
+      assistantFindings.providerUnreachable,
       runAssistantQuery,
       closeAssistant,
       categorySearch,

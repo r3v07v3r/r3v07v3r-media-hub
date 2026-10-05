@@ -11,6 +11,11 @@
 // keeps a recently-expired row available while still reclaiming rows
 // abandoned for a long time.
 //
+// The prune is a method the background job registry calls (backgroundJobs.ts's
+// catalog-cache-prune job), not something opening the database does: it is a
+// full scan of a table holding the catalog blobs, and createDatabase runs
+// before the window exists. The first check below pins that.
+//
 // Run with: npx tsx tests/databasePruning.test.ts   (or npm.cmd test)
 
 import assert from 'node:assert'
@@ -64,12 +69,32 @@ const TEST_PROFILE = 'profile-pruning-test'
 const DAY_MS = 24 * 60 * 60 * 1000
 const now = Date.now()
 
-console.log('catalog_cache pruning on open')
+console.log('catalog_cache pruning')
+
+/** Opens the database and runs the prune the background job runs. */
+function openAndPrune(dbPath: string): ReturnType<typeof createDatabase> {
+  const db = createDatabase(dbPath, TEST_PROFILE)
+  db.pruneExpiredCache()
+  return db
+}
+
+check('opening the database does not prune; the prune is a separate call', () => {
+  const dbPath = tempDbPath()
+  seedRow(dbPath, 'long-abandoned', now - 90 * DAY_MS)
+  const db = createDatabase(dbPath, TEST_PROFILE)
+  assert.ok(
+    db.getCache('long-abandoned', { allowExpired: true }),
+    'createDatabase is on the launch path and must not scan catalog_cache'
+  )
+  assert.equal(db.pruneExpiredCache(), 1, 'the prune reports what it reclaimed')
+  assert.equal(db.getCache('long-abandoned', { allowExpired: true }), null)
+  db.close()
+})
 
 check('a row expired within the grace window survives (the offline-fallback case)', () => {
   const dbPath = tempDbPath()
   seedRow(dbPath, 'recently-expired', now - 2 * DAY_MS)
-  const db = createDatabase(dbPath, TEST_PROFILE)
+  const db = openAndPrune(dbPath)
   const value = db.getCache<{ v: string }>('recently-expired', { allowExpired: true })
   assert.ok(value, 'a row expired 2 days ago must still be readable as a stale fallback')
   db.close()
@@ -78,7 +103,7 @@ check('a row expired within the grace window survives (the offline-fallback case
 check('a row expired just under the grace boundary survives', () => {
   const dbPath = tempDbPath()
   seedRow(dbPath, 'almost-30-days', now - (30 * DAY_MS - 60_000))
-  const db = createDatabase(dbPath, TEST_PROFILE)
+  const db = openAndPrune(dbPath)
   const value = db.getCache<{ v: string }>('almost-30-days', { allowExpired: true })
   assert.ok(value, 'a row just inside the 30-day grace window must survive')
   db.close()
@@ -87,7 +112,7 @@ check('a row expired just under the grace boundary survives', () => {
 check('a row expired well past the grace window is reclaimed', () => {
   const dbPath = tempDbPath()
   seedRow(dbPath, 'long-abandoned', now - 90 * DAY_MS)
-  const db = createDatabase(dbPath, TEST_PROFILE)
+  const db = openAndPrune(dbPath)
   const value = db.getCache<{ v: string }>('long-abandoned', { allowExpired: true })
   assert.equal(value, null, 'a row abandoned for 90 days should have been pruned')
   db.close()
@@ -96,7 +121,7 @@ check('a row expired well past the grace window is reclaimed', () => {
 check('a live (not yet expired) row is never touched', () => {
   const dbPath = tempDbPath()
   seedRow(dbPath, 'still-live', now + DAY_MS)
-  const db = createDatabase(dbPath, TEST_PROFILE)
+  const db = openAndPrune(dbPath)
   const value = db.getCache<{ v: string }>('still-live')
   assert.ok(value, 'a row that has not expired yet must never be pruned')
   db.close()
@@ -104,7 +129,7 @@ check('a live (not yet expired) row is never touched', () => {
 
 check('pruning does not throw or block opening a database with no expired rows at all', () => {
   const dbPath = tempDbPath()
-  const db = createDatabase(dbPath, TEST_PROFILE)
+  const db = openAndPrune(dbPath)
   db.putCache('fresh', { ok: true }, 60_000)
   assert.ok(db.getCache('fresh'))
   db.close()
@@ -115,7 +140,7 @@ check('a mix of fresh, gracefully-stale, and abandoned rows resolves independent
   seedRow(dbPath, 'fresh', now + DAY_MS)
   seedRow(dbPath, 'stale-but-in-grace', now - 5 * DAY_MS)
   seedRow(dbPath, 'abandoned', now - 45 * DAY_MS)
-  const db = createDatabase(dbPath, TEST_PROFILE)
+  const db = openAndPrune(dbPath)
   assert.ok(db.getCache('fresh'))
   assert.ok(db.getCache('stale-but-in-grace', { allowExpired: true }))
   assert.equal(db.getCache('abandoned', { allowExpired: true }), null)
@@ -125,10 +150,10 @@ check('a mix of fresh, gracefully-stale, and abandoned rows resolves independent
 check('re-opening an already-pruned database is idempotent', () => {
   const dbPath = tempDbPath()
   seedRow(dbPath, 'abandoned', now - 60 * DAY_MS)
-  const first = createDatabase(dbPath, TEST_PROFILE)
+  const first = openAndPrune(dbPath)
   first.close()
   // Second open must not error just because the row is already gone.
-  const second = createDatabase(dbPath, TEST_PROFILE)
+  const second = openAndPrune(dbPath)
   assert.equal(second.getCache('abandoned', { allowExpired: true }), null)
   second.close()
 })

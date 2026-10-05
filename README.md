@@ -58,6 +58,8 @@ trending feed (either one alone fills the grid), anime from Kitsu. No key is req
   combination, and choose which of those start switched on
   from the Settings page's Browsing card. Save any filter combination as a named view; it comes back as
   a chip. **Scan deeper** on a category page pulls in more of the catalog than loaded by itself.
+  A title found only by search joins the library once you open or track it, so it shows in the
+  grids, My Stuff and the Planned row like anything else.
 - **Recommendations that say why.** Home shows the top row; **For You** shows the whole ranking,
   shelved by reason: a franchise continuation, a director or actor who recurs in what you have watched, a genre
   match. After
@@ -94,6 +96,7 @@ limits:
    your resolution limit only. A partial download is resumed from the source it originally came
    from rather than restarted.
 2. **A paired [r3-cache](daemon/README.md) server on your LAN**, when it holds the title complete.
+   A server that has not answered within 3 seconds is treated as away, and the app moves on.
 3. **Your Jellyfin server.** On **Media server** a copy within your limits plays straight away and
    TorBox is never asked. On **Balanced**, the default, it also plays straight away unless a copy
    more than twice as sharp could exist within your limits: a 1080p copy always plays, a 720p copy
@@ -236,7 +239,10 @@ over to its second face. It is where the installation is configured and watched:
 - **Search and ask in one field.** Press Enter in the top bar and it searches the movie, series and
   anime catalogs together and shows real titles you can open. With a local model connected its
   answer appears underneath: what the top result is, whether it fits what you have watched, and
-  other titles worth trying. On a category page the same field filters that page instead.
+  other titles worth trying. On a category page the same field filters that page instead. Every
+  search looks in the library on this device and asks the online catalog (Cinemeta, or Kitsu for
+  anime) at the same time; when the online catalog cannot be reached, the results say so and show
+  what the library already holds, rather than reporting that nothing matched.
 - **Run the AI locally.** The assistant and the Recommend Next buttons use an
   [Ollama](https://ollama.com) model on your own machine; nothing is sent to a hosted service. An
   Ollama at its usual `http://127.0.0.1:11434` is found on its own. Without one the search still

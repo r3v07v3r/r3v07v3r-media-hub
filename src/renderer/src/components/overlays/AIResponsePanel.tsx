@@ -78,6 +78,7 @@ export function AIResponsePanel() {
     assistantSimilar,
     assistantSimilarSource,
     assistantSearching,
+    assistantProviderUnreachable,
     closeAssistant,
     openDetail
   } = useAppState()
@@ -112,17 +113,33 @@ export function AIResponsePanel() {
       </span>
 
       <div className={styles.aiPanelBody}>
-        {(assistantSearching || assistantResults.length > 0) && (
+        {(assistantSearching || assistantResults.length > 0 || assistantProviderUnreachable) && (
           <section className={styles.aiSection}>
             <h2 className={styles.aiSectionHeading}>In R3</h2>
             {assistantSearching ? (
               <TileSkeletons />
             ) : (
-              <ul className={styles.aiTiles}>
-                {assistantResults.map((media) => (
-                  <TitleTile key={media.id} media={media} onOpen={open} />
-                ))}
-              </ul>
+              <>
+                {/* Said whether or not anything was found: with an online
+                    catalog out of reach, an empty row or a short one is
+                    "not in the library yet", not "does not exist". The
+                    flag is set when any one of the three kinds' catalogs
+                    failed, and the others' results are complete, so the
+                    note does not claim they all failed. */}
+                {assistantProviderUnreachable && (
+                  <p className={styles.aiSectionNote} role="status">
+                    One or more online catalogs could not be reached, so for those only titles
+                    already in the library are shown.
+                  </p>
+                )}
+                {assistantResults.length > 0 && (
+                  <ul className={styles.aiTiles}>
+                    {assistantResults.map((media) => (
+                      <TitleTile key={media.id} media={media} onOpen={open} />
+                    ))}
+                  </ul>
+                )}
+              </>
             )}
           </section>
         )}

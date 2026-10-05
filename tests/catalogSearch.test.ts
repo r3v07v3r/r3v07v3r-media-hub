@@ -1,0 +1,336 @@
+// catalog:search and the index rows a remote find leaves behind, driven
+// through the real handler (src/main/media-hub/catalog.ts) with the network
+// replaced by a stub.
+//
+// What is pinned, and why:
+//   - a provider that fails (offline, a 429, a 5xx, its timeout) is
+//     reported beside the items, so the screens can say "only local
+//     results" instead of "no matches"; a caller that does not ask for the
+//     report still gets the bare list it always got;
+//   - a search reply never waits on a catalogue crawl: on a cold install
+//     the only request a search makes is the provider's own search;
+//   - a title found only by that search gets an index row once it is
+//     opened (metadata(), from the network or from its cached entry) or
+//     tracked through any of the tracking handlers (plan, mark watched, mark
+//     a season, set a status, not for me), so the grids and My Stuff, which
+//     read the index by id, can show it; un-planning writes nothing;
+//   - the crawl announces the index it wrote, which is what lets the phone's
+//     Browse grid, empty on a fresh install, fill in when the crawl lands.
+//
+// catalog.ts imports 'electron' (through ipcGuard), so the module is loaded
+// with that name pointed at the headless stand-in (src/headless/
+// electronShim), the same alias the phone build uses, and the handler is
+// called through that stand-in's ipcMain the way the bridge calls it.
+// Run with: npx tsx tests/catalogSearch.test.ts
+
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import { registerHooks } from 'node:module'
+import os from 'node:os'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
+
+import type { CatalogItem, CatalogSearchResult } from '../src/shared/media-hub/types'
+
+const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-catalog-search-'))
+process.env.R3_USER_DATA = scratch
+const shim = pathToFileURL(
+  path.join(__dirname, '..', 'src', 'headless', 'electronShim', 'index.ts')
+)
+registerHooks({
+  resolve(specifier, context, next) {
+    if (specifier === 'electron') return { url: shim.href, shortCircuit: true }
+    return next(specifier, context)
+  }
+})
+
+let pass = 0
+async function check(name: string, fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn()
+    pass++
+    console.log(`  ok  ${name}`)
+  } catch (error) {
+    console.log(`FAIL  ${name}\n      ${(error as Error).message}`)
+    process.exitCode = 1
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The network. Every request is recorded; how the provider's search answers
+// is set per check.
+// ---------------------------------------------------------------------------
+type ProviderMode = 'answer' | 'fail' | 'down'
+let providerMode: ProviderMode = 'answer'
+const requests: string[] = []
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' }
+  })
+}
+
+globalThis.fetch = (async (input: string | URL) => {
+  const url = String(input)
+  requests.push(url)
+  if (url.includes('/top/search=')) {
+    if (providerMode === 'down') throw new TypeError('fetch failed')
+    if (providerMode === 'fail') return json({ error: 'Too Many Requests' }, 429)
+    return json({
+      metas: [{ id: 'tt7000001', type: 'movie', name: 'Remote Harbour', poster: '' }]
+    })
+  }
+  const page = url.match(/\/catalog\/series\/top(?:\/skip=(\d+))?\.json$/)
+  if (page) {
+    const n = Number(page[1] ?? 0)
+    return json({
+      metas: [{ id: `tt80${String(n).padStart(5, '0')}`, type: 'series', name: `S${n}` }]
+    })
+  }
+  const meta = url.match(/\/meta\/movie\/(tt\d+)\.json$/)
+  if (meta) {
+    return json({
+      meta: { id: meta[1], type: 'movie', name: 'Remote Harbour', year: '2021', runtime: '101 min' }
+    })
+  }
+  throw new TypeError(`no stub for ${url}`)
+}) as typeof fetch
+
+const card = (id: string, title: string): CatalogItem =>
+  ({ id, type: 'movie', title, videos: [] }) as unknown as CatalogItem
+
+async function main(): Promise<void> {
+  const { createDatabase } = await import('../src/main/media-hub/database')
+  const { setDatabase } = await import('../src/main/media-hub/dbState')
+  const { catalogData, indexTrackedTitle, metadata, registerCatalogIpc } =
+    await import('../src/main/media-hub/catalog')
+  const { registerTrackingIpc } = await import('../src/main/media-hub/tracking')
+  const { metaCacheKey } = await import('../src/main/media-hub/titleNames')
+  const { setActiveWindow } = await import('../src/main/media-hub/rendererBridge')
+  const { BrowserWindow, ipcMain } = await import('../src/headless/electronShim')
+  const { MEDIA_HUB_CHANNELS } = await import('../src/shared/media-hub/ipc-channels')
+
+  const db = createDatabase(path.join(scratch, 'media-hub.sqlite'), 'profile-search-test')
+  setDatabase(db)
+  // A title the crawl has seen. No catalog blob is written: this install has
+  // never finished a crawl, the state a search used to wait out.
+  db.indexUpsert('movie', [card('tt6000001', 'Harbour Lights')], { source: 'cinemeta+simkl' })
+  registerCatalogIpc()
+  registerTrackingIpc()
+
+  const window = new BrowserWindow()
+  const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame }
+  const search = (payload: Record<string, unknown>): Promise<unknown> =>
+    ipcMain.dispatchInvoke(event, MEDIA_HUB_CHANNELS.catalogSearch, [payload])
+  const ids = (items: CatalogItem[]): string[] => items.map((item) => String(item.id))
+  const invoke = (channel: string, payload: unknown): Promise<unknown> =>
+    ipcMain.dispatchInvoke(event, channel, [payload])
+  const indexedKinds = (id: string): string[] =>
+    db.indexByIds([id]).items.map((item) => String(item.type))
+
+  await check('a provider that answers is reachable, and its find is listed', async () => {
+    providerMode = 'answer'
+    const result = (await search({
+      kind: 'movie',
+      query: 'harbour',
+      report: true
+    })) as CatalogSearchResult
+    assert.equal(result.providerUnreachable, false)
+    assert.deepEqual(ids(result.items).sort(), ['tt6000001', 'tt7000001'])
+  })
+
+  await check('a 429 from the provider is reported, with the local hit kept', async () => {
+    providerMode = 'fail'
+    const result = (await search({
+      kind: 'movie',
+      query: 'harbour',
+      report: true
+    })) as CatalogSearchResult
+    assert.equal(result.providerUnreachable, true)
+    assert.deepEqual(ids(result.items), ['tt6000001'])
+  })
+
+  await check('offline with no local hit is "unreachable", not "no matches"', async () => {
+    providerMode = 'down'
+    const result = (await search({
+      kind: 'movie',
+      query: 'nowhere',
+      report: true
+    })) as CatalogSearchResult
+    assert.deepEqual(result, { items: [], providerUnreachable: true })
+  })
+
+  await check('a caller that does not ask for the report gets the bare list', async () => {
+    providerMode = 'down'
+    const items = await search({ kind: 'movie', query: 'harbour' })
+    assert.ok(Array.isArray(items), 'the answer is still an array')
+    assert.deepEqual(ids(items as CatalogItem[]), ['tt6000001'])
+    // Under two characters: nothing searched, nothing to report.
+    assert.deepEqual(await search({ kind: 'movie', query: 'h', report: true }), {
+      items: [],
+      providerUnreachable: false
+    })
+  })
+
+  await check('a search on a cold install makes no request but its own', async () => {
+    providerMode = 'answer'
+    requests.length = 0
+    await search({ kind: 'movie', query: 'harbour', report: true })
+    assert.equal(requests.length, 1, `requests: ${requests.join(', ')}`)
+    assert.ok(requests[0].includes('/catalog/movie/top/search=harbour'))
+  })
+
+  await check('opening a title the index lacks gives it a row, below the crawl', async () => {
+    assert.equal(db.indexByIds(['tt7000001']).items.length, 0, 'a search hit is not indexed')
+    const opened = await metadata('movie', 'tt7000001')
+    assert.equal(opened.title, 'Remote Harbour')
+    const row = db.indexByIds(['tt7000001']).items
+    assert.deepEqual(
+      row.map((x) => x.id),
+      ['tt7000001']
+    )
+    assert.equal(row[0].title, 'Remote Harbour')
+    assert.ok(
+      db.indexList('movie', 10).findIndex((x) => x.id === 'tt7000001') >
+        db.indexList('movie', 10).findIndex((x) => x.id === 'tt6000001'),
+      'ranked below what the crawl found'
+    )
+  })
+
+  await check('opening it again writes nothing new', async () => {
+    const before = db.indexCount('movie')
+    await metadata('movie', 'tt7000001')
+    assert.equal(db.indexCount('movie'), before)
+  })
+
+  await check('opening a title served from its cached entry gives it a row too', async () => {
+    // A title opened before this rule existed, or opened once and now
+    // reached again within its day: the cached entry answers, no request is
+    // made, and the index still gains the row.
+    db.putCache(
+      metaCacheKey('movie', 'tt7000005'),
+      card('tt7000005', 'Cached Harbour'),
+      60 * 60 * 1000
+    )
+    requests.length = 0
+    const opened = await metadata('movie', 'tt7000005')
+    assert.equal(opened.title, 'Cached Harbour')
+    assert.ok(!requests.some((url) => url.includes('/meta/')), `requests: ${requests.join(', ')}`)
+    assert.deepEqual(indexedKinds('tt7000005'), ['movie'])
+  })
+
+  await check('each tracking handler indexes the search card it was given', async () => {
+    const art = 'https://m.media-amazon.com/images/p.jpg'
+    await invoke(MEDIA_HUB_CHANNELS.trackingToggle, {
+      id: 'tt7100001',
+      type: 'movie',
+      title: 'Planned Harbour',
+      poster: art
+    })
+    assert.ok(db.isTracked('tt7100001'), 'the toggle planned it')
+    assert.deepEqual(indexedKinds('tt7100001'), ['movie'], 'plan')
+
+    await invoke(MEDIA_HUB_CHANNELS.trackingMarkWatched, {
+      item: { id: 'tt7100002', type: 'movie', title: 'Watched Harbour' }
+    })
+    assert.deepEqual(indexedKinds('tt7100002'), ['movie'], 'mark watched')
+
+    await invoke(MEDIA_HUB_CHANNELS.trackingMarkSeasonWatched, {
+      item: { id: 'tt7100003', type: 'series', title: 'Harbour Season' },
+      season: 1,
+      episodes: [{ season: 1, episode: 1 }]
+    })
+    assert.deepEqual(indexedKinds('tt7100003'), ['series'], 'mark a season')
+
+    await invoke(MEDIA_HUB_CHANNELS.trackingSetTitleStatus, {
+      item: { id: 'tt7100004', type: 'movie', title: 'Status Harbour' },
+      status: 'planned'
+    })
+    assert.deepEqual(indexedKinds('tt7100004'), ['movie'], 'set a status')
+
+    await invoke(MEDIA_HUB_CHANNELS.dislikedAdd, {
+      id: 'tt7100005',
+      type: 'movie',
+      title: 'Disliked Harbour'
+    })
+    assert.deepEqual(indexedKinds('tt7100005'), ['movie'], 'not for me')
+  })
+
+  await check('un-planning a title the index lacks writes nothing', async () => {
+    db.track({ id: 'tt7100009', type: 'movie', title: 'Unplanned Harbour' } as never)
+    await invoke(MEDIA_HUB_CHANNELS.trackingToggle, {
+      id: 'tt7100009',
+      type: 'movie',
+      title: 'Unplanned Harbour'
+    })
+    assert.equal(db.isTracked('tt7100009'), false, 'the toggle un-planned it')
+    assert.deepEqual(indexedKinds('tt7100009'), [])
+  })
+
+  await check('a status set on a typeless Kitsu id does not land in the movie grid', async () => {
+    // The status handler reads a missing type as 'movie'.
+    await invoke(MEDIA_HUB_CHANNELS.trackingSetTitleStatus, {
+      item: { id: 'kitsu:7100006', title: 'Typeless Harbour' },
+      status: 'planned'
+    })
+    assert.deepEqual(indexedKinds('kitsu:7100006'), [])
+  })
+
+  await check('tracking a search card that was never opened gives it a row', async () => {
+    indexTrackedTitle({
+      id: 'tt7000002',
+      type: 'movie',
+      title: 'Remote Harbour II',
+      poster: 'https://m.media-amazon.com/images/p.jpg'
+    })
+    const row = db.indexByIds(['tt7000002']).items
+    assert.equal(row[0]?.title, 'Remote Harbour II')
+    assert.equal(row[0]?.poster, 'https://m.media-amazon.com/images/p.jpg')
+    // The fields the index accepts from outside the crawl, and no others:
+    // an id outside the alphabet or art that is not https is refused.
+    indexTrackedTitle({ id: 'simkl:9', type: 'movie', title: 'Legacy id' })
+    indexTrackedTitle({
+      id: 'tt7000003',
+      type: 'movie',
+      title: 'Bad art',
+      poster: 'http://x/p.jpg'
+    })
+    assert.equal(db.indexByIds(['simkl:9', 'tt7000003']).items.length, 0)
+  })
+
+  await check('the crawl announces the index it wrote', async () => {
+    // Anything the checks above announced has gone out (to no window) first.
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    const pushed: Array<{ channel: string; payload: unknown }> = []
+    window.webContents.setPushSink((channel, payload) => pushed.push({ channel, payload }))
+    setActiveWindow(window as never)
+    const before = db.indexCount('series')
+    await catalogData('series')
+    assert.ok(db.indexCount('series') > before, 'the crawl wrote the index')
+    // library:changed is coalesced for 300 ms.
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    const changes = pushed.filter((push) => push.channel === MEDIA_HUB_CHANNELS.libraryChanged)
+    assert.ok(
+      changes.some((push) => {
+        const event = push.payload as { scopes: string[]; sources: string[] }
+        return event.scopes.includes('index') && event.sources.includes('catalog-crawl')
+      }),
+      `pushed: ${JSON.stringify(pushed)}`
+    )
+    setActiveWindow(null)
+  })
+
+  db.close()
+  console.log(`\n${pass} checks passed`)
+}
+
+void main().then(
+  // The scheduler and the stand-in keep timers of their own; the checks are
+  // done, so the process is.
+  () => process.exit(),
+  (error) => {
+    console.error(error)
+    process.exit(1)
+  }
+)
