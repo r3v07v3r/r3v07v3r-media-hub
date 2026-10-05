@@ -9,7 +9,10 @@
 //
 // lanCache.ts imports 'electron' (through ipcGuard), so the module is loaded
 // with that name pointed at the headless stand-in (src/headless/electronShim),
-// the same alias the phone build uses.
+// the same alias the phone build uses. R3_ELECTRON_SHIM tells the lazy
+// electron() helpers (electronModule.ts) that the stand-in is in place, as the
+// phone build's define does; without it they refuse to load the module under
+// plain Node, which is what keeps unit tests from fetching the Electron binary.
 // Run with: npx tsx tests/lanCacheLookup.test.ts
 
 import assert from 'node:assert/strict'
@@ -22,6 +25,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 process.env.R3_USER_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-lan-lookup-'))
+process.env.R3_ELECTRON_SHIM = '1'
 const shim = pathToFileURL(
   path.join(__dirname, '..', 'src', 'headless', 'electronShim', 'index.ts')
 )
