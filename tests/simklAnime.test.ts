@@ -64,7 +64,7 @@ const SHOW = 'kitsu:100'
 const SEASON_2 = 'kitsu:200'
 const SEASON_3 = 'kitsu:300'
 const ALONE = 'kitsu:900'
-const { siblings, positions } = animeGroupIndexesOf([
+const { siblings, positions, laterSeasons } = animeGroupIndexesOf([
   { id: SHOW, groupedIds: [SEASON_2, SEASON_3] },
   { id: ALONE }
 ])
@@ -90,6 +90,21 @@ check('only the canonical id fronts a group', () => {
   assert.equal(siblingsOf(SEASON_2), undefined)
   assert.equal(siblingsOf(ALONE), undefined)
   assert.equal(positions.has(ALONE), false)
+})
+
+check('the later seasons are every member but the one that fronts the show', () => {
+  assert.deepEqual(
+    [...laterSeasons],
+    [
+      [SEASON_2, { id: SHOW, season: 2 }],
+      [SEASON_3, { id: SHOW, season: 3 }]
+    ]
+  )
+  // The whole catalog at once says of each id what animeSeasonOf says of it
+  // alone: the library's filters and the recommendation row ask it that way.
+  for (const id of [SHOW, SEASON_2, SEASON_3, ALONE]) {
+    assert.deepEqual(laterSeasons.get(id) ?? null, animeSeasonOf(id, targetOf), id)
+  }
 })
 
 // ---------------------------------------------------------------------------

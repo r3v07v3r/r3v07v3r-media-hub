@@ -568,6 +568,9 @@ let animeGroupIndex: Map<string, string[]> | null = null
 /** See animeGroupIndex's own doc — built together in one pass since both read the same cached catalog blob. */
 let animeGroupPositionIndex: Map<string, { id: string; season: number }> | null = null
 
+/** The later seasons among those positions, by the season's own id — see laterSeasons. Built with the other two. */
+let animeLaterSeasonIndex: Map<string, { id: string; season: number }> | null = null
+
 /**
  * Marks that the anime catalog currently in cache has been through the
  * franchise-grouping pass.
@@ -619,17 +622,20 @@ export function animeGroupingReady(): boolean {
 export function invalidateAnimeGroupIndex(): void {
   animeGroupIndex = null
   animeGroupPositionIndex = null
+  animeLaterSeasonIndex = null
 }
 
 /**
- * The two lookups a grouped catalog gives: each canonical id's siblings,
- * and each member's place in its group. No database in it, so the mapping
- * to and from Simkl's per-season entries (serviceIds.ts) can be tested
- * against the same construction the app runs on.
+ * The lookups a grouped catalog gives: each canonical id's siblings, each
+ * member's place in its group, and the later seasons among those members
+ * (every place but a show's own). No database in it, so the mapping to and
+ * from Simkl's per-season entries (serviceIds.ts) can be tested against the
+ * same construction the app runs on.
  */
 export function animeGroupIndexesOf(items: readonly Pick<CatalogItem, 'id' | 'groupedIds'>[]): {
   siblings: Map<string, string[]>
   positions: Map<string, { id: string; season: number }>
+  laterSeasons: Map<string, { id: string; season: number }>
 } {
   const siblings = new Map<string, string[]>()
   const positions = new Map<string, { id: string; season: number }>()
@@ -645,15 +651,22 @@ export function animeGroupIndexesOf(items: readonly Pick<CatalogItem, 'id' | 'gr
       positions.set(String(siblingId), { id, season: index + 2 })
     })
   }
-  return { siblings, positions }
+  // From the finished positions, so this says of every id exactly what
+  // animeSeasonOf (serviceIds.ts) says of it one at a time.
+  const laterSeasons = new Map<string, { id: string; season: number }>()
+  for (const [memberId, place] of positions) {
+    if (place.id !== memberId && memberId.startsWith('kitsu:')) laterSeasons.set(memberId, place)
+  }
+  return { siblings, positions, laterSeasons }
 }
 
 function buildAnimeGroupIndexes(): void {
   const items =
     getDatabase().getCache<CatalogItem[]>('catalog:v2:anime', { allowExpired: true }) || []
-  const { siblings, positions } = animeGroupIndexesOf(items)
+  const { siblings, positions, laterSeasons } = animeGroupIndexesOf(items)
   animeGroupIndex = siblings
   animeGroupPositionIndex = positions
+  animeLaterSeasonIndex = laterSeasons
 }
 
 export function groupedIdsFor(catalogId: string): string[] | undefined {
@@ -709,17 +722,21 @@ export function laterSeasonOf(catalogId: string): { id: string; season: number }
 }
 
 /**
- * laterSeasonOf for a list of ids, or nothing while the catalog is not
- * grouped. The grouping marker is a database read, and asked once here
- * rather than once per id: My Stuff asks about every watched title at once.
+ * laterSeasonOf for the whole catalog at once: every later season of a
+ * merged franchise, by the season's own id — or nothing while the catalog is
+ * not grouped.
+ *
+ * For the callers that cannot ask one id at a time. The library's
+ * watch-state filters run inside the index query, which needs the whole
+ * mapping to count a later season's viewings where they are kept
+ * (database.ts's indexQuery); the recommendation row asks about every
+ * candidate (recommendations.ts). The grouping marker is a database read,
+ * asked once here rather than once per id.
  */
-export function laterSeasonLookup():
-  ((catalogId: string) => { id: string; season: number } | null) | undefined {
+export function laterSeasons(): ReadonlyMap<string, { id: string; season: number }> | undefined {
   if (!animeGroupingReady()) return undefined
-  return (catalogId) => {
-    const id = String(catalogId)
-    return id.startsWith('kitsu:') ? animeSeasonOf(id, resolveAnimeGroupTarget) : null
-  }
+  if (!animeLaterSeasonIndex) buildAnimeGroupIndexes()
+  return animeLaterSeasonIndex!
 }
 
 /**

@@ -269,8 +269,15 @@ function splitGenres(value: SQLOutputValue | undefined): string[] {
  */
 function indexWhere(
   query: CatalogQuery,
-  profileId: string
-): { sql: string; values: Record<string, SQLInputValue>; usesProfile: boolean } {
+  profileId: string,
+  laterSeasons?: LaterSeasons
+): {
+  /** The tables the clauses read from, to go before SELECT — or ''. */
+  with: string
+  sql: string
+  values: Record<string, SQLInputValue>
+  usesProfile: boolean
+} {
   const clauses: string[] = ['kind = @kind']
   // Named rather than positional, because the watch-state clauses below
   // reference @profile from inside subqueries and the same value is needed
@@ -340,8 +347,21 @@ function indexWhere(
   // The watch-state exclusions run HERE, in the same query, not over the
   // returned page — see CatalogQuery's own note on why filtering afterwards
   // makes both the page size and `total` wrong once anything is paged.
+  //
+  // A later season of a merged anime is read where its viewings are kept —
+  // see LATER_SEASONS_WITH. Only when one of the two filters that need it
+  // is on: every other query is the statement it always was.
+  const bySeason =
+    query.kind === 'anime' &&
+    Boolean(laterSeasons?.size) &&
+    Boolean(query.hideWatched || query.hideCompleted)
+  if (bySeason) {
+    values.laterSeasons = JSON.stringify(
+      Object.fromEntries([...laterSeasons!].map(([id, show]) => [id, [show.id, show.season]]))
+    )
+  }
   if (query.hideWatched) {
-    clauses.push(`NOT ${WATCHED_SQL}`)
+    clauses.push(`NOT ${bySeason ? SEASON_WATCHED_SQL : WATCHED_SQL}`)
     usesProfile = true
   }
   if (query.hideDisliked) {
@@ -349,12 +369,17 @@ function indexWhere(
     usesProfile = true
   }
   if (query.hideCompleted) {
-    clauses.push(`NOT ${COMPLETED_SQL}`)
+    clauses.push(`NOT ${bySeason ? SEASON_COMPLETED_SQL : COMPLETED_SQL}`)
     usesProfile = true
   }
   if (usesProfile) values.profile = profileId
 
-  return { sql: clauses.join(' AND '), values, usesProfile }
+  return {
+    with: bySeason ? LATER_SEASONS_WITH : '',
+    sql: clauses.join(' AND '),
+    values,
+    usesProfile
+  }
 }
 
 /**
@@ -402,15 +427,79 @@ const COMPLETED_SQL =
 /**
  * Which anime rows are a later season of a merged show, and where: the show
  * its viewings are kept under and the season there (animeSeasons.ts's
- * laterSeasonLookup — the grouping is not something this file knows).
+ * laterSeasons — the grouping is not something this file knows).
  *
- * COMPLETED_SQL counts the rows under a row's own id, and such a row has
- * none, so asked that way it is never complete. indexByIds and indexQuery
- * take this to count its `completedIds` membership where the rows are. The
- * hideWatched/hideCompleted FILTERS are not corrected by it: they run inside
- * the query, still on the row's own id.
+ * WATCHED_SQL and COMPLETED_SQL read the rows under a row's own id, and such
+ * a row has none, so asked that way it is never watched and never complete.
+ * indexByIds and indexQuery take this to count its `completedIds` membership
+ * where the rows are (rowCompleted), and indexQuery's hideWatched and
+ * hideCompleted filters read the same place (LATER_SEASONS_WITH below).
+ *
+ * The whole mapping rather than a lookup, because the filters run inside the
+ * query and SQL cannot call back to ask about one id.
  */
-export type LaterSeasonLookup = (id: string) => { id: string; season: number } | null
+export type LaterSeasons = ReadonlyMap<string, { id: string; season: number }>
+
+/**
+ * The two watch-state filters, for an anime query that was handed the
+ * grouping: a later season of a merged show is read from its show's rows at
+ * that season, and every other row exactly as WATCHED_SQL and COMPLETED_SQL
+ * read it.
+ *
+ * These have to agree with what the card itself shows, or Hide watched
+ * leaves a tile on the grid that is badged as watched:
+ *
+ *  - watched: a viewing of that season under the show, or a row under the
+ *    tile's own id — the renderer's rule (catalogItemToMediaItem).
+ *  - completed: the distinct episodes watched of that season against the
+ *    row's own aired count, and nothing else — rowCompleted's rule, the same
+ *    count from the same rows.
+ *
+ * The mapping arrives as one JSON parameter, `{seasonId: [showId, season]}`,
+ * and three things about the shape are deliberate. None of these tables has
+ * an index, so what SQLite does with one is the planner's guess:
+ *
+ *  - The catalog rows test membership with IN, never a join. An IN list is
+ *    always built once into an index of its own; a join against the mapping
+ *    was planned as a scan of it per catalog row on one of the two
+ *    statements.
+ *  - Each show's history is aggregated once (show_season), found through the
+ *    history's own index, and not once per later season: a long runner has a
+ *    dozen films folded in as seasons, and its thousand rows would be walked
+ *    for every one of them. Written as a join of the mapping to the history
+ *    instead, each statement took 165 ms.
+ *  - What is left unindexed is small on both sides: the later seasons
+ *    against the seasons somebody has started.
+ *
+ * Measured on a real library (5,965 anime rows, 698 of them later seasons,
+ * 8,793 history rows), the count and page statements together, median of
+ * 200: Hide watched 15 ms by the row's own id and 20.5 ms this way; both
+ * filters 18 ms and 25.5 ms; both with a genre 33 ms and 43 ms. About 2 ms
+ * of the difference is building these tables, paid by each statement, and
+ * the rest is the count testing every row against them. A query with
+ * neither filter on carries none of it (1.5 ms either way).
+ */
+const LATER_SEASONS_WITH =
+  'WITH later_season(season_id, show_id, season) AS MATERIALIZED (' +
+  " SELECT j.key, json_extract(j.value, '$[0]'), json_extract(j.value, '$[1]')" +
+  ' FROM json_each(@laterSeasons) j),' +
+  ' show_season(show_id, season, episodes) AS MATERIALIZED (' +
+  ' SELECT wh.content_id, wh.season, COUNT(DISTINCT wh.episode) FROM watch_history wh' +
+  ' WHERE wh.profile_id = @profile AND wh.season >= 2 AND wh.episode IS NOT NULL' +
+  ' AND wh.content_id IN (SELECT show_id FROM later_season)' +
+  ' GROUP BY wh.content_id, wh.season),' +
+  // Only the later seasons with a viewing: an inner join.
+  ' started_season(season_id, episodes) AS MATERIALIZED (' +
+  ' SELECT ls.season_id, ss.episodes FROM later_season ls' +
+  ' JOIN show_season ss ON ss.show_id = ls.show_id AND ss.season = ls.season) '
+const SEASON_WATCHED_SQL = `(catalog_index.id IN (SELECT season_id FROM started_season) OR ${WATCHED_SQL})`
+// COALESCE, because a later season nobody has started has no row to read a
+// count from, and a NULL here would make `NOT (...)` NULL and drop the row.
+const SEASON_COMPLETED_SQL =
+  `(CASE WHEN catalog_index.id NOT IN (SELECT season_id FROM later_season) THEN ${COMPLETED_SQL}` +
+  ` WHEN catalog_index.aired_episodes IS NULL OR catalog_index.aired_episodes <= 0 THEN 0` +
+  ` ELSE COALESCE((SELECT s.episodes FROM started_season s WHERE s.season_id = catalog_index.id), 0)` +
+  ` >= catalog_index.aired_episodes END)`
 
 /**
  * The ORDER BY for one sort key.
@@ -829,8 +918,9 @@ export interface MediaHubDatabase {
   indexList(kind: MediaKind, limit: number, offset?: number): CatalogItem[]
   /** One filtered, sorted, paged slice of the library, plus how many titles
    *  match the filters in total. See indexWhere/indexOrderBy for how each
-   *  clause maps onto the in-memory filter it reproduces. */
-  indexQuery(query: CatalogQuery, seasonOf?: LaterSeasonLookup): CatalogQueryResult
+   *  clause maps onto the in-memory filter it reproduces. `laterSeasons`
+   *  is for an anime query: see LaterSeasons. */
+  indexQuery(query: CatalogQuery, laterSeasons?: LaterSeasons): CatalogQueryResult
   /** Titles of one kind whose name contains every word of `query`, best
    *  match first — the local half of catalog:search. This is what makes a
    *  title the crawl has already seen findable with no request at all,
@@ -849,7 +939,7 @@ export interface MediaHubDatabase {
    *  candidate pool becomes and however deep the index grows. */
   indexByIds(
     ids: readonly string[],
-    seasonOf?: LaterSeasonLookup
+    laterSeasons?: LaterSeasons
   ): { items: CatalogItem[]; completedIds: string[] }
   /** Which of these ids the index already holds for one kind — the
    *  deep-scan skip set. A cheap id-only projection rather than
@@ -1501,9 +1591,9 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
    *  `aired_episodes`) is complete — the SQL's own answer, except for a
    *  later season of a merged anime, which is counted where its viewings
    *  are: the same comparison against the same aired count, over that one
-   *  season of its show. See LaterSeasonLookup. */
-  function rowCompleted(row: Row, seasonOf: LaterSeasonLookup | undefined): boolean {
-    const part = seasonOf && row.kind === 'anime' ? seasonOf(String(row.id)) : null
+   *  season of its show. See LaterSeasons. */
+  function rowCompleted(row: Row, laterSeasons: LaterSeasons | undefined): boolean {
+    const part = row.kind === 'anime' ? laterSeasons?.get(String(row.id)) : undefined
     if (!part) return Number(row.completed) === 1
     const aired = Number(row.aired_episodes)
     if (!Number.isFinite(aired) || aired <= 0) return false
@@ -2642,7 +2732,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       }
     },
 
-    indexByIds(ids, seasonOf) {
+    indexByIds(ids, laterSeasons) {
       // Chunked: SQLite's bound-parameter ceiling is generous but a
       // watched-history id list is unbounded in principle, and 400 per
       // statement keeps every statement comfortably small.
@@ -2678,7 +2768,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
             .all(params) as Row[]
           for (const row of rows) {
             out.push(indexRowToItem(row, String(row.kind) as MediaKind, splitGenres(row.genres)))
-            if (rowCompleted(row, seasonOf)) completedIds.push(String(row.id))
+            if (rowCompleted(row, laterSeasons)) completedIds.push(String(row.id))
           }
         }
         return { items: out, completedIds }
@@ -2748,25 +2838,27 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       return found
     },
 
-    indexQuery(query, seasonOf) {
+    indexQuery(query, laterSeasons) {
       // Built and prepared per call rather than kept in `q`, because the
       // shape genuinely varies: eight optional filters is 256 combinations,
       // and precompiling them all to avoid one prepare on a keystroke-driven
       // path would be the wrong trade.
       try {
-        const where = indexWhere(query, currentProfileId)
+        // One `where` for both statements, the tables it reads from
+        // included, so `total` counts exactly the rows the pages are cut from.
+        const where = indexWhere(query, currentProfileId, laterSeasons)
         const limit = Math.max(0, Math.min(query.limit ?? 60, 500))
         const offset = Math.max(0, query.offset ?? 0)
         const total = Number(
           (
             sql
-              .prepare(`SELECT COUNT(*) AS n FROM catalog_index WHERE ${where.sql}`)
+              .prepare(`${where.with}SELECT COUNT(*) AS n FROM catalog_index WHERE ${where.sql}`)
               .get(where.values) as Row | undefined
           )?.n ?? 0
         )
         const rows = sql
           .prepare(
-            `SELECT id,kind,title,year,rating,runtime_min,status,poster,background,logo,description,
+            `${where.with}SELECT id,kind,title,year,rating,runtime_min,status,poster,background,logo,description,
                     total_seasons,total_episodes,aired_episodes,simkl_id,grouped_ids,
                     (SELECT group_concat(genre, char(31)) FROM catalog_index_genre g
                       WHERE g.id = catalog_index.id AND g.kind = catalog_index.kind) AS genres,
@@ -2779,7 +2871,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           items: rows.map((row) => indexRowToItem(row, query.kind, splitGenres(row.genres))),
           total,
           completedIds: rows
-            .filter((row) => rowCompleted(row, seasonOf))
+            .filter((row) => rowCompleted(row, laterSeasons))
             .map((row) => String(row.id))
         }
       } catch (error) {

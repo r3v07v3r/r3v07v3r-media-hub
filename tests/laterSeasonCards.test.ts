@@ -8,8 +8,9 @@
 // started however much of it was watched.
 //
 // Pinned here: where a card's rows are found (watchedLaterSeasons), what the
-// card makes of them (adapters.ts, watchStatus.ts), and what the index says
-// about its completion (database.ts).
+// card makes of them (adapters.ts, watchStatus.ts), what the index says
+// about its completion, and what the library's Hide watched and Hide
+// completed filters make of it (database.ts).
 //
 // Run with: npx tsx tests/laterSeasonCards.test.ts
 
@@ -18,8 +19,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+import { animeGroupIndexesOf } from '../src/main/media-hub/animeSeasons'
 import { createDatabase } from '../src/main/media-hub/database'
-import { animeSeasonOf, watchedLaterSeasons } from '../src/shared/media-hub/serviceIds'
+import { watchedLaterSeasons } from '../src/shared/media-hub/serviceIds'
 import type { CatalogItem, Episode, HistoryEntry } from '../src/shared/media-hub/types'
 import {
   catalogItemToMediaItem,
@@ -46,14 +48,17 @@ const SHOW = 'kitsu:100'
 const SECOND = 'kitsu:200'
 const THIRD = 'kitsu:300'
 const ALONE = 'kitsu:900'
+// A second merged show, which nobody has watched any of.
+const OTHER = 'kitsu:500'
+const OTHER_SECOND = 'kitsu:600'
 const siblingsOf = (id: string): string[] | undefined => (id === SHOW ? [SECOND, THIRD] : undefined)
-const targetOf = (id: string): { id: string; season: number } =>
-  id === SECOND
-    ? { id: SHOW, season: 2 }
-    : id === THIRD
-      ? { id: SHOW, season: 3 }
-      : { id, season: 1 }
-const seasonOf = (id: string): { id: string; season: number } | null => animeSeasonOf(id, targetOf)
+// What the index is handed: every later season, by its own id, from the
+// construction the app itself runs on.
+const { laterSeasons } = animeGroupIndexesOf([
+  { id: SHOW, groupedIds: [SECOND, THIRD] },
+  { id: OTHER, groupedIds: [OTHER_SECOND] },
+  { id: ALONE }
+])
 
 const PAST = '2000-01-01T00:00:00.000Z'
 const FUTURE = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString()
@@ -283,18 +288,18 @@ check('the index counts a later season where its viewings are kept', () => {
     'asked by its own id, no season has a row to count'
   )
   assert.deepEqual(
-    db.indexByIds(ids, seasonOf).completedIds,
+    db.indexByIds(ids, laterSeasons).completedIds,
     [SECOND],
     'the second season is complete; the third is one of two; the show is not'
   )
   assert.deepEqual(
-    db.indexQuery({ kind: 'anime' }, seasonOf).completedIds,
+    db.indexQuery({ kind: 'anime' }, laterSeasons).completedIds,
     [SECOND],
     'the paged grid lists the same rows and says the same'
   )
 
   db.markWatched(show, { season: 3, episode: 2 })
-  assert.deepEqual(db.indexByIds(ids, seasonOf).completedIds.sort(), [SECOND, THIRD])
+  assert.deepEqual(db.indexByIds(ids, laterSeasons).completedIds.sort(), [SECOND, THIRD])
   db.close()
 })
 
@@ -303,9 +308,204 @@ check('a row that is not a later season is still answered by the query itself', 
   db.indexUpsert('anime', [anime(ALONE, { videos: episodes(ALONE, 1, 2) })])
   const alone = { id: ALONE, type: 'anime' as const, title: ALONE }
   db.markWatched(alone, { season: 1, episode: 1 })
-  assert.deepEqual(db.indexByIds([ALONE], seasonOf).completedIds, [])
+  assert.deepEqual(db.indexByIds([ALONE], laterSeasons).completedIds, [])
   db.markWatched(alone, { season: 1, episode: 2 })
-  assert.deepEqual(db.indexByIds([ALONE], seasonOf).completedIds, [ALONE])
+  assert.deepEqual(db.indexByIds([ALONE], laterSeasons).completedIds, [ALONE])
+  db.close()
+})
+
+// ---------------------------------------------------------------------
+// 4. What Hide watched and Hide completed make of it.
+// ---------------------------------------------------------------------
+//
+// The two filters run inside the index query (CatalogQuery says why), so
+// they have to find a later season's viewings there too. Read by the row's
+// own id, a season watched to the end stayed on the grid with its watched
+// badge on it, and was counted in the total.
+
+type Db = ReturnType<typeof createDatabase>
+const EVERY_ROW = [SHOW, SECOND, THIRD, OTHER, OTHER_SECOND, ALONE]
+
+/**
+ * The library the checks below browse: a row for every season of both
+ * merged shows, and the title that stands alone. Of the first show the
+ * second season is watched to the end (three of three) and the third is
+ * started (one of two); nothing else has been touched.
+ */
+function library(): Db {
+  const db = tempDb()
+  db.indexUpsert('anime', [
+    anime(SHOW, {
+      videos: episodes(SHOW, 1, 2),
+      groupedIds: [SECOND, THIRD],
+      episodeCounts: { totalSeasons: 3, totalEpisodes: 7 }
+    }),
+    anime(SECOND, { videos: episodes(SECOND, 1, 3) }),
+    anime(THIRD, { videos: episodes(THIRD, 1, 2) }),
+    anime(OTHER, {
+      videos: episodes(OTHER, 1, 2),
+      groupedIds: [OTHER_SECOND],
+      episodeCounts: { totalSeasons: 2, totalEpisodes: 4 }
+    }),
+    anime(OTHER_SECOND, { videos: episodes(OTHER_SECOND, 1, 2) }),
+    anime(ALONE, { videos: episodes(ALONE, 1, 2) })
+  ])
+  const show = { id: SHOW, type: 'anime' as const, title: SHOW }
+  for (const episode of [1, 2, 3]) db.markWatched(show, { season: 2, episode })
+  db.markWatched(show, { season: 3, episode: 1 })
+  return db
+}
+
+/** The ids one query leaves on the grid, sorted, with the total it reports.
+ *  `grouping` is null for a catalog that has not been grouped. */
+function browse(
+  db: Db,
+  query: Omit<Parameters<Db['indexQuery']>[0], 'kind'>,
+  grouping: typeof laterSeasons | null = laterSeasons
+): { ids: string[]; total: number } {
+  const result = db.indexQuery({ kind: 'anime', ...query }, grouping ?? undefined)
+  return { ids: result.items.map((item) => item.id).sort(), total: result.total }
+}
+
+check(
+  'Hide watched read by the row’s own id leaves a watched later season on the grid — the bug',
+  () => {
+    const db = library()
+    // What the query did before, and what it still does while the catalog is
+    // not grouped: only the show has rows under its own id.
+    assert.deepEqual(browse(db, { hideWatched: true }, null), {
+      ids: [SECOND, THIRD, OTHER, OTHER_SECOND, ALONE].sort(),
+      total: 5
+    })
+    db.close()
+  }
+)
+
+check('Hide watched takes out a later season that has viewings under its show', () => {
+  const db = library()
+  assert.deepEqual(browse(db, { hideWatched: true }), {
+    ids: [OTHER, OTHER_SECOND, ALONE].sort(),
+    total: 3
+  })
+  db.close()
+})
+
+check('Hide completed takes out the finished season, and not the one in progress', () => {
+  const db = library()
+  assert.deepEqual(browse(db, { hideCompleted: true }), {
+    ids: [SHOW, THIRD, OTHER, OTHER_SECOND, ALONE].sort(),
+    total: 5
+  })
+  // The third season's last episode: now it goes too. The show's own row
+  // counts the whole show — five of seven — and stays.
+  db.markWatched({ id: SHOW, type: 'anime', title: SHOW }, { season: 3, episode: 2 })
+  assert.deepEqual(browse(db, { hideCompleted: true }), {
+    ids: [SHOW, OTHER, OTHER_SECOND, ALONE].sort(),
+    total: 4
+  })
+  db.close()
+})
+
+check('what Hide completed removes is exactly what the grid badges as completed', () => {
+  const db = library()
+  db.markWatched({ id: SHOW, type: 'anime', title: SHOW }, { season: 3, episode: 2 })
+  const badged = db.indexQuery({ kind: 'anime' }, laterSeasons).completedIds.sort()
+  const left = new Set(browse(db, { hideCompleted: true }).ids)
+  assert.deepEqual(
+    EVERY_ROW.filter((id) => !left.has(id)).sort(),
+    badged,
+    'the filter and the badge read the same rows'
+  )
+  assert.deepEqual(badged, [SECOND, THIRD])
+  db.close()
+})
+
+check('the total is the number of rows the pages add up to', () => {
+  const db = library()
+  for (const filters of [{ hideWatched: true }, { hideCompleted: true }]) {
+    const whole = browse(db, filters)
+    const paged: string[] = []
+    for (let offset = 0; offset < whole.total; offset++) {
+      const page = browse(db, { ...filters, limit: 1, offset })
+      assert.equal(page.total, whole.total, 'every page reports the same total')
+      paged.push(...page.ids)
+    }
+    assert.deepEqual(paged.sort(), whole.ids, 'no row twice, none missing')
+    assert.deepEqual(browse(db, { ...filters, limit: 1, offset: whole.total }).ids, [])
+  }
+  db.close()
+})
+
+check('both filters, with another filter and under every sort', () => {
+  const db = library()
+  const sorts = [
+    'trending',
+    'title-asc',
+    'year-desc',
+    'rating-desc',
+    'runtime-asc',
+    'runtime-desc'
+  ] as const
+  for (const sort of sorts) {
+    // A failed statement answers with an empty page (indexQuery logs and
+    // returns), so the expected rows are also what says the SQL ran.
+    assert.deepEqual(
+      browse(db, { hideWatched: true, hideCompleted: true, minRating: 0, sort }),
+      { ids: [OTHER, OTHER_SECOND, ALONE].sort(), total: 3 },
+      sort
+    )
+  }
+  db.close()
+})
+
+check('a season with no known aired count is watched, and never completed', () => {
+  const db = library()
+  // No episodes on the row: the index has no aired count to compare with.
+  db.indexUpsert('anime', [anime(OTHER_SECOND)])
+  db.markWatched({ id: OTHER, type: 'anime', title: OTHER }, { season: 2, episode: 1 })
+  assert.ok(!browse(db, { hideWatched: true }).ids.includes(OTHER_SECOND))
+  assert.ok(browse(db, { hideCompleted: true }).ids.includes(OTHER_SECOND))
+  db.close()
+})
+
+check('rows left under a later season’s own id still make it watched, not completed', () => {
+  // A viewing written while the catalog was not grouped stays under the
+  // season's own id. The card reads it as watched (its id is in the watched
+  // set), and its completion is counted under the show alone (rowCompleted).
+  const db = library()
+  const season = { id: OTHER_SECOND, type: 'anime' as const, title: OTHER_SECOND }
+  for (const episode of [1, 2]) db.markWatched(season, { season: 1, episode })
+  assert.ok(!browse(db, { hideWatched: true }).ids.includes(OTHER_SECOND))
+  assert.ok(browse(db, { hideCompleted: true }).ids.includes(OTHER_SECOND))
+  assert.ok(!db.indexQuery({ kind: 'anime' }, laterSeasons).completedIds.includes(OTHER_SECOND))
+  db.close()
+})
+
+check('another profile’s viewings hide nothing', () => {
+  const db = library()
+  db.setActiveProfile('somebody-else')
+  assert.deepEqual(browse(db, { hideWatched: true, hideCompleted: true }), {
+    ids: [...EVERY_ROW].sort(),
+    total: 6
+  })
+  db.close()
+})
+
+check('a catalog with no merged show, and a query for another kind, are read as before', () => {
+  const db = library()
+  assert.deepEqual(
+    browse(db, { hideWatched: true }, new Map()),
+    browse(db, { hideWatched: true }, null)
+  )
+  // The grouping is about anime rows; a series row with a later season's
+  // id in it is not one of them.
+  db.indexUpsert('series', [{ ...anime(SECOND), type: 'series' }])
+  const series = db.indexQuery({ kind: 'series', hideWatched: true }, laterSeasons)
+  assert.deepEqual(
+    series.items.map((item) => item.id),
+    [SECOND]
+  )
+  assert.equal(series.total, 1)
   db.close()
 })
 
