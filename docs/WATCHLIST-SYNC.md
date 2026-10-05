@@ -516,6 +516,11 @@ What moves depends on how the show's page numbers its seasons:
   gained or lost its mapping between two runs, or one whose lookup has
   never answered. A wrong move puts rows on another season's, where the
   ones already there win and the arrivals are dropped.
+- **A title that stood alone and joins a show as a later season** is moved
+  under the show only where its place is its season on the page ("When a
+  member's place is not its season", above). On a show numbered by TMDB
+  that is often not so, a film or an OVA taking a place among the seasons;
+  such a title still opens and saves as itself, and keeps its rows.
 
 The plan is not moved. A planned title keeps its own id whatever the
 grouping does, for the reason given above.
