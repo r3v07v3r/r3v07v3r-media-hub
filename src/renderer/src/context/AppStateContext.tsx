@@ -1294,8 +1294,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     [watchedIdsResult, homeFeed, pushNotification]
   )
 
-  // The shows section is read again whenever the panel opens: the catch-up
-  // on focus and the half-hourly pass add rows after the launch check.
+  // Rows a pass adds after the launch check (the catch-up on focus, the
+  // half-hourly job, or the launch check's own comparison, which it does
+  // not wait for) are pushed from main, so the top bar's button counts
+  // them even when launch found nothing.
+  useEffect(() => {
+    const api = window.api?.mediaHub?.tracking
+    if (!api?.onEpisodeReview) return
+    return api.onEpisodeReview((event) => setSyncShows(event.shows))
+  }, [])
+
+  // And read again whenever the panel opens.
   useEffect(() => {
     if (!syncReviewOpen) return
     const api = window.api?.mediaHub?.tracking
@@ -1320,15 +1329,18 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // recorded in main before the call returns; one that could not be is
       // put back below and said out loud.
       setSyncShows((prev) => prev.filter((r) => r.id !== row.id))
+      const putBack = (error?: string): void => {
+        setSyncShows((prev) => (prev.some((r) => r.id === row.id) ? prev : [...prev, row]))
+        pushNotification({
+          tone: 'error',
+          message: `Could not keep your choice for "${row.title}". ${error ?? 'Nothing was changed.'}`
+        })
+      }
       api
         .episodeDecide({ id: row.id, action, ...(service ? { service } : {}) })
         .then((result) => {
           if (!result.ok) {
-            setSyncShows((prev) => (prev.some((r) => r.id === row.id) ? prev : [...prev, row]))
-            pushNotification({
-              tone: 'error',
-              message: `Could not keep your choice for "${row.title}". ${result.error ?? 'Nothing was changed.'}`
-            })
+            putBack(result.error)
             return
           }
           for (const { service: blocked, seasons } of result.cannotSend) {
@@ -1348,7 +1360,21 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             homeFeed.refresh()
           }
         })
-        .catch(() => {})
+        // A call that failed outright (a database error part way) is said,
+        // and the section is read again for where it now stands; the row
+        // comes back if even that cannot be read.
+        .catch(() => {
+          pushNotification({
+            tone: 'error',
+            message: `Something went wrong with your choice for "${row.title}".`
+          })
+          api
+            .episodeReview()
+            .then((next) => setSyncShows(next.shows))
+            .catch(() =>
+              setSyncShows((prev) => (prev.some((r) => r.id === row.id) ? prev : [...prev, row]))
+            )
+        })
     },
     [watchedIdsResult, homeFeed, pushNotification]
   )

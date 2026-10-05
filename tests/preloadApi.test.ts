@@ -171,6 +171,15 @@ check('a subscription listens on its channel and its unsubscribe stops it', () =
   })
 })
 
+check('the shows section of the review panel is pushed on its own channel', () => {
+  const { transport, calls } = recordingTransport()
+  const stop = createApi(transport).mediaHub.tracking.onEpisodeReview(() => {})
+  assert.deepEqual(calls, [
+    { kind: 'on', channel: MEDIA_HUB_CHANNELS.trackingEpisodeReviewChanged, args: [] }
+  ])
+  stop()
+})
+
 check('a pushed payload reaches the subscriber as-is', () => {
   const listeners = new Map<string, (payload: unknown) => void>()
   const api = createApi({

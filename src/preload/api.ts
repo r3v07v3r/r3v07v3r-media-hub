@@ -660,6 +660,13 @@ export function createApi(transport: ApiTransport) {
          *  few seconds after the last choice. */
         episodeDecide: (payload: ShowSyncDecision): Promise<ShowSyncDecisionResult> =>
           transport.invoke(MEDIA_HUB_CHANNELS.trackingEpisodeDecide, payload),
+        /** Fires when a pass after launch (a focus catch-up, the half-hourly
+         *  job) changed the shows section, with the section as it now is. */
+        onEpisodeReview: (onEvent: (event: { shows: ShowSyncRow[] }) => void): (() => void) =>
+          subscribe<{ shows: ShowSyncRow[] }>(
+            MEDIA_HUB_CHANNELS.trackingEpisodeReviewChanged,
+            onEvent
+          ),
         /** Fires when a batch of "keep local" decisions has been pushed out
          *  to the tracking services — or has failed to be. The resolve call
          *  itself only queues the decision (see tracking.ts), so this is

@@ -1962,6 +1962,7 @@ function compareEpisodesAfterPull(): Promise<void> {
           `compared=${report.compared.join(',')} added=${report.added} sent=${report.sent}`
         )
       }
+      if (report.compared.length) announceShowSyncRows()
     })
     .catch((error) => logError('episode-sync', error))
     .finally(() => {
@@ -1982,7 +1983,7 @@ export function noteEpisodeArrivals(service: EpisodeService, rows: readonly Impo
     const profile = db.activeProfile()
     const record = readShowSync(db, profile)
     const next = noteArrivals(record, service, episodeMarks()[service], rows, Date.now())
-    if (next !== record) writeShowSync(db, profile, next)
+    if (next !== record && writeShowSync(db, profile, next)) announceShowSyncRows()
   } catch (error) {
     logError('episode-sync:arrivals', error)
   }
@@ -2024,6 +2025,19 @@ function showSyncRows(): ShowSyncRow[] {
       services
     }
   })
+}
+
+/** Tells the review panel the shows section changed: a pass after launch
+ *  (a focus catch-up, the half-hourly job) adds rows the launch check did
+ *  not have, and the top bar's button counts them. Only where there is a
+ *  panel (reviewAsked); never throws. */
+function announceShowSyncRows(): void {
+  if (!reviewAsked) return
+  try {
+    sendToRenderer(MEDIA_HUB_CHANNELS.trackingEpisodeReviewChanged, { shows: showSyncRows() })
+  } catch (error) {
+    logError('episode-sync:announce', error)
+  }
 }
 
 let episodeFlushTimer: NodeJS.Timeout | null = null
@@ -2729,10 +2743,13 @@ export function registerTrackingIpc(): void {
     // front of this backend has a review panel at all — see reviewAsked.
     reviewAsked = true
     const films = await checkFilms()
-    // The shows section: the comparison after the catch-up the films check
-    // has just run (or the launch's own, without Simkl), then every row not
-    // reviewed yet.
-    await compareEpisodesAfterPull()
+    // The shows section as it stands, and the comparison after the
+    // catch-up the films check has just run (or the launch's own, without
+    // Simkl) behind it. Not awaited: a first comparison can read two whole
+    // Simkl lists and look up anime ids for minutes, and the films must not
+    // wait for it. What it adds reaches the panel on
+    // trackingEpisodeReviewChanged.
+    void compareEpisodesAfterPull()
     return { ...films, shows: showSyncRows() }
   })
 
