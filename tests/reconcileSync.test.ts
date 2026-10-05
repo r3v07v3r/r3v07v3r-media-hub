@@ -157,7 +157,8 @@ check('keeps each kind in its own bucket, with episode blocks intact', () => {
   assert.equal(payload.movies?.length, 1)
   assert.equal(payload.shows?.length, 1)
   assert.equal(payload.anime?.length, 1)
-  assert.equal(payload.anime?.[0].seasons[0].episodes[0].number, 3)
+  // An anime entry's episodes are flat — see tests/simklAnime.test.ts.
+  assert.deepEqual(payload.anime?.[0].episodes, [{ number: 3 }])
   assert.equal(payload.anime?.[0].ids.kitsu, 1)
 })
 

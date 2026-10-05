@@ -77,7 +77,11 @@ import {
   plannedList
 } from './core'
 import { catalogData, metadata } from './catalog'
-import { animeGroupingReady, resolveAnimeGroupTarget } from './animeSeasons'
+import {
+  animeGroupingReady,
+  animeSiblingsWhenGrouped,
+  resolveAnimeGroupTarget
+} from './animeSeasons'
 import { catchUpFromServices } from './simklCatchUp'
 import { getDatabase } from './dbState'
 import {
@@ -231,9 +235,9 @@ type TrackableItem = Partial<CatalogItem> & { id: string }
  * Trakt, and a progress recompute to MAL — on the title's own chain, after
  * whatever is already in flight for it. A film goes as its own reference;
  * a show always as explicit seasons and episodes (see titleHistoryPayload
- * in simkl.ts for what a bare show reference would do), and to MAL season
- * by season, since a grouped anime is an entry per season there (see
- * planMalPushes in mal.ts).
+ * in simkl.ts for what a bare show reference would do). A grouped anime is
+ * an entry per season at Simkl and at MAL alike, so it goes to both season
+ * by season (animeEntries in simkl.ts, planMalPushes in mal.ts).
  */
 function pushTitleHistory(
   item: SimklPushItem & { totalEpisodes?: number },
@@ -268,7 +272,7 @@ function pushTitleHistory(
   // The MAL count is read when the push runs; it has to be this profile's.
   const profile = getDatabase().activeProfile()
   queueRemotePushes(item, () => [
-    syncSimklHistory(path, titleHistoryPayload(item, seasons)),
+    syncSimklHistory(path, titleHistoryPayload(item, seasons, animeSiblingsWhenGrouped())),
     pushTraktTitleHistory(item, seasons, action),
     pushMalTitleProgress(item, {
       status: malStatus,
@@ -1531,7 +1535,10 @@ export function registerTrackingIpc(): void {
       // Ordered per title, not merely detached — see queueRemotePushes.
       const profile = getDatabase().activeProfile()
       queueRemotePushes(item, () => [
-        syncSimklHistory('/sync/history', historyPayload(item, playback || {})),
+        syncSimklHistory(
+          '/sync/history',
+          historyPayload(item, playback || {}, animeSiblingsWhenGrouped())
+        ),
         pushTraktHistory(item, playback || {}, 'add'),
         pushMalProgress(item, { season: playback?.season ?? undefined, profile })
       ])
@@ -1553,7 +1560,10 @@ export function registerTrackingIpc(): void {
       // services second.
       const profile = getDatabase().activeProfile()
       queueRemotePushes(item, () => [
-        syncSimklHistory('/sync/history/remove', historyPayload(item, p)),
+        syncSimklHistory(
+          '/sync/history/remove',
+          historyPayload(item, p, animeSiblingsWhenGrouped())
+        ),
         pushTraktHistory(item, p, 'remove'),
         pushMalProgress(item, { season: p.season ?? undefined, profile })
       ])
@@ -1580,7 +1590,10 @@ export function registerTrackingIpc(): void {
       // account.
       const profile = db.activeProfile()
       queueRemotePushes(item, () => [
-        syncSimklHistory('/sync/history', seasonHistoryPayload(item, season, episodeNumbers)),
+        syncSimklHistory(
+          '/sync/history',
+          seasonHistoryPayload(item, season, episodeNumbers, animeSiblingsWhenGrouped())
+        ),
         pushTraktSeasonHistory(item, season, episodeNumbers),
         pushMalProgress(item, { season, profile })
       ])
@@ -2350,8 +2363,14 @@ export function registerTrackingIpc(): void {
       await titlePushQueue.run(titlePushKey(payload.item), async () => {
         const trakt = pushTraktScrobble(payload.item, payload.playback || {}, action, progress)
         // Null for a title Simkl has no id for — the same refusal to guess
-        // by title/year that syncSimklHistory makes above.
-        const scrobble = scrobblePayload(payload.item, payload.playback || {}, progress)
+        // by title/year that syncSimklHistory makes above — and for an anime
+        // episode with no entry of its own there (see scrobblePayload).
+        const scrobble = scrobblePayload(
+          payload.item,
+          payload.playback || {},
+          progress,
+          animeSiblingsWhenGrouped()
+        )
         if (simklConnected && scrobble) {
           try {
             await simklRequest(`/scrobble/${action}`, {

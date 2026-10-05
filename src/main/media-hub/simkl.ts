@@ -10,6 +10,8 @@ import type { CatalogItem, HistoryEntry, MediaKind } from '../../shared/media-hu
 import {
   hasExpressibleSimklId,
   idsForCatalogId,
+  toSimklAnimeEpisode,
+  type AnimeSiblings,
   type SimklMediaIds
 } from '../../shared/media-hub/serviceIds'
 
@@ -59,20 +61,30 @@ interface SimklShowRef extends SimklMediaRef {
   seasons: SimklSeasonEntry[]
 }
 
+/**
+ * One anime entry and the episodes of it being reported. Flat, and with no
+ * season: a Simkl anime entry is one season, numbered from 1, and Simkl's
+ * anime guide asks for exactly this under an anime id. See animeEntries.
+ */
+interface SimklAnimeRef extends SimklMediaRef {
+  episodes: SimklEpisodeRef[]
+}
+
 /** Body for POST /sync/history — exactly one of movies/shows/anime is set per call. */
 export interface SimklHistoryPayload {
   movies?: SimklMediaRef[]
   shows?: SimklShowRef[]
-  anime?: SimklShowRef[]
+  anime?: SimklAnimeRef[]
 }
 
-/** Body for POST /scrobble/{start,pause,stop}. */
+/** Body for POST /scrobble/{start,pause,stop}. An anime episode carries no
+ *  season, for the reason SimklAnimeRef gives. */
 interface SimklScrobblePayload {
   progress: number
   movie?: SimklMediaRef
   show?: SimklMediaRef
   anime?: SimklMediaRef
-  episode?: { season: number; number: number }
+  episode?: { season?: number; number: number }
 }
 
 /**
@@ -107,9 +119,75 @@ function numberOr(value: unknown, fallback: number): number {
 }
 
 /**
+ * The reference an anime entry goes out under.
+ *
+ * The title's own id keeps its name and year. A later season's entry is
+ * named by its id ALONE: the name and year in hand are the show's, which at
+ * Simkl are the first season's, and Simkl falls back to matching by title
+ * and year when it cannot place an id — the fallback would file a later
+ * season under the first, which is the mistake the id is there to prevent.
+ * Null when the entry's id is one Simkl cannot be told at all.
+ */
+function animeRef(item: SimklPushItem, entryId: string): SimklMediaRef | null {
+  if (entryId === String(item.id)) return mediaRef(item)
+  const ids = idsForCatalogId(entryId)
+  return Object.keys(ids).length ? { ids } : null
+}
+
+/**
+ * The anime half of every history body: the episodes given, as this app
+ * holds them, sorted into the Simkl entries they belong to.
+ *
+ * A merged franchise is one show here and an entry per season at Simkl, so
+ * a change that spans seasons becomes one entry per season it touched —
+ * the same split planMalPushes makes for MyAnimeList (mal.ts). Where each
+ * episode goes is toSimklAnimeEpisode's answer (serviceIds.ts), and an
+ * episode with no place at Simkl (a special, a season the group has no
+ * member for, a later season before the catalog is grouped) is left out.
+ *
+ * NEVER an entry without episodes. Sent to /sync/history/remove, an anime
+ * reference that names none removes that entry's whole history.
+ */
+function animeEntries(
+  item: SimklPushItem,
+  episodes: readonly { season?: number | null; episode?: number | null }[],
+  siblingsOf: AnimeSiblings | undefined
+): SimklAnimeRef[] {
+  const byEntry = new Map<string, Set<number>>()
+  for (const { season, episode } of episodes) {
+    const at = toSimklAnimeEpisode({ id: String(item.id), season, episode }, siblingsOf)
+    if (!at) continue
+    const numbers = byEntry.get(at.id) ?? new Set<number>()
+    numbers.add(at.episode)
+    byEntry.set(at.id, numbers)
+  }
+  const entries: SimklAnimeRef[] = []
+  for (const [entryId, numbers] of byEntry) {
+    const ref = animeRef(item, entryId)
+    if (!ref) continue
+    entries.push({
+      ...ref,
+      episodes: [...numbers].sort((a, b) => a - b).map((number) => ({ number }))
+    })
+  }
+  return entries
+}
+
+function animePayload(
+  item: SimklPushItem,
+  episodes: readonly { season?: number | null; episode?: number | null }[],
+  siblingsOf: AnimeSiblings | undefined
+): SimklHistoryPayload {
+  const entries = animeEntries(item, episodes, siblingsOf)
+  return entries.length ? { anime: entries } : {}
+}
+
+/**
  * Body for a single "mark as watched" call. Movies push a bare ref; shows
- * and anime nest a single episode under a season (defaulting to season 1
- * when playback doesn't specify one, e.g. a movie-shaped anime special).
+ * nest a single episode under a season (defaulting to season 1 when
+ * playback doesn't specify one). Anime names the episode in the Simkl entry
+ * it belongs to (see animeEntries), which `siblingsOf` is needed to find
+ * for anything past a first season.
  *
  * EMPTY for a title whose id resolves to no Simkl id at all. Simkl treats
  * an empty `ids` as "match this by title and year", so such a push lands
@@ -123,16 +201,18 @@ function numberOr(value: unknown, fallback: number): number {
  */
 export function historyPayload(
   item: SimklPushItem,
-  playback: PlaybackPosition = {}
+  playback: PlaybackPosition = {},
+  siblingsOf?: AnimeSiblings
 ): SimklHistoryPayload {
   if (!hasExpressibleSimklId(String(item?.id ?? ''))) return {}
+  if (item.type === 'anime') return animePayload(item, [playback], siblingsOf)
   const ref = mediaRef(item)
   if (item.type === 'movie') return { movies: [ref] }
   const entry: SimklShowRef = {
     ...ref,
     seasons: [{ number: numberOr(playback.season, 1), episodes: [episodeBlock(playback)] }]
   }
-  return item.type === 'anime' ? { anime: [entry] } : { shows: [entry] }
+  return { shows: [entry] }
 }
 
 /** One title in a batched history push — the same (item, playback) pair
@@ -146,16 +226,19 @@ interface SimklHistoryEntry {
  * Batched historyPayload: one request body covering many titles at once,
  * so resolving a whole out-of-sync review list is a single Simkl call
  * rather than one per row. Grouping is exactly historyPayload's (movies
- * carry a bare ref, shows/anime nest their season+episode block), just
- * accumulated per bucket — nothing about a title's own payload changes by
- * being sent alongside others.
+ * carry a bare ref, shows nest their season+episode block, anime its
+ * entry's episodes), just accumulated per bucket — nothing about a title's
+ * own payload changes by being sent alongside others.
  */
-export function batchHistoryPayload(entries: SimklHistoryEntry[]): SimklHistoryPayload {
+export function batchHistoryPayload(
+  entries: SimklHistoryEntry[],
+  siblingsOf?: AnimeSiblings
+): SimklHistoryPayload {
   const movies: SimklMediaRef[] = []
   const shows: SimklShowRef[] = []
-  const anime: SimklShowRef[] = []
+  const anime: SimklAnimeRef[] = []
   for (const { item, playback } of entries) {
-    const single = historyPayload(item, playback)
+    const single = historyPayload(item, playback, siblingsOf)
     if (single.movies) movies.push(...single.movies)
     if (single.shows) shows.push(...single.shows)
     if (single.anime) anime.push(...single.anime)
@@ -231,9 +314,17 @@ export function hasSimklContent(payload: SimklHistoryPayload): boolean {
 export function seasonHistoryPayload(
   item: SimklPushItem,
   season: number | undefined,
-  episodeNumbers: number[]
+  episodeNumbers: number[],
+  siblingsOf?: AnimeSiblings
 ): SimklHistoryPayload {
   if (!hasExpressibleSimklId(String(item?.id ?? ''))) return {}
+  if (item.type === 'anime') {
+    return animePayload(
+      item,
+      episodeNumbers.map((episode) => ({ season, episode })),
+      siblingsOf
+    )
+  }
   const ref = mediaRef(item)
   const entry: SimklShowRef = {
     ...ref,
@@ -241,7 +332,7 @@ export function seasonHistoryPayload(
       { number: numberOr(season, 1), episodes: episodeNumbers.map((number) => ({ number })) }
     ]
   }
-  return item.type === 'anime' ? { anime: [entry] } : { shows: [entry] }
+  return { shows: [entry] }
 }
 
 /**
@@ -253,13 +344,23 @@ export function seasonHistoryPayload(
  * ALWAYS names its seasons and episodes, and callers must pass the rows
  * they are actually about to change: a show reference with no seasons
  * sent to /sync/history/remove removes the show's ENTIRE history, which is
- * the one request a bulk unwatch must never make by accident.
+ * the one request a bulk unwatch must never make by accident. An anime's
+ * seasons go out as one entry each, every one naming its episodes (see
+ * animeEntries).
  */
 export function titleHistoryPayload(
   item: SimklPushItem,
-  seasons: readonly { season: number; episodes: readonly number[] }[]
+  seasons: readonly { season: number; episodes: readonly number[] }[],
+  siblingsOf?: AnimeSiblings
 ): SimklHistoryPayload {
   if (!hasExpressibleSimklId(String(item?.id ?? ''))) return {}
+  if (item.type === 'anime') {
+    return animePayload(
+      item,
+      seasons.flatMap(({ season, episodes }) => episodes.map((episode) => ({ season, episode }))),
+      siblingsOf
+    )
+  }
   const ref = mediaRef(item)
   if (item.type === 'movie') return { movies: [ref] }
   const named = seasons.filter((entry) => entry.episodes.length > 0)
@@ -271,26 +372,35 @@ export function titleHistoryPayload(
       episodes: season.episodes.map((number) => ({ number }))
     }))
   }
-  return item.type === 'anime' ? { anime: [entry] } : { shows: [entry] }
+  return { shows: [entry] }
 }
 
 /** Body for POST /scrobble/* — reports in-progress playback rather than a
  *  completed watch. Null on an id Simkl cannot be told, for the reason
- *  historyPayload gives. */
+ *  historyPayload gives — and for an anime episode with no place at Simkl
+ *  (see animeEntries), since a stop near the end is a watched write there. */
 export function scrobblePayload(
   item: SimklPushItem,
   playback: PlaybackPosition = {},
-  progress = 0
+  progress = 0,
+  siblingsOf?: AnimeSiblings
 ): SimklScrobblePayload | null {
   if (!hasExpressibleSimklId(String(item?.id ?? ''))) return null
+  if (item.type === 'anime') {
+    const at = toSimklAnimeEpisode(
+      { id: String(item.id), season: playback.season, episode: playback.episode ?? 1 },
+      siblingsOf
+    )
+    const anime = at && animeRef(item, at.id)
+    return at && anime ? { progress, anime, episode: { number: at.episode } } : null
+  }
   const ref = mediaRef(item)
   if (item.type === 'movie') return { progress, movie: ref }
-  const key = item.type === 'anime' ? 'anime' : 'show'
   return {
     progress,
-    [key]: ref,
+    show: ref,
     episode: { season: numberOr(playback.season, 1), number: numberOr(playback.episode, 1) }
-  } as SimklScrobblePayload
+  }
 }
 
 /** Minimal fields this port reads from a `/sync/all-items/movies/completed` response. */
