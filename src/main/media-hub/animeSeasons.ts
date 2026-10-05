@@ -827,6 +827,13 @@ function buildAnimeGroupIndexes(): void {
  * search and My Stuff cards are drawn from those rows, and a show's season
  * count is what its card says about it (the "N seasons" chip). `showOf` is
  * the grouping, handed in so this can be tested without a database.
+ *
+ * `showOf` answers null for a title the grouping knows fronts no show, and
+ * undefined when there is no grouping to ask. A row that fronts no show
+ * keeps its own episodes and is given one season: a former front (a film
+ * that sorted first, until films stopped being seasons) keeps the show's
+ * totals in its index row, written when its merged page was opened, until
+ * the next crawl rewrites it, and its card would say "N seasons" until then.
  */
 export function withShowTotals(
   items: readonly CatalogItem[],
@@ -834,12 +841,20 @@ export function withShowTotals(
     id: string
   ) =>
     | { groupedIds: string[]; episodeCounts?: { totalSeasons: number; totalEpisodes: number } }
+    | null
     | undefined
 ): CatalogItem[] {
   return items.map((item) => {
     if (item.type !== 'anime') return item
     const show = showOf(String(item.id))
-    if (!show?.groupedIds.length) return item
+    if (show === null || (show && !show.groupedIds.length)) {
+      if (!item.groupedIds?.length && (item.episodeCounts?.totalSeasons ?? 1) <= 1) return item
+      const rest = { ...item }
+      delete rest.groupedIds
+      if (rest.episodeCounts) rest.episodeCounts = { ...rest.episodeCounts, totalSeasons: 1 }
+      return rest
+    }
+    if (!show) return item
     return {
       ...item,
       groupedIds: show.groupedIds,
@@ -911,12 +926,16 @@ function blankAnime(id: string): CatalogItem {
   }
 }
 
-/** withShowTotals over the catalog's current grouping. */
+/** withShowTotals over the catalog's current grouping. A raw catalog, the
+ *  minutes before a new crawl is grouped, says nothing about who fronts
+ *  what (animeGroupingReady), so its answer is undefined, not null. */
 export function withCurrentShowTotals(items: readonly CatalogItem[]): CatalogItem[] {
   if (!animeGroupIndex) buildAnimeGroupIndexes()
+  const grouped = animeGroupingReady()
   return withShowTotals(items, (id) => {
     const groupedIds = animeGroupIndex!.get(id)
-    return groupedIds ? { groupedIds, episodeCounts: animeShowTotalsIndex?.get(id) } : undefined
+    if (groupedIds) return { groupedIds, episodeCounts: animeShowTotalsIndex?.get(id) }
+    return grouped ? null : undefined
   })
 }
 

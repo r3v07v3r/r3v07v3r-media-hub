@@ -611,6 +611,21 @@ check('a show’s index row is given the show’s siblings and totals', () => {
   assert.deepEqual(counted.episodeCounts, { totalSeasons: 2, totalEpisodes: 2 })
 })
 
+check('a former front that fronts no show now is one season again', () => {
+  // A film that sorted first fronted its show, and its index row still has
+  // the show's siblings and totals, written when the merged page was opened.
+  const stale = anime(ALONE, {
+    groupedIds: [SECOND],
+    episodeCounts: { totalSeasons: 3, totalEpisodes: 7 }
+  })
+  const [known] = withShowTotals([stale], () => null)
+  assert.equal(known.groupedIds, undefined)
+  assert.deepEqual(known.episodeCounts, { totalSeasons: 1, totalEpisodes: 7 })
+  assert.equal(toPosterItem(known).seasons, undefined, 'no "3 seasons" chip')
+  // With no grouping to ask (a raw catalog), the row is left as it is.
+  assert.equal(withShowTotals([stale], () => undefined)[0], stale)
+})
+
 check('a merged anime’s card says how many seasons, and no other card does', () => {
   assert.equal(mergedSeasonsLabel('anime', 3), '3 seasons')
   assert.equal(mergedSeasonsLabel('anime', 1), null)
