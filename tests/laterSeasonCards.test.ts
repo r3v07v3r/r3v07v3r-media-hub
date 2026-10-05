@@ -9,8 +9,9 @@
 //
 // Pinned here: where a card's rows are found (watchedLaterSeasons), what the
 // card makes of them (adapters.ts, watchStatus.ts), what the index says
-// about its completion, and what the library's Hide watched and Hide
-// completed filters make of it (database.ts).
+// about its completion, that the library grid and search leave it out
+// while a plan card can still name it (database.ts, animeSeasons.ts), and
+// that the show's own card says how many seasons it stands for.
 //
 // Run with: npx tsx tests/laterSeasonCards.test.ts
 
@@ -19,7 +20,14 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { animeGroupIndexesOf, laterSeasonsOf } from '../src/main/media-hub/animeSeasons'
+import {
+  animeGroupIndexesOf,
+  foldLaterSeasons,
+  laterSeasonsOf,
+  withShowTotals
+} from '../src/main/media-hub/animeSeasons'
+import { timelineExtrasToPosterItems, toPosterItem } from '../src/app-ui/lib/posterItem'
+import { mergedSeasonsLabel } from '../src/shared/media-hub/catalogFields'
 import { createDatabase } from '../src/main/media-hub/database'
 import { watchedLaterSeasons } from '../src/shared/media-hub/serviceIds'
 import type { CatalogItem, Episode, HistoryEntry } from '../src/shared/media-hub/types'
@@ -296,11 +304,13 @@ check('the index counts a later season where its viewings are kept', () => {
     [SECOND],
     'the second season is complete; the third is one of two; the show is not'
   )
+  // The grid lists the show alone (section 4), and the show is not complete.
+  const grid = db.indexQuery({ kind: 'anime' }, laterSeasons)
   assert.deepEqual(
-    db.indexQuery({ kind: 'anime' }, laterSeasons).completedIds,
-    [SECOND],
-    'the paged grid lists the same rows and says the same'
+    grid.items.map((item) => item.id),
+    [SHOW]
   )
+  assert.deepEqual(grid.completedIds, [])
 
   db.markWatched(show, { season: 3, episode: 2 })
   assert.deepEqual(db.indexByIds(ids, laterSeasons).completedIds.sort(), [SECOND, THIRD])
@@ -319,16 +329,20 @@ check('a row that is not a later season is still answered by the query itself', 
 })
 
 // ---------------------------------------------------------------------
-// 4. What Hide watched and Hide completed make of it.
+// 4. The library grid and search leave it out.
 // ---------------------------------------------------------------------
 //
-// The two filters run inside the index query (CatalogQuery says why), so
-// they have to find a later season's viewings there too. Read by the row's
-// own id, a season watched to the end stayed on the grid with its watched
-// badge on it, and was counted in the total.
+// A later season is a tab on its show's page, not a title of its own, and
+// the grid showed it as one: the index keeps a row for every season. The
+// grid's query and the index half of search leave out every id in the
+// laterSeasons map, in the WHERE the count and the pages are both cut from.
+// Only those ids: a member whose place cannot be shown to be its season
+// opens as itself, and its tile is how it is reached. A plan card under a
+// later season's id is read by id (indexByIds), which leaves nothing out.
 
 type Db = ReturnType<typeof createDatabase>
 const EVERY_ROW = [SHOW, SECOND, THIRD, OTHER, OTHER_SECOND, ALONE]
+const ON_THE_GRID = [SHOW, OTHER, ALONE]
 
 /**
  * The library the checks below browse: a row for every season of both
@@ -371,62 +385,36 @@ function browse(
   return { ids: result.items.map((item) => item.id).sort(), total: result.total }
 }
 
-check(
-  'Hide watched read by the row’s own id leaves a watched later season on the grid — the bug',
-  () => {
-    const db = library()
-    // What the query did before, and what it still does while the catalog is
-    // not grouped: only the show has rows under its own id.
-    assert.deepEqual(browse(db, { hideWatched: true }, null), {
-      ids: [SECOND, THIRD, OTHER, OTHER_SECOND, ALONE].sort(),
-      total: 5
-    })
-    db.close()
-  }
-)
-
-check('Hide watched takes out a later season that has viewings under its show', () => {
+check('the grid lists a row for every season while nothing says they are seasons', () => {
+  // What the query did before, and still does while the catalog is not
+  // grouped: every season of both shows as a tile of its own.
   const db = library()
-  assert.deepEqual(browse(db, { hideWatched: true }), {
-    ids: [OTHER, OTHER_SECOND, ALONE].sort(),
+  assert.deepEqual(browse(db, {}, null), { ids: [...EVERY_ROW].sort(), total: 6 })
+  db.close()
+})
+
+check('the grid leaves out every later season, and counts what it shows', () => {
+  const db = library()
+  assert.deepEqual(browse(db, {}), { ids: [...ON_THE_GRID].sort(), total: 3 })
+  db.close()
+})
+
+check('Hide watched and Hide completed read what is left by its own id', () => {
+  const db = library()
+  // The show has viewings under its own id; the other show and the title
+  // that stands alone have none.
+  assert.deepEqual(browse(db, { hideWatched: true }), { ids: [OTHER, ALONE].sort(), total: 2 })
+  // Four of the show's seven episodes: not complete, so it stays.
+  assert.deepEqual(browse(db, { hideCompleted: true }), {
+    ids: [...ON_THE_GRID].sort(),
     total: 3
   })
   db.close()
 })
 
-check('Hide completed takes out the finished season, and not the one in progress', () => {
-  const db = library()
-  assert.deepEqual(browse(db, { hideCompleted: true }), {
-    ids: [SHOW, THIRD, OTHER, OTHER_SECOND, ALONE].sort(),
-    total: 5
-  })
-  // The third season's last episode: now it goes too. The show's own row
-  // counts the whole show — five of seven — and stays.
-  db.markWatched({ id: SHOW, type: 'anime', title: SHOW }, { season: 3, episode: 2 })
-  assert.deepEqual(browse(db, { hideCompleted: true }), {
-    ids: [SHOW, OTHER, OTHER_SECOND, ALONE].sort(),
-    total: 4
-  })
-  db.close()
-})
-
-check('what Hide completed removes is exactly what the grid badges as completed', () => {
-  const db = library()
-  db.markWatched({ id: SHOW, type: 'anime', title: SHOW }, { season: 3, episode: 2 })
-  const badged = db.indexQuery({ kind: 'anime' }, laterSeasons).completedIds.sort()
-  const left = new Set(browse(db, { hideCompleted: true }).ids)
-  assert.deepEqual(
-    EVERY_ROW.filter((id) => !left.has(id)).sort(),
-    badged,
-    'the filter and the badge read the same rows'
-  )
-  assert.deepEqual(badged, [SECOND, THIRD])
-  db.close()
-})
-
 check('the total is the number of rows the pages add up to', () => {
   const db = library()
-  for (const filters of [{ hideWatched: true }, { hideCompleted: true }]) {
+  for (const filters of [{}, { hideWatched: true }, { hideCompleted: true }]) {
     const whole = browse(db, filters)
     const paged: string[] = []
     for (let offset = 0; offset < whole.total; offset++) {
@@ -440,7 +428,7 @@ check('the total is the number of rows the pages add up to', () => {
   db.close()
 })
 
-check('both filters, with another filter and under every sort', () => {
+check('with the filters, another filter and under every sort', () => {
   const db = library()
   const sorts = [
     'trending',
@@ -453,35 +441,26 @@ check('both filters, with another filter and under every sort', () => {
   for (const sort of sorts) {
     // A failed statement answers with an empty page (indexQuery logs and
     // returns), so the expected rows are also what says the SQL ran.
+    assert.deepEqual(browse(db, { minRating: 0, sort }), {
+      ids: [...ON_THE_GRID].sort(),
+      total: 3
+    })
     assert.deepEqual(
       browse(db, { hideWatched: true, hideCompleted: true, minRating: 0, sort }),
-      { ids: [OTHER, OTHER_SECOND, ALONE].sort(), total: 3 },
+      { ids: [OTHER, ALONE].sort(), total: 2 },
       sort
     )
   }
   db.close()
 })
 
-check('a season with no known aired count is watched, and never completed', () => {
+check('a plan card under a later season’s id is still answered by id', () => {
+  // catalog:byIds is not filtered: My Stuff and the Planned row show what
+  // a watchlist pull planned, under the id it planned it.
   const db = library()
-  // No episodes on the row: the index has no aired count to compare with.
-  db.indexUpsert('anime', [anime(OTHER_SECOND)])
-  db.markWatched({ id: OTHER, type: 'anime', title: OTHER }, { season: 2, episode: 1 })
-  assert.ok(!browse(db, { hideWatched: true }).ids.includes(OTHER_SECOND))
-  assert.ok(browse(db, { hideCompleted: true }).ids.includes(OTHER_SECOND))
-  db.close()
-})
-
-check('rows left under a later season’s own id still make it watched, not completed', () => {
-  // A viewing written while the catalog was not grouped stays under the
-  // season's own id. The card reads it as watched (its id is in the watched
-  // set), and its completion is counted under the show alone (rowCompleted).
-  const db = library()
-  const season = { id: OTHER_SECOND, type: 'anime' as const, title: OTHER_SECOND }
-  for (const episode of [1, 2]) db.markWatched(season, { season: 1, episode })
-  assert.ok(!browse(db, { hideWatched: true }).ids.includes(OTHER_SECOND))
-  assert.ok(browse(db, { hideCompleted: true }).ids.includes(OTHER_SECOND))
-  assert.ok(!db.indexQuery({ kind: 'anime' }, laterSeasons).completedIds.includes(OTHER_SECOND))
+  const answer = db.indexByIds([SECOND, OTHER_SECOND], laterSeasons)
+  assert.deepEqual(answer.items.map((item) => item.id).sort(), [SECOND, OTHER_SECOND].sort())
+  assert.deepEqual(answer.completedIds, [SECOND])
   db.close()
 })
 
@@ -489,28 +468,27 @@ check('another profile’s viewings hide nothing', () => {
   const db = library()
   db.setActiveProfile('somebody-else')
   assert.deepEqual(browse(db, { hideWatched: true, hideCompleted: true }), {
-    ids: [...EVERY_ROW].sort(),
-    total: 6
+    ids: [...ON_THE_GRID].sort(),
+    total: 3
   })
   db.close()
 })
 
-check('a member that is not the season its place says is read by its own id', () => {
+check('a member that is not the season its place says stays, read by its own id', () => {
   // The second member sits at season 2 of the group, and the show's page
-  // gives that season to something else (a film filed among the seasons,
-  // say). It opens and saves as itself, so its tile is watched when it has
-  // rows of its own, and the show's season 2 says nothing about it.
+  // gives that season to something else (an OVA filed among the seasons,
+  // say). It opens and saves as itself, so its tile is how it is reached,
+  // and it is watched when it has rows of its own.
   const db = library()
   const gated = laterSeasonsOf(
     animeGroupIndexesOf([{ id: SHOW, groupedIds: [SECOND, THIRD] }]).positions,
     (_show, member) => member !== SECOND
   )
   assert.deepEqual([...gated.keys()], [THIRD])
-  const watchedOff = browse(db, { hideWatched: true }, gated).ids
-  assert.ok(watchedOff.includes(SECOND), 'the show’s season 2 is not this tile’s')
-  assert.ok(!watchedOff.includes(THIRD))
-  assert.ok(browse(db, { hideCompleted: true }, gated).ids.includes(SECOND))
-  assert.deepEqual(db.indexQuery({ kind: 'anime' }, gated).completedIds, [])
+  const grid = browse(db, {}, gated).ids
+  assert.ok(grid.includes(SECOND), 'its tile stays')
+  assert.ok(!grid.includes(THIRD), 'the season that is its place is left out')
+  assert.ok(browse(db, { hideWatched: true }, gated).ids.includes(SECOND))
 
   for (const episode of [1, 2, 3]) {
     db.markWatched({ id: SECOND, type: 'anime', title: SECOND }, { season: 1, episode })
@@ -518,6 +496,26 @@ check('a member that is not the season its place says is read by its own id', ()
   assert.ok(!browse(db, { hideWatched: true }, gated).ids.includes(SECOND))
   assert.ok(!browse(db, { hideCompleted: true }, gated).ids.includes(SECOND))
   assert.deepEqual(db.indexQuery({ kind: 'anime' }, gated).completedIds, [SECOND])
+  db.close()
+})
+
+check('a film linked to a show is a tile of its own, not a later season', () => {
+  // The grouping no longer files a film among a show's seasons: it is named
+  // on the show (groupedExtras) and stays a title of its own, so the grid
+  // keeps its tile and nothing reads its viewings under the show.
+  const FILM = 'kitsu:250'
+  const db = library()
+  db.indexUpsert('anime', [anime(FILM, { subtype: 'movie', videos: episodes(FILM, 1, 1) })])
+  const show = { id: SHOW, groupedIds: [SECOND, THIRD], groupedExtras: [FILM] }
+  const grouping = laterSeasonsOf(
+    animeGroupIndexesOf([show, { id: OTHER, groupedIds: [OTHER_SECOND] }, { id: FILM }]).positions,
+    () => true
+  )
+  assert.equal(grouping.has(FILM), false)
+  assert.deepEqual(browse(db, {}, grouping), { ids: [...ON_THE_GRID, FILM].sort(), total: 4 })
+  db.markWatched({ id: FILM, type: 'anime', title: FILM }, { season: 1, episode: 1 })
+  assert.ok(!browse(db, { hideWatched: true }, grouping).ids.includes(FILM))
+  assert.deepEqual(db.indexQuery({ kind: 'anime' }, grouping).completedIds, [FILM])
   db.close()
 })
 
@@ -537,6 +535,142 @@ check('a catalog with no merged show, and a query for another kind, are read as 
   )
   assert.equal(series.total, 1)
   db.close()
+})
+
+check('the index half of search leaves later seasons out, before its limit', () => {
+  const db = library()
+  // Every row is titled by its id, so "kitsu" matches all six.
+  const search = (grouping?: typeof laterSeasons, limit = 100): string[] =>
+    db
+      .indexSearch('anime', 'kitsu', limit, grouping)
+      .map((item) => item.id)
+      .sort()
+  assert.deepEqual(search(), [...EVERY_ROW].sort(), 'ungrouped: every row')
+  assert.deepEqual(search(laterSeasons), [...ON_THE_GRID].sort())
+  assert.deepEqual(
+    search(laterSeasons, 3),
+    [...ON_THE_GRID].sort(),
+    'the left-out rows take no place in the limit'
+  )
+  db.close()
+})
+
+check('a later season found by search is answered as its show', () => {
+  // A provider hit, or the index's, for a later season's own name.
+  const show = anime(SHOW, { groupedIds: [SECOND, THIRD] })
+  assert.deepEqual(
+    foldLaterSeasons([anime(THIRD), anime(ALONE), anime(SECOND)], laterSeasons, [show]).map(
+      (item) => item.id
+    ),
+    [SHOW, ALONE],
+    'the show takes the first season’s place, once'
+  )
+  // The show already in the answer is the one kept, where it is.
+  const found = anime(SHOW, { poster: 'from-the-answer' })
+  const folded = foldLaterSeasons([anime(ALONE), found, anime(SECOND)], laterSeasons, [show])
+  assert.deepEqual(
+    folded.map((item) => item.id),
+    [ALONE, SHOW]
+  )
+  assert.equal(folded[1].poster, 'from-the-answer')
+  // A season whose show the index does not hold is left out, not shown.
+  assert.deepEqual(
+    foldLaterSeasons([anime(OTHER_SECOND), anime(ALONE)], laterSeasons, []).map((item) => item.id),
+    [ALONE]
+  )
+})
+
+// ---------------------------------------------------------------------
+// 5. The show's card says how many seasons it stands for.
+// ---------------------------------------------------------------------
+//
+// The index is written from the raw crawl, so a show's own row knows one
+// season and that season's episodes. Its card on the grid, in search and in
+// My Stuff is given the show's totals from the grouping (withShowTotals),
+// and a merged anime's card carries an "N seasons" chip, on the desktop
+// (MediaCard, the library tile) and on the phone (PosterCard). The rating is
+// left as it is: the front season's own score, not an average.
+
+check('a show’s index row is given the show’s siblings and totals', () => {
+  const row = anime(SHOW, { rating: '8.1', episodeCounts: { totalSeasons: 1, totalEpisodes: 2 } })
+  const showOf = (id: string) =>
+    id === SHOW
+      ? { groupedIds: [SECOND, THIRD], episodeCounts: { totalSeasons: 3, totalEpisodes: 7 } }
+      : undefined
+  const [show, alone, series] = withShowTotals(
+    [row, anime(ALONE), { ...anime(SHOW), type: 'series' }],
+    showOf
+  )
+  assert.deepEqual(show.groupedIds, [SECOND, THIRD])
+  assert.deepEqual(show.episodeCounts, { totalSeasons: 3, totalEpisodes: 7 })
+  assert.equal(show.rating, '8.1', 'the front season’s own score, not an average')
+  assert.equal(alone.episodeCounts, undefined, 'a title that fronts nothing is as it was')
+  assert.equal(series.groupedIds, undefined, 'only anime rows are shows of merged seasons')
+  // A grouping with no totals recorded still counts its seasons.
+  const [counted] = withShowTotals([row], () => ({ groupedIds: [SECOND] }))
+  assert.deepEqual(counted.episodeCounts, { totalSeasons: 2, totalEpisodes: 2 })
+})
+
+check('the phone’s show page lists the films and specials among the seasons', () => {
+  // catalog.story's release-order timeline: the seasons, with what Kitsu
+  // calls a film, an OVA or a special between the seasons it aired between.
+  const strip = timelineExtrasToPosterItems([
+    { item: anime('kitsu:1', { subtype: 'movie' }) },
+    { item: anime(SHOW), season: 1 },
+    { item: anime('kitsu:2', { subtype: 'ova' }) },
+    { item: anime(SECOND), season: 2 },
+    { item: anime('kitsu:3', { subtype: 'movie' }) },
+    { item: anime('kitsu:4') }
+  ])
+  assert.deepEqual(
+    strip.map((poster) => [poster.id, poster.subtitle]),
+    [
+      ['kitsu:1', 'Film · before the first season'],
+      ['kitsu:2', 'OVA · after season 1'],
+      ['kitsu:3', 'Film · after season 2'],
+      ['kitsu:4', 'After season 2']
+    ]
+  )
+  // Each opens as its own title.
+  assert.equal(strip[0].kind, 'anime')
+  assert.deepEqual(timelineExtrasToPosterItems([{ item: anime(SHOW), season: 1 }]), [])
+})
+
+check('a former front that fronts no show now is one season again', () => {
+  // A film that sorted first fronted its show, and its index row still has
+  // the show's siblings and totals, written when the merged page was opened.
+  const stale = anime(ALONE, {
+    groupedIds: [SECOND],
+    episodeCounts: { totalSeasons: 3, totalEpisodes: 7 }
+  })
+  const [known] = withShowTotals([stale], () => null)
+  assert.equal(known.groupedIds, undefined)
+  assert.deepEqual(known.episodeCounts, { totalSeasons: 1, totalEpisodes: 7 })
+  assert.equal(toPosterItem(known).seasons, undefined, 'no "3 seasons" chip')
+  // With no grouping to ask (a raw catalog), the row is left as it is.
+  assert.equal(withShowTotals([stale], () => undefined)[0], stale)
+})
+
+check('a merged anime’s card says how many seasons, and no other card does', () => {
+  assert.equal(mergedSeasonsLabel('anime', 3), '3 seasons')
+  assert.equal(mergedSeasonsLabel('anime', 1), null)
+  assert.equal(mergedSeasonsLabel('anime', undefined), null)
+  assert.equal(mergedSeasonsLabel('series', 5), null, 'every series has seasons')
+  assert.equal(mergedSeasonsLabel('movie', 2), null)
+
+  // The desktop card reads totalSeasons off the MediaItem the grid builds.
+  const [show] = withShowTotals([anime(SHOW)], () => ({
+    groupedIds: [SECOND, THIRD],
+    episodeCounts: { totalSeasons: 3, totalEpisodes: 7 }
+  }))
+  const media = catalogItemToMediaItem(show)
+  assert.equal(mergedSeasonsLabel(media.mediaKind, media.totalSeasons), '3 seasons')
+  assert.equal(media.totalEpisodes, 7)
+
+  // The phone's poster, from the same item.
+  assert.equal(toPosterItem(show).seasons, '3 seasons')
+  assert.equal(toPosterItem(anime(SHOW, { groupedIds: [SECOND] })).seasons, '2 seasons')
+  assert.equal(toPosterItem(anime(ALONE)).seasons, undefined)
 })
 
 console.log(`\n${pass} passed`)

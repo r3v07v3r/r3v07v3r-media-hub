@@ -69,13 +69,15 @@ import {
   ANIME_GROUPED_KEY,
   animeGroupingMovedOn,
   buildGroupedAnimeVideos,
+  foldLaterSeasons,
   groupAnimeCatalog,
   groupedIdsFor,
   invalidateAnimeGroupIndex,
   kitsuRealEpisodes,
   groupedVideosAreComplete,
   laterSeasons,
-  laterSeasonOf
+  laterSeasonOf,
+  withCurrentShowTotals
 } from './animeSeasons'
 import { keepAnimeHistoryWithShows } from './animeSyncRepair'
 import { omdbRottenTomatoesRating } from './omdb'
@@ -1169,9 +1171,21 @@ async function searchCatalog(kind: MediaKind, q: string): Promise<CatalogSearchR
   // as fast as the network it exists to not need. With none, the
   // provider is the only hope, and it gets its full time.
   const remotePending = providerSearch(kind, q)
-  const local = getDatabase().indexSearch(kind, q, INDEX_SEARCH_CANDIDATES)
+  // A later season of a merged anime is answered as its show, as the
+  // grid shows it: the index leaves its row out, and a provider hit for
+  // it is folded into the show below.
+  const later = kind === 'anime' ? laterSeasons() : undefined
+  const local = getDatabase().indexSearch(kind, q, INDEX_SEARCH_CANDIDATES, later)
   const remote = await settleProvider(remotePending, local.length ? PROVIDER_GRACE_MS : undefined)
-  const byTitle = mergeSearchResults(q, [local, remote.items], MAX_SEARCH_RESULTS)
+  const merged = mergeSearchResults(q, [local, remote.items], MAX_SEARCH_RESULTS)
+  const folding = later?.size ? merged.filter((item) => later.has(String(item.id))) : []
+  const byTitle = folding.length
+    ? foldLaterSeasons(
+        merged,
+        later!,
+        getDatabase().indexByIds(folding.map((item) => later!.get(String(item.id))!.id)).items
+      )
+    : merged
 
   // Then the same query against everything already known about each
   // title's cast, creators and story labels. This is what makes typing a
@@ -1188,8 +1202,9 @@ async function searchCatalog(kind: MediaKind, q: string): Promise<CatalogSearchR
   // install or an expired blob joined a whole catalogue crawl before the
   // reply could go, with the title matches already in hand.
   const seen = new Set(byTitle.map((item) => String(item.id)))
+  const items = [...byTitle, ...searchByCredits(kind, q, seen)]
   return {
-    items: [...byTitle, ...searchByCredits(kind, q, seen)],
+    items: kind === 'anime' ? withCurrentShowTotals(items) : items,
     providerUnreachable: remote.unreachable
   }
 }
@@ -1813,7 +1828,8 @@ export function registerCatalogIpc(): void {
         : []
       if (!ids.length) return { items: [], completedIds: [] }
       // A later season's card is complete when that season of its show is.
-      return getDatabase().indexByIds(ids, laterSeasons())
+      const answer = getDatabase().indexByIds(ids, laterSeasons())
+      return { ...answer, items: withCurrentShowTotals(answer.items) }
     }
   )
 
@@ -1836,9 +1852,14 @@ export function registerCatalogIpc(): void {
   // what is already there.
   handle<CatalogQuery, CatalogQueryResult>(MEDIA_HUB_CHANNELS.catalogQuery, async (_e, query) => {
     if (!isValidCatalogKind(query?.kind)) throw new Error('Unsupported catalog.')
-    // The index keeps a row for every season of a merged anime, so the
-    // grid shows later seasons as tiles too; same correction as byIds.
-    return getDatabase().indexQuery(query, query.kind === 'anime' ? laterSeasons() : undefined)
+    // The index keeps a row for every season of a merged anime. The grid
+    // shows the show, and leaves out each season that opens as the show
+    // (laterSeasons, the same answer laterSeasonOf gives one id at a time).
+    // A show's row knows only its first season; its card is given the show's
+    // totals (withCurrentShowTotals).
+    if (query.kind !== 'anime') return getDatabase().indexQuery(query)
+    const page = getDatabase().indexQuery(query, laterSeasons())
+    return { ...page, items: withCurrentShowTotals(page.items) }
   })
 
   handle<CatalogFacetsPayload, CatalogFacets>(

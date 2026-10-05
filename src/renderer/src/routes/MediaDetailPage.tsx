@@ -20,6 +20,8 @@ import { DETAIL_CONFIGS } from '@renderer/lib/mediaHub/detailAdapters'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
 import type {
   AnimeStoryLink,
+  AnimeStoryOrder,
+  AnimeTimelineEntry,
   CatalogItem,
   Episode,
   EpisodePlaybackPosition,
@@ -39,6 +41,7 @@ import { ProgressPanel } from '@renderer/components/detail/ProgressPanel'
 import { GenresPanel } from '@renderer/components/detail/GenresPanel'
 import { SimilarPanel } from '@renderer/components/detail/SimilarPanel'
 import { AnimeStoryPanel } from '@renderer/components/detail/AnimeStoryPanel'
+import { readStoryOrder, writeStoryOrder } from '@renderer/lib/mediaHub/storyOrder'
 import styles from './MediaDetailPage.module.css'
 import { playableEpisodesInOrder } from '@shared/media-hub/nextEpisode'
 import { isRegularEpisode } from '@shared/media-hub/catalog-logic'
@@ -100,8 +103,12 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   const [relatedStatus, setRelatedStatus] = useState<FetchStatus>('loading')
 
   const [storyLinks, setStoryLinks] = useState<AnimeStoryLink[]>([])
+  const [storyTimeline, setStoryTimeline] = useState<AnimeTimelineEntry[]>([])
+  const [storyTimelineChecked, setStoryTimelineChecked] = useState(true)
   const [storyStatus, setStoryStatus] = useState<FetchStatus>('loading')
   const [storyChecked, setStoryChecked] = useState(false)
+  // Release or story order for the franchise guide, as last chosen here.
+  const [storyOrder, setStoryOrder] = useState<AnimeStoryOrder>(readStoryOrder)
 
   const [history, setHistory] = useState<HistoryEntry[]>([])
   // Only the setter is used — nothing in this page shows a separate
@@ -198,10 +205,12 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
       return
     }
     api.catalog
-      .story(kind, id)
+      .story(kind, id, storyOrder)
       .then((result) => {
         if (cancelled) return
         setStoryLinks(result.links)
+        setStoryTimeline(result.timeline ?? [])
+        setStoryTimelineChecked(result.timelineChecked !== false)
         setStoryChecked(result.checked)
         setStoryStatus('ready')
       })
@@ -211,7 +220,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     return () => {
       cancelled = true
     }
-  }, [kind, id])
+  }, [kind, id, storyOrder])
 
   // Secondary fetches — independent of the primary one and of each other,
   // so a failure (or, for series, a known-unsupported backend gap) in
@@ -331,13 +340,25 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     return art.backdropUrl ?? art.posterUrl
   }, [media])
 
+  // `kind` is Kitsu's kind of entry (a film, an OVA...), which the panel
+  // names and a MediaItem does not carry.
   const storyItems = useMemo(
     () =>
       storyLinks.map((link) => ({
         ...link,
+        kind: link.item.subtype,
         item: catalogItemToMediaItem(link.item, { trackedIds: myList })
       })),
     [storyLinks, myList]
+  )
+  const storyEntries = useMemo(
+    () =>
+      storyTimeline.map((entry) => ({
+        ...entry,
+        kind: entry.item.subtype,
+        item: catalogItemToMediaItem(entry.item, { trackedIds: myList })
+      })),
+    [storyTimeline, myList]
   )
 
   const episodes = useMemo<Episode[]>(() => {
@@ -814,6 +835,15 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
             status={storyStatus}
             checked={storyChecked}
             links={storyItems}
+            timeline={storyEntries}
+            timelineChecked={storyTimelineChecked}
+            currentId={media.id}
+            order={storyOrder}
+            onOrderChange={(order) => {
+              writeStoryOrder(order)
+              setStoryOrder(order)
+            }}
+            onSelectSeason={setSelectedSeasonOverride}
             currentStatus={catalogItem?.status ?? media.status}
             episodeCount={media.totalEpisodes}
             onSelect={(item) => openDetail(item, media.title)}

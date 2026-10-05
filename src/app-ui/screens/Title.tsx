@@ -12,7 +12,9 @@ import { api, useAsync } from '../lib/api'
 import { useLibraryRefresh } from '../lib/librarySync'
 import { isMediaKind } from '../lib/mediaKind'
 import { releaseCountdown, type ReleaseCountdown } from '../lib/releaseCountdown'
+import { timelineExtrasToPosterItems, type PosterItem } from '../lib/posterItem'
 import LoadingNote from '../components/LoadingNote'
+import PosterRow from '../components/PosterRow'
 import Spinner from '../components/Spinner'
 import StatusNote from '../components/StatusNote'
 import './Title.css'
@@ -234,6 +236,18 @@ export default function Title() {
   // A catch-up or the watchlist pull can change either half while the page
   // is open; refetched behind the page, so nothing on it blinks.
   useLibraryRefresh(watchState.refresh)
+
+  // A merged anime's films, OVAs and specials are titles of their own, not
+  // seasons: listed under the episodes, each placed among the seasons it
+  // came out between (catalog.story's release-order timeline).
+  const mergedAnimeId = kind === 'anime' && item?.groupedIds?.length ? item.id : null
+  const extras = useAsync<PosterItem[]>(() => {
+    const mediaHub = api()
+    if (!mergedAnimeId || !mediaHub) return Promise.resolve([])
+    return mediaHub.catalog
+      .story('anime', mergedAnimeId, 'release')
+      .then((result) => timelineExtrasToPosterItems(result.timeline ?? []))
+  }, [mergedAnimeId])
   const stateForItem = itemId && watchState.data?.id === itemId ? watchState.data.state : null
   // Answered, or failed — failing falls back to "nothing watched", which is
   // exactly what Play did before this screen read any history.
@@ -700,6 +714,8 @@ export default function Title() {
             </ul>
           </section>
         )}
+
+        {extras.data && <PosterRow title="Films and specials" items={extras.data} />}
       </div>
     </div>
   )

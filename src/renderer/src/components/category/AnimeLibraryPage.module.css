@@ -395,10 +395,27 @@
     rgba(2, 5, 13, 0.92) 100%
   );
 }
-.tileRating {
+/* The rating and, for a merged show, its season count, stacked in the
+   top-left corner: two facts about the title, read together. */
+.tileBadges {
   position: absolute;
   top: 9px;
   left: 9px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.tileSeasons {
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: rgba(2, 5, 13, 0.66);
+  color: var(--text-primary);
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.tileRating {
   display: flex;
   align-items: center;
   gap: 3px;

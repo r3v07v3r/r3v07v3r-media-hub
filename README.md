@@ -62,6 +62,10 @@ trending feed (either one alone fills the grid), anime from Kitsu. No key is req
   a chip. **Scan deeper** on a category page pulls in more of the catalog than loaded by itself.
   A title found only by search joins the library once you open or track it, so it shows in the
   grids, My Stuff and the Planned row like anything else.
+  An anime whose seasons are merged into one show is one tile in the Anime library and in search,
+  on the desktop and the phone, with an "N seasons" chip on its poster; its rating is its first
+  season's. Its seasons are tabs on its page, and searching a later season's own name finds the
+  show.
 - **Recommendations that say why.** Home shows the top row; **For You** shows the whole ranking,
   shelved by reason: a franchise continuation, a director or actor who recurs in what you have watched, a genre
   match. After
@@ -79,10 +83,16 @@ trending feed (either one alone fills the grid), anime from Kitsu. No key is req
 - **With a TMDB key** (optional): the age certificate for your region, cast and crew,
   the rest of a film's collection, better similar-title lists, and per-season episode data for
   grouped anime. **With an OMDb key**: the Rotten Tomatoes score.
-- **Anime franchises in story order.** An anime's page lays out its franchise (prequels, the main
-  or full story, side stories, spin-offs, recaps, sequels) from Kitsu, with no key needed. A show
-  merged from several seasons is treated as one title: what comes before it is what precedes its
-  first season, what comes after is what follows its last, and its own seasons are not listed.
+- **Anime franchises in release or story order.** An anime's page lays out its franchise
+  (prequels, the main or full story, side stories, spin-offs, recaps, sequels) from Kitsu, with no
+  key needed. A show merged from several seasons is treated as one title: what comes before it is
+  what precedes its first season, and what comes after is what follows its last. Only TV seasons
+  are merged: a film, OVA, ONA or special is a title of its own, listed on the show's page between
+  the seasons it came out between (on the phone and TV, in a Films and specials row under the
+  episodes, each saying which season it follows). On the desktop a Release order / Story order switch, remembered
+  on that computer, lists the whole franchise in story order instead: Kitsu's prequel and sequel
+  links decide, and air dates place what they leave unordered, so it is only as right as those
+  links. Film collections stay in release order.
 
 ### 2. Choose a source — needs TorBox or a Jellyfin server
 

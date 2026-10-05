@@ -1,13 +1,38 @@
 'use client'
 
-import type { AnimeStoryLink } from '@shared/media-hub/types'
+import type { AnimeStoryLink, AnimeStoryOrder, AnimeTimelineEntry } from '@shared/media-hub/types'
 import type { MediaItem } from '@renderer/types'
 import { Icon } from '@renderer/components/icons/Icon'
 import { resolveArtwork } from '@renderer/lib/artwork'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import styles from './AnimeStoryPanel.module.css'
 
-type StoryLink = Omit<AnimeStoryLink, 'item'> & { item: MediaItem }
+/** `kind` is Kitsu's kind of entry (CatalogItem.subtype), which a MediaItem
+ *  does not carry. */
+type StoryLink = Omit<AnimeStoryLink, 'item'> & { item: MediaItem; kind?: string }
+type StoryEntry = Omit<AnimeTimelineEntry, 'item'> & { item: MediaItem; kind?: string }
+
+/** Kitsu's kinds of entry that are not a TV series, as people say them. */
+const KIND_LABEL: Record<string, string> = {
+  movie: 'Film',
+  ova: 'OVA',
+  ona: 'ONA',
+  special: 'Special',
+  music: 'Music video'
+}
+
+/** What kind of entry it is, when that is worth saying: anything but a TV
+ *  series. Without Kitsu's kind (a link cached before it was read), a
+ *  one-episode entry is taken for a film, as it always was. */
+function kindLabel(kind: string | undefined, item: MediaItem): string {
+  if (kind) return KIND_LABEL[kind] ?? ''
+  return item.totalEpisodes === 1 ? 'Film' : ''
+}
+
+const ORDER_LABEL: Record<AnimeStoryOrder, string> = {
+  release: 'Release order',
+  story: 'Story order'
+}
 
 /** What each relation means to somebody deciding what to watch next. */
 const RELATION_LABEL: Record<AnimeStoryLink['relation'], string> = {
@@ -31,9 +56,19 @@ interface AnimeStoryPanelProps {
   status: 'loading' | 'ready' | 'error'
   checked: boolean
   links: StoryLink[]
+  /** The franchise in `order` (AnimeStoryResult.timeline). */
+  timeline: StoryEntry[]
+  /** False when a part's links could not be looked up for story order. */
+  timelineChecked: boolean
+  /** The title this page is open on: its own row in the list is not a link. */
+  currentId: string
+  order: AnimeStoryOrder
+  onOrderChange: (order: AnimeStoryOrder) => void
   currentStatus?: string
   episodeCount?: number
   onSelect: (item: MediaItem) => void
+  /** A season of this show picked from the list: its tab is opened. */
+  onSelectSeason: (season: number) => void
 }
 
 function isFinished(status: string | undefined): boolean {
@@ -56,9 +91,15 @@ export function AnimeStoryPanel({
   status,
   checked,
   links,
+  timeline,
+  timelineChecked,
+  currentId,
+  order,
+  onOrderChange,
   currentStatus,
   episodeCount,
-  onSelect
+  onSelect,
+  onSelectSeason
 }: AnimeStoryPanelProps) {
   const completed = isFinished(currentStatus)
   const releaseMessage = completed
@@ -66,6 +107,24 @@ export function AnimeStoryPanel({
       ? 'This is a finished one-episode release. Finished applies to this title, not the whole franchise.'
       : 'Finished applies to this title. Check the direct story links before deciding the franchise is over.'
     : 'Direct story links from the anime catalog.'
+
+  // Shown in every state, so a choice that could not be answered (story
+  // order needs each part's links) can always be taken back.
+  const toggle = (
+    <div className={styles.orderToggle} role="group" aria-label="Order">
+      {(['release', 'story'] as const).map((value) => (
+        <button
+          key={value}
+          type="button"
+          className={`${styles.orderButton} ${order === value ? styles.orderButtonActive : ''}`}
+          aria-pressed={order === value}
+          onClick={() => onOrderChange(value)}
+        >
+          {ORDER_LABEL[value]}
+        </button>
+      ))}
+    </div>
+  )
 
   if (status === 'loading') {
     return (
@@ -81,6 +140,7 @@ export function AnimeStoryPanel({
             <h2 className={styles.heading}>Where this story goes</h2>
           </div>
         </div>
+        {toggle}
         <div className={styles.skeleton} />
       </section>
     )
@@ -96,6 +156,7 @@ export function AnimeStoryPanel({
             <h2 className={styles.heading}>Where this story goes</h2>
           </div>
         </div>
+        {toggle}
         <p className={styles.note}>Couldn&apos;t check sequel and prequel links right now.</p>
       </section>
     )
@@ -108,6 +169,86 @@ export function AnimeStoryPanel({
     links: links.filter((link) => group.relations.includes(link.relation))
   })).filter((group) => group.links.length)
 
+  /** One row of the guide: a title to open, or a season of this show.
+   *  Without `onClick` it is the title already on screen, and not a link. */
+  const row = (
+    key: string,
+    item: MediaItem,
+    label: string,
+    after: boolean,
+    onClick?: () => void
+  ) => {
+    const artwork = resolveArtwork(item)
+    const content = (
+      <>
+        <ArtworkImage
+          src={artwork.thumbnailUrl ?? artwork.posterUrl}
+          alt=""
+          fallbackTitle={item.title}
+          artTint={item.artTint}
+          className={styles.thumb}
+        />
+        <span className={styles.info}>
+          <span className={styles.linkType}>{label}</span>
+          <span className={styles.title}>{item.title}</span>
+          <span className={styles.meta}>{availability(item)}</span>
+        </span>
+      </>
+    )
+    if (!onClick) {
+      return (
+        <li key={key}>
+          <div
+            className={`${styles.storyLink} ${styles.current}`}
+            data-media-id={item.id}
+            aria-current="page"
+          >
+            {content}
+          </div>
+        </li>
+      )
+    }
+    return (
+      <li key={key}>
+        <button
+          type="button"
+          className={`${styles.storyLink} ${after ? styles.sequel : styles.prequel}`}
+          data-media-id={item.id}
+          onClick={onClick}
+        >
+          {content}
+          <Icon name="chevron" size={16} className={styles.chevron} />
+        </button>
+      </li>
+    )
+  }
+
+  /** A timeline entry: a season of this show opens its tab, anything else
+   *  opens as itself. */
+  const entryRow = (entry: StoryEntry) => {
+    const kind = kindLabel(entry.kind, entry.item)
+    if (entry.season !== undefined) {
+      const season = entry.season
+      return row(`season:${season}`, entry.item, `Season ${season}`, true, () =>
+        onSelectSeason(season)
+      )
+    }
+    if (String(entry.item.id) === currentId) {
+      return row(
+        `entry:${entry.item.id}`,
+        entry.item,
+        kind ? `${kind} · This title` : 'This title',
+        true
+      )
+    }
+    const label = entry.relation
+      ? `${RELATION_LABEL[entry.relation]}${kind ? ` · ${kind}` : ''}`
+      : kind || 'Part of this story'
+    return row(`entry:${entry.item.id}`, entry.item, label, entry.relation !== 'prequel', () =>
+      onSelect(entry.item)
+    )
+  }
+
   return (
     <section className={`${styles.panel} glass-panel`} aria-label="Story links">
       <div className={styles.header}>
@@ -117,55 +258,63 @@ export function AnimeStoryPanel({
           <h2 className={styles.heading}>Where this story goes</h2>
         </div>
       </div>
+      {toggle}
       <p className={styles.context}>{releaseMessage}</p>
 
-      {groups.length ? (
-        groups.map((group) => (
-          <div key={group.label}>
-            <p className={styles.groupLabel}>{group.label}</p>
-            <ul className={styles.list}>
-              {group.links.map((link) => {
-                const artwork = resolveArtwork(link.item)
-                const after = link.relation === 'sequel'
-                // A one-episode entry in a franchise is a film (or an OVA):
-                // the thing people most want pointed out between seasons.
-                const film = link.item.totalEpisodes === 1
-                return (
-                  <li key={`${link.relation}:${link.item.id}`}>
-                    <button
-                      type="button"
-                      className={`${styles.storyLink} ${after ? styles.sequel : styles.prequel}`}
-                      data-media-id={link.item.id}
-                      onClick={() => onSelect(link.item)}
-                    >
-                      <ArtworkImage
-                        src={artwork.thumbnailUrl ?? artwork.posterUrl}
-                        alt=""
-                        fallbackTitle={link.item.title}
-                        artTint={link.item.artTint}
-                        className={styles.thumb}
-                      />
-                      <span className={styles.info}>
-                        <span className={styles.linkType}>
-                          {RELATION_LABEL[link.relation]}
-                          {film ? ' · Film' : ''}
-                        </span>
-                        <span className={styles.title}>{link.item.title}</span>
-                        <span className={styles.meta}>{availability(link.item)}</span>
-                      </span>
-                      <Icon name="chevron" size={16} className={styles.chevron} />
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
+      {order === 'story' ? (
+        timeline.length > 1 ? (
+          <div>
+            {/* Kitsu's prequel and sequel links, in the order they make;
+                what they leave unordered goes by air date. */}
+            <p className={styles.groupLabel}>In story order</p>
+            {!timelineChecked && (
+              <p className={styles.note}>
+                Some parts&apos; links couldn&apos;t be checked, so this order may be incomplete.
+              </p>
+            )}
+            <ul className={styles.list}>{timeline.map(entryRow)}</ul>
           </div>
-        ))
+        ) : (
+          <p className={styles.empty}>
+            No prequel or sequel is listed to put this story in order. That does not rule out a
+            future announcement.
+          </p>
+        )
       ) : (
-        <p className={styles.empty}>
-          No direct sequel or prequel is listed right now. That does not rule out a future
-          announcement.
-        </p>
+        <>
+          {timeline.length > 0 && (
+            <div>
+              {/* A merged show's seasons, with the films and OVAs between
+                  the seasons they came out between. */}
+              <p className={styles.groupLabel}>This show, as released</p>
+              <ul className={styles.list}>{timeline.map(entryRow)}</ul>
+            </div>
+          )}
+          {groups.length ? (
+            groups.map((group) => (
+              <div key={group.label}>
+                <p className={styles.groupLabel}>{group.label}</p>
+                <ul className={styles.list}>
+                  {group.links.map((link) => {
+                    const kind = kindLabel(link.kind, link.item)
+                    return row(
+                      `${link.relation}:${link.item.id}`,
+                      link.item,
+                      `${RELATION_LABEL[link.relation]}${kind ? ` · ${kind}` : ''}`,
+                      link.relation === 'sequel',
+                      () => onSelect(link.item)
+                    )
+                  })}
+                </ul>
+              </div>
+            ))
+          ) : timeline.length ? null : (
+            <p className={styles.empty}>
+              No direct sequel or prequel is listed right now. That does not rule out a future
+              announcement.
+            </p>
+          )}
+        </>
       )}
     </section>
   )

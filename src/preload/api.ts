@@ -14,6 +14,7 @@ import type {
 } from '../shared/lancache/protocol'
 import type {
   ActivitySnapshot,
+  AnimeStoryOrder,
   AnimeStoryResult,
   BlockedDownload,
   BootstrapResult,
@@ -560,8 +561,13 @@ export function createApi(transport: ApiTransport) {
           transport.invoke(MEDIA_HUB_CHANNELS.catalogSearch, { kind, query, report: true }),
         related: (type: MediaKind, id: string): Promise<CatalogItem[]> =>
           transport.invoke(MEDIA_HUB_CHANNELS.catalogRelated, { type, id }),
-        story: (type: MediaKind, id: string): Promise<AnimeStoryResult> =>
-          transport.invoke(MEDIA_HUB_CHANNELS.catalogStory, { type, id }),
+        /** `order` decides the timeline that comes back (AnimeStoryResult). */
+        story: (
+          type: MediaKind,
+          id: string,
+          order: AnimeStoryOrder = 'release'
+        ): Promise<AnimeStoryResult> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.catalogStory, { type, id, order }),
         person: (person: string): Promise<PersonCreditsResult> =>
           transport.invoke(MEDIA_HUB_CHANNELS.catalogPerson, { person }),
         collection: (id: string): Promise<TitleCollectionResult> =>

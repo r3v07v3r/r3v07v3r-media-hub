@@ -112,6 +112,31 @@ export interface CatalogItem {
    *  and lets metadata() build a real multi-season episode list for it. */
   groupedIds?: string[]
   /**
+   * Anime only — what kind of entry Kitsu says this is, lowercased: 'tv',
+   * 'movie', 'ova', 'ona', 'special' or 'music'. Absent when Kitsu gave none,
+   * and on anything cached before it was read.
+   *
+   * Only a TV entry is merged into a show as one of its seasons (see
+   * groupAnimeCatalog). A film or an OVA is a title of its own, listed on
+   * the show's page beside the seasons it falls between (groupedExtras).
+   */
+  subtype?: string
+  /**
+   * Anime only, on a merged show — the films, OVAs, ONAs, specials and music
+   * entries the grouping found linked to its seasons, by Kitsu id. They are
+   * not seasons and not in groupedIds: each stays a title of its own, and the
+   * show's page lists them between the seasons they came out between.
+   */
+  groupedExtras?: string[]
+  /**
+   * Anime only, on a merged show — Kitsu's start date of each season, this
+   * item's own first, then one per groupedIds entry in the same order ('' when
+   * unknown). What placing groupedExtras between the seasons is measured
+   * against, since the later seasons' own entries are not kept in the
+   * catalog.
+   */
+  seasonStarts?: string[]
+  /**
    * Anime only, and only on the answer to catalog:meta — set when the id
    * asked for is a LATER season of a merged franchise: the show it belongs
    * to, and its season there. The item itself is still that one season
@@ -213,10 +238,40 @@ export interface PersonCreditsResult {
   creators: CatalogItem[]
 }
 
+/**
+ * The two orders an anime's page can list its franchise in. Release order is
+ * when each part came out; story order follows Kitsu's prequel and sequel
+ * links, with the air date between parts the links do not order (see
+ * core.ts's animeStoryOrder).
+ */
+export type AnimeStoryOrder = 'release' | 'story'
+
+/** One part of a franchise, as the anime page lists it in order. */
+export interface AnimeTimelineEntry {
+  item: CatalogItem
+  /** For a season of the show the page is about: its season there. */
+  season?: number
+  /** For a title outside the show: how Kitsu relates it to the show. */
+  relation?: AnimeStoryRelation
+}
+
 export interface AnimeStoryResult {
   links: AnimeStoryLink[]
   /** False only if the remote lookup failed without a cached answer. */
   checked: boolean
+  /**
+   * The franchise in the order asked for. In release order: a merged show's
+   * seasons, with the films, OVAs and specials filed with it between the
+   * seasons they came out between — absent when it has none, since the
+   * season tabs already list the seasons. In story order: those, and every
+   * title the show's parts link to, in story order.
+   */
+  timeline?: AnimeTimelineEntry[]
+  /**
+   * Story order only: false when a part's own links could not be looked up,
+   * so the order was built without them and may be incomplete.
+   */
+  timelineChecked?: boolean
 }
 
 /**
