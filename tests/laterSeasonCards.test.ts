@@ -499,6 +499,26 @@ check('a member that is not the season its place says stays, read by its own id'
   db.close()
 })
 
+check('a film linked to a show is a tile of its own, not a later season', () => {
+  // The grouping no longer files a film among a show's seasons: it is named
+  // on the show (groupedExtras) and stays a title of its own, so the grid
+  // keeps its tile and nothing reads its viewings under the show.
+  const FILM = 'kitsu:250'
+  const db = library()
+  db.indexUpsert('anime', [anime(FILM, { subtype: 'movie', videos: episodes(FILM, 1, 1) })])
+  const show = { id: SHOW, groupedIds: [SECOND, THIRD], groupedExtras: [FILM] }
+  const grouping = laterSeasonsOf(
+    animeGroupIndexesOf([show, { id: OTHER, groupedIds: [OTHER_SECOND] }, { id: FILM }]).positions,
+    () => true
+  )
+  assert.equal(grouping.has(FILM), false)
+  assert.deepEqual(browse(db, {}, grouping), { ids: [...ON_THE_GRID, FILM].sort(), total: 4 })
+  db.markWatched({ id: FILM, type: 'anime', title: FILM }, { season: 1, episode: 1 })
+  assert.ok(!browse(db, { hideWatched: true }, grouping).ids.includes(FILM))
+  assert.deepEqual(db.indexQuery({ kind: 'anime' }, grouping).completedIds, [FILM])
+  db.close()
+})
+
 check('a catalog with no merged show, and a query for another kind, are read as before', () => {
   const db = library()
   assert.deepEqual(

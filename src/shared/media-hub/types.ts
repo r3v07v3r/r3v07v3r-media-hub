@@ -112,6 +112,31 @@ export interface CatalogItem {
    *  and lets metadata() build a real multi-season episode list for it. */
   groupedIds?: string[]
   /**
+   * Anime only — what kind of entry Kitsu says this is, lowercased: 'tv',
+   * 'movie', 'ova', 'ona', 'special' or 'music'. Absent when Kitsu gave none,
+   * and on anything cached before it was read.
+   *
+   * Only a TV entry is merged into a show as one of its seasons (see
+   * groupAnimeCatalog). A film or an OVA is a title of its own, listed on
+   * the show's page beside the seasons it falls between (groupedExtras).
+   */
+  subtype?: string
+  /**
+   * Anime only, on a merged show — the films, OVAs, ONAs, specials and music
+   * entries the grouping found linked to its seasons, by Kitsu id. They are
+   * not seasons and not in groupedIds: each stays a title of its own, and the
+   * show's page lists them between the seasons they came out between.
+   */
+  groupedExtras?: string[]
+  /**
+   * Anime only, on a merged show — Kitsu's start date of each season, this
+   * item's own first, then one per groupedIds entry in the same order ('' when
+   * unknown). What placing groupedExtras between the seasons is measured
+   * against, since the later seasons' own entries are not kept in the
+   * catalog.
+   */
+  seasonStarts?: string[]
+  /**
    * Anime only, and only on the answer to catalog:meta — set when the id
    * asked for is a LATER season of a merged franchise: the show it belongs
    * to, and its season there. The item itself is still that one season

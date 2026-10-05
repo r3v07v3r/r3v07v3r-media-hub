@@ -124,6 +124,22 @@ function placesOf(groups: readonly AnimeGroupRecord[]): Map<string, Place> {
 const byMember = (group: AnimeGroupRecord): boolean => group.series === ''
 
 /**
+ * Where a show went whose front id is in no show now: the one show every
+ * other member of it that is still in a show is in — or nothing, when they
+ * are in none or in more than one.
+ */
+function successorOf(group: AnimeGroupRecord, now: Map<string, Place>): Place | undefined {
+  let went: Place | undefined
+  for (const member of group.members.slice(1)) {
+    const place = now.get(member)
+    if (!place) continue
+    if (went && went.show !== place.show) return undefined
+    went = went ?? now.get(place.show)
+  }
+  return went
+}
+
+/**
  * Whether a member's place in its show is also its season on the show's
  * page — animeSeasons.ts's seasonMatchesPage. It is what decides whether a
  * later season's rows are the show's at all: where the answer is no, such a
@@ -159,10 +175,18 @@ export function planAnimeRegroup(
     if (!byMember(group)) {
       // Numbered by TMDB, or not known: the rows stay at their numbers, and
       // only follow the id when the show it fronts is the same series.
-      if (showNow === show) continue
-      if (group.series && front?.group.series === group.series) {
-        plan.moves.push({ fromId: show, fromSeason: null, toId: showNow, toSeason: null })
-        plan.ratings.push({ fromId: show, toId: showNow })
+      //
+      // The id that fronted it can also have left every show while the rest
+      // of it is fronted by another: a film TheTVDB files at season 0 sorted
+      // first and fronted its show, until the grouping stopped counting films
+      // as seasons. Its rows are still the show's TMDB seasons (its page never
+      // showed the film), so they go where the rest of the show went.
+      const went = front ?? successorOf(group, now)
+      const showTo = went?.show ?? show
+      if (showTo === show) continue
+      if (group.series && went?.group.series === group.series) {
+        plan.moves.push({ fromId: show, fromSeason: null, toId: showTo, toSeason: null })
+        plan.ratings.push({ fromId: show, toId: showTo })
       } else {
         plan.left.push({ id: show, why: 'fronted by another id, and not provably the same series' })
       }

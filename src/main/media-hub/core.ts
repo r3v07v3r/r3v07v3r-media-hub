@@ -894,10 +894,16 @@ export function normalizeKitsuAnime(record: RawApiPayload, lightweight = false):
   const english = String(a.titles?.en || a.titles?.en_us || '').trim()
   const canonical = String(a.canonicalTitle || '').trim()
   const original = english && canonical && canonical !== english ? canonical : ''
+  // What kind of entry it is: a TV season, a film, an OVA... See
+  // CatalogItem.subtype; the grouping reads it.
+  const subtype = String(a.subtype || a.showType || '')
+    .trim()
+    .toLowerCase()
   return {
     id,
     title: english || canonical || 'Untitled',
     ...(original ? { originalTitle: original } : {}),
+    ...(subtype ? { subtype } : {}),
     type: 'anime',
     poster: a.posterImage?.large || a.posterImage?.original || '',
     background: a.coverImage?.large || a.coverImage?.original || '',

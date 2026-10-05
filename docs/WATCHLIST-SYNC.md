@@ -434,6 +434,37 @@ In one real library, 290 of 698 later seasons could be shown to agree. The
 catch-up, the MAL import and the MAL push still go by place alone; that is
 unchanged here and is wrong for the same shows.
 
+### Films, OVAs and specials are not seasons
+
+Kitsu says what kind of entry each anime is: a TV series, a film, an OVA,
+an ONA (a web release), a special or a music video. The grouping reads it
+(`normalizeKitsuAnime` keeps it as `subtype`), and only TV entries become
+seasons of a merged show. Before, every entry the evidence linked was
+merged in as a numbered season: a film took a season's place, pushed the
+seasons after it one place along, and, since TheTVDB files films at season
+0, could sort first and front the show, leaving no later season provably
+at its place.
+
+- A film, OVA, ONA, special or music entry stays a title of its own, with
+  its own page, its own rows and its own Simkl and MyAnimeList entry. It is
+  still listed in the franchise guide.
+- It still links the seasons on either side of it. A first season whose
+  only recorded sequel is a film, and the film's own sequel the second
+  season, are one show of two seasons.
+- An entry whose kind is not known is grouped as before. A catalog cached
+  before this change has no kinds, so the change takes effect with the
+  next crawl, within six hours of the update.
+- A show whose real seasons Kitsu lists as ONAs comes apart: each such
+  season is a title of its own. That follows the rule as approved, and is
+  the price of not guessing which web releases are seasons.
+
+The change reaches watch history the way any change of grouping does
+("When the grouping changes", below). On a show numbered by its members,
+the rows kept for a film at its season go back under the film's own id, and
+the seasons after it close the gap. On a show numbered by TMDB, the rows
+were TMDB's seasons and stay at their numbers; where the film fronted the
+show, they move to the id that fronts the series now.
+
 ### A later season under its own id
 
 A later season of a merged show still has an id of its own. One thing
@@ -531,7 +562,9 @@ What moves depends on how the show's page numbers its seasons:
   is TMDB's season 3, whichever member sits third. A member changing place
   does not change what season 3 shows, so its rows stay at their numbers.
   Only a new id in front is followed, with the season numbers kept, and
-  only when both ids map to the same series.
+  only when both ids map to the same series. That includes a front that is
+  in no show any more (a film that used to sort first), when the rest of
+  its show is all fronted by one id of the same series.
 - **Anything else is left where it is**, and named in the log: a show that
   gained or lost its mapping between two runs, or one whose lookup has
   never answered. A wrong move puts rows on another season's, where the
@@ -576,9 +609,10 @@ What cannot be placed stays under the old id, and the log names it.
 
 **Not covered.** On a show numbered by TMDB, the page and the services
 disagree about a season number wherever the members are not exactly the TV
-seasons in order (a film or an OVA among them, or one TMDB season that
-Kitsu splits in two): the page shows TMDB's season, while Simkl and
-MyAnimeList are sent the member at that position. This change does not
+seasons in order (a TV entry with no TheTVDB mapping, or one TMDB season
+that Kitsu splits in two; a film or an OVA is no longer a member): the page
+shows TMDB's season, while Simkl and MyAnimeList are sent the member at
+that position. This change does not
 alter that, and it is why such a show's rows are not moved by member.
 
 ### Pushes made before the mapping

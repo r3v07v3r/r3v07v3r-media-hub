@@ -4,7 +4,8 @@
 // Three layers, each tested as it runs: the plan (old grouping against new,
 // no database), the move itself (database.ts's moveAnimeHistory against a
 // real file), and the placing of seasons stranded before any grouping was
-// recorded. The two wrappers in animeSyncRepair.ts are a settings marker,
+// recorded. Then one regroup end to end: a film or an OVA leaving the shows
+// it was filed in as a season, from the grouping pass to the rows. The two wrappers in animeSyncRepair.ts are a settings marker,
 // a log line and a notification around these.
 //
 // Run with: npx tsx tests/animeRegroup.test.ts   (or npm.cmd test)
@@ -22,7 +23,18 @@ import {
   strandedSeasonMoves,
   type AnimeGroupRecord
 } from '../src/main/media-hub/animeRegroup'
+import {
+  ANIME_GROUPED_KEY,
+  animeGroupingMovedOn,
+  groupAnimeCatalog,
+  groupedIdsFor,
+  invalidateAnimeGroupIndex,
+  laterSeasons,
+  resolveAnimeGroupTarget
+} from '../src/main/media-hub/animeSeasons'
 import { createDatabase } from '../src/main/media-hub/database'
+import { setDatabase } from '../src/main/media-hub/dbState'
+import type { CatalogItem } from '../src/shared/media-hub/types'
 
 const PROFILE = 'profile-one'
 const OTHER = 'profile-two'
@@ -37,6 +49,16 @@ let pass = 0
 function check(name: string, fn: () => void): void {
   try {
     fn()
+    pass++
+    console.log(`  ok  ${name}`)
+  } catch (error) {
+    console.log(`FAIL  ${name}\n      ${(error as Error).message}`)
+    process.exitCode = 1
+  }
+}
+async function checkAsync(name: string, fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn()
     pass++
     console.log(`  ok  ${name}`)
   } catch (error) {
@@ -186,6 +208,36 @@ check('another id fronting the same series takes every row, at the season it has
   // fronts a show whose season 1 is TMDB's, not its own entry's.
   assert.deepEqual(plan.moves, [move('s2', null, 's1', null)])
   assert.deepEqual(plan.ratings, [{ fromId: 's2', toId: 's1' }])
+})
+
+check('a front that left every show hands its rows to the one the rest went to', () => {
+  // A film TheTVDB files at season 0 fronted its show by sorting first, and
+  // is a title of its own now. Its rows were the show's TMDB seasons.
+  const plan = planAnimeRegroup(
+    [byTmdb('305074', 'film', 'one', 'two')],
+    [byTmdb('305074', 'one', 'two')]
+  )
+  assert.deepEqual(plan.moves, [move('film', null, 'one', null)])
+  assert.deepEqual(plan.ratings, [{ fromId: 'film', toId: 'one' }])
+  // Not when the rest went to more than one show, or to another series.
+  assert.deepEqual(
+    planAnimeRegroup(
+      [byTmdb('305074', 'film', 'one', 'two')],
+      [byTmdb('305074', 'one'), byTmdb('305074', 'two', 'three')]
+    ).moves,
+    []
+  )
+  assert.deepEqual(
+    planAnimeRegroup([byTmdb('305074', 'film', 'one', 'two')], [byTmdb('999', 'one', 'two')]).left,
+    [{ id: 'film', why: 'fronted by another id, and not provably the same series' }]
+  )
+})
+
+check('a show numbered by TMDB that loses its front and gets it back ends where it started', () => {
+  const whole = [byTmdb('305074', 'a', 'b', 'c')]
+  const apart = [byTmdb('305074', 'b', 'c')]
+  assert.deepEqual(planAnimeRegroup(whole, apart).moves, [move('a', null, 'b', null)])
+  assert.deepEqual(planAnimeRegroup(apart, whole).moves, [move('b', null, 'a', null)])
 })
 
 check('another id fronting a different or unknown series is left, and said so', () => {
@@ -688,4 +740,206 @@ check('an id holding one entry’s rows has nothing stranded', () => {
   assert.deepEqual(stranded, { moves: [], left: [] })
 })
 
-console.log(`\n${pass} passed`)
+// ---------------------------------------------------------------------------
+// A film, an OVA or a special is not a season.
+//
+// groupAnimeCatalog used to merge every entry its evidence linked into the
+// show as a numbered season, whatever Kitsu said the entry was. It now reads
+// Kitsu's kind of entry (normalizeKitsuAnime's subtype): only TV entries are
+// seasons, and the rest stay titles of their own, named on the show as
+// groupedExtras. The grouping is run here as the app runs it, against a real
+// database holding the lookups the pass would otherwise make, so no request
+// goes out. The regroup that follows is the ledger's ordinary one.
+
+console.log('\ngroupAnimeCatalog: only TV entries are seasons')
+
+const NO_MAPPING = { seriesId: '', season: -1 }
+
+/** One crawled entry, as normalizeKitsuAnime leaves it. */
+function entry(id: string, subtype: string | undefined, releaseDate: string): CatalogItem {
+  return {
+    id,
+    title: id,
+    type: 'anime',
+    ...(subtype ? { subtype } : {}),
+    poster: '',
+    background: '',
+    logo: '',
+    year: releaseDate.slice(0, 4),
+    releaseDate,
+    description: '',
+    rating: '',
+    runtime: '',
+    genres: [],
+    videos: [],
+    trailers: []
+  }
+}
+
+/**
+ * A database holding every lookup the pass makes, so it makes none:
+ * `tvdb` the TheTVDB mapping of each entry (absent: Kitsu has none), and
+ * `edges` the Kitsu sequel/prequel links of each entry with no mapping.
+ * No entry has an AniList id, so AniList is not asked either.
+ */
+function groupingDb(
+  ids: string[],
+  tvdb: Record<string, { seriesId: string; season: number }>,
+  edges: Record<string, { role: 'sequel' | 'prequel'; destId: string }[]>
+): Db {
+  const db = tempDb()
+  setDatabase(db)
+  for (const id of ids) {
+    const kitsuId = id.replace(/^kitsu:/, '')
+    db.putCache(`kitsu:tvdb:${kitsuId}`, tvdb[id] ?? NO_MAPPING, 60_000)
+    if (!tvdb[id]) db.putCache(`kitsu:edges:${kitsuId}`, edges[id] ?? [], 60_000)
+  }
+  return db
+}
+
+const withoutKind = (items: CatalogItem[]): CatalogItem[] =>
+  items.map((item) => {
+    const rest = { ...item }
+    delete rest.subtype
+    return rest
+  })
+
+// A show numbered by TMDB: two seasons TheTVDB maps to series 305074, and a
+// film it maps to the same series' season 0 (where TheTVDB files films and
+// specials). The film sorts first by its season number, so it used to front
+// the show.
+const TMDB_FILM = 'kitsu:31'
+const TMDB_S1 = 'kitsu:32'
+const TMDB_S2 = 'kitsu:33'
+// A show numbered by its members: no mappings, joined by Kitsu's links.
+// The first season's sequel is a film, the film's sequel the second season,
+// and an OVA is a sequel of the second season.
+const S1 = 'kitsu:41'
+const FILM = 'kitsu:42'
+const S2 = 'kitsu:43'
+const OVA = 'kitsu:44'
+const LONE = 'kitsu:50'
+
+const CRAWL: CatalogItem[] = [
+  entry(TMDB_S1, 'tv', '2013-04-07'),
+  entry(TMDB_FILM, 'movie', '2015-07-01'),
+  entry(TMDB_S2, 'tv', '2017-04-01'),
+  entry(S1, 'tv', '2019-04-06'),
+  entry(FILM, 'movie', '2020-10-16'),
+  entry(S2, 'tv', '2021-12-05'),
+  entry(OVA, 'ova', '2022-06-01'),
+  entry(LONE, 'tv', '2023-09-29')
+]
+const TVDB = {
+  [TMDB_FILM]: { seriesId: '305074', season: 0 },
+  [TMDB_S1]: { seriesId: '305074', season: 1 },
+  [TMDB_S2]: { seriesId: '305074', season: 2 }
+}
+const EDGES = {
+  [S1]: [{ role: 'sequel' as const, destId: '42' }],
+  [FILM]: [
+    { role: 'prequel' as const, destId: '41' },
+    { role: 'sequel' as const, destId: '43' }
+  ],
+  [S2]: [
+    { role: 'prequel' as const, destId: '42' },
+    { role: 'sequel' as const, destId: '44' }
+  ],
+  [OVA]: [{ role: 'prequel' as const, destId: '43' }]
+}
+const ids = (items: CatalogItem[]): string[] => items.map((item) => item.id)
+
+/** The checks that wait on the grouping pass, run in order. */
+async function groupingChecks(): Promise<void> {
+  await checkAsync('a film or an OVA stays a title of its own, named on the show', async () => {
+    const db = groupingDb(ids(CRAWL), TVDB, EDGES)
+    const grouped = await groupAnimeCatalog(CRAWL)
+    // The crawl's own order: each show where its first season was, every
+    // other title where it was.
+    assert.deepEqual(ids(grouped), [TMDB_S1, TMDB_FILM, S1, FILM, OVA, LONE])
+    const tmdbShow = grouped[0]
+    assert.deepEqual(tmdbShow.groupedIds, [TMDB_S2])
+    assert.deepEqual(tmdbShow.groupedExtras, [TMDB_FILM])
+    assert.deepEqual(tmdbShow.seasonStarts, ['2013-04-07', '2017-04-01'])
+    assert.equal(tmdbShow.episodeCounts?.totalSeasons, 2)
+    // The film between the two seasons still joins them: it is what links
+    // the first season to the second. It is not one of them.
+    const memberShow = grouped[2]
+    assert.deepEqual(memberShow.groupedIds, [S2])
+    assert.deepEqual(memberShow.groupedExtras, [FILM, OVA])
+    assert.equal(grouped[5].groupedIds, undefined)
+    db.close()
+  })
+
+  await checkAsync('an entry whose kind is not known is grouped as it always was', async () => {
+    // A catalog cached before the kind was read: nothing tells the film from
+    // a season, and taking every show apart until the next crawl would move
+    // rows for nothing.
+    const db = groupingDb(ids(CRAWL), TVDB, EDGES)
+    const grouped = await groupAnimeCatalog(withoutKind(CRAWL))
+    assert.deepEqual(ids(grouped), [TMDB_FILM, S1, LONE])
+    assert.deepEqual(grouped[0].groupedIds, [TMDB_S1, TMDB_S2])
+    assert.deepEqual(grouped[1].groupedIds, [FILM, S2, OVA])
+    assert.equal(grouped[0].groupedExtras, undefined)
+    db.close()
+  })
+
+  await checkAsync('the rows a show kept for a film go back under the film', async () => {
+    const db = groupingDb(ids(CRAWL), TVDB, EDGES)
+    const seriesOf = (id: string): string | null => (TVDB[id] ? TVDB[id].seriesId : '')
+    const before = animeGroupRecordsOf(await groupAnimeCatalog(withoutKind(CRAWL)), seriesOf)
+    followAnimeRegroup(db, before)
+
+    // Under the old grouping: the member-numbered show's film was its season
+    // 2, its second season 3 and the OVA 4. The film fronted the TMDB show,
+    // whose page is TMDB's seasons whichever member sits where.
+    mark(db, S1, 1, [1, 2])
+    mark(db, S1, 2, [1])
+    mark(db, S1, 3, [1, 2, 3])
+    mark(db, S1, 4, [1])
+    mark(db, TMDB_FILM, 1, [1, 2])
+    mark(db, TMDB_FILM, 2, [5])
+
+    const after = animeGroupRecordsOf(await groupAnimeCatalog(CRAWL), seriesOf)
+    assert.deepEqual(after, [
+      { id: TMDB_S1, members: [TMDB_S1, TMDB_S2], series: '305074' },
+      { id: S1, members: [S1, S2], series: '' }
+    ])
+    followAnimeRegroup(db, after)
+
+    // The film and the OVA have their own episode back, as their own titles;
+    // the second season closes the gap the film left.
+    assert.deepEqual(keys(db, S1), ['1:1', '1:2', '2:1', '2:2', '2:3'])
+    assert.deepEqual(keys(db, FILM), ['1:1'])
+    assert.deepEqual(keys(db, OVA), ['1:1'])
+    // Numbered by TMDB: the rows were TMDB's seasons and stay at them, under
+    // the id that fronts the same series now.
+    assert.deepEqual(keys(db, TMDB_S1), ['1:1', '1:2', '2:5'])
+    assert.deepEqual(keys(db, TMDB_FILM), [])
+    assert.deepEqual(db.animeGroupLedger(), after)
+    db.close()
+  })
+
+  await checkAsync('what was built from the old membership is out of date', async () => {
+    // The caches that depend on who the members are: the in-memory group
+    // index (dropped by invalidateAnimeGroupIndex when a pass lands) and a
+    // show's cached page, built with its siblings of the time and rebuilt when
+    // animeGroupingMovedOn says they changed. The TheTVDB and TMDB lookups
+    // themselves are per entry and per TMDB season, and do not depend on it.
+    const db = groupingDb(ids(CRAWL), TVDB, EDGES)
+    db.putCache('catalog:v2:anime', await groupAnimeCatalog(CRAWL), 60_000)
+    db.putCache(ANIME_GROUPED_KEY, true, 60_000)
+    invalidateAnimeGroupIndex()
+    assert.equal(animeGroupingMovedOn(S1, [FILM, S2, OVA]), true, 'the film left the show')
+    assert.equal(animeGroupingMovedOn(TMDB_FILM, [TMDB_S1, TMDB_S2]), true, 'it fronts nothing')
+    assert.equal(animeGroupingMovedOn(S1, [S2]), false)
+    assert.deepEqual(groupedIdsFor(S1), [S2])
+    // And a film is never a later season: it opens and saves as itself.
+    assert.equal(resolveAnimeGroupTarget(FILM).id, FILM)
+    assert.equal(laterSeasons()?.has(FILM), false)
+    assert.deepEqual(laterSeasons()?.get(S2), { id: S1, season: 2 })
+    db.close()
+  })
+}
+
+void groupingChecks().then(() => console.log(`\n${pass} passed`))

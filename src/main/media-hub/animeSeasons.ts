@@ -349,6 +349,17 @@ async function kitsuSequelEdges(kitsuId: string, priority: TaskPriority): Promis
  * their ids live on the canonical item's groupedIds instead, for
  * buildGroupedAnimeVideos to fetch on demand when that title's detail page
  * is actually opened.
+ *
+ * Only TV entries become seasons (isSeasonEntry). Until Kitsu's kind of
+ * entry was read, a film or an OVA linked to a show was merged into it as a
+ * numbered season: it took a season's place, on a show numbered by TMDB
+ * usually showed TMDB's season of that number instead of itself, and
+ * dropped out of the story panel as part of the show. Such an entry now
+ * stays in the returned array as a title of its own, and the show lists it
+ * in groupedExtras. A grouping that changes this way reaches watch history
+ * through the ledger like any other (animeRegroup.ts): on a show numbered by
+ * its members, the rows kept for a film at its season go back under the
+ * film's own id; on one numbered by TMDB they were TMDB's seasons and stay.
  */
 export async function groupAnimeCatalog(
   items: CatalogItem[],
@@ -477,10 +488,14 @@ export async function groupAnimeCatalog(
     }
   }
 
-  const groups = new Map<
-    number,
-    { item: CatalogItem; season: number | null; anilistOrderKey: number | null }[]
-  >()
+  // Every item that the evidence above links together is one franchise; its
+  // TV entries are the show's seasons. A film, an OVA, an ONA, a special or
+  // a music video is not a season: it stays a title of its own, and the show
+  // names it in groupedExtras for its page to list between the seasons. It
+  // still links the seasons on either side of it — a first season whose only
+  // recorded sequel is a film, and the film's own sequel the second season,
+  // are one show — so what changes is who is a member, not what joins them.
+  const groups = new Map<number, GroupMember[]>()
   for (let i = 0; i < items.length; i++) {
     const root = find(i)
     const list = groups.get(root) || []
@@ -492,39 +507,81 @@ export async function groupAnimeCatalog(
     groups.set(root, list)
   }
 
+  // Each franchise's card, by its root, built when its root is first met
+  // below; null for one that is not a merged show.
+  const shows = new Map<number, CatalogItem | null>()
+  const showOf = (root: number): CatalogItem | null => {
+    if (!shows.has(root)) shows.set(root, mergedShow(groups.get(root) || []))
+    return shows.get(root) ?? null
+  }
+  // In the crawl's own order, as before: a show takes the place of the first
+  // of its seasons the crawl met, and every title that is not a season of a
+  // show keeps its own place.
   const result: CatalogItem[] = []
-  for (const group of groups.values()) {
-    if (group.length === 1) {
-      result.push(group[0].item)
+  const placed = new Set<number>()
+  for (let i = 0; i < items.length; i++) {
+    const root = find(i)
+    const show = showOf(root)
+    if (!show || !isSeasonEntry(items[i])) {
+      result.push(items[i])
       continue
     }
-    group.sort((a, b) => {
-      // Tier 1: a real TheTVDB season number, when both sides have one.
-      if (a.season !== null && b.season !== null) return a.season - b.season
-      if (a.season !== null) return -1
-      if (b.season !== null) return 1
-      // Tier 2: AniList's own broadcast season+year — a real chronological
-      // signal, closer to the truth than Kitsu's upload-order id below —
-      // for the members TheTVDB couldn't season-number but AniList could
-      // still place on a timeline.
-      if (a.anilistOrderKey !== null && b.anilistOrderKey !== null) {
-        return a.anilistOrderKey - b.anilistOrderKey
-      }
-      if (a.anilistOrderKey !== null) return -1
-      if (b.anilistOrderKey !== null) return 1
-      // Tier 3: last resort — Kitsu ids are assigned roughly in upload
-      // order, which in practice tracks real release order for sequels
-      // closely enough to use once nothing else is known.
-      return Number(a.item.id.replace(/^kitsu:/, '')) - Number(b.item.id.replace(/^kitsu:/, ''))
-    })
-    const [canonical, ...siblings] = group
-    result.push({
-      ...canonical.item,
-      groupedIds: siblings.map((s) => s.item.id),
-      episodeCounts: combineGroupEpisodeCounts(group.map((g) => g.item))
-    })
+    if (placed.has(root)) continue
+    placed.add(root)
+    result.push(show)
   }
   return result
+}
+
+interface GroupMember {
+  item: CatalogItem
+  season: number | null
+  anilistOrderKey: number | null
+}
+
+/**
+ * Whether an entry can be a season of a merged show: a TV entry, or one
+ * whose kind is not known. Unknown counts as TV because every catalog
+ * cached before the kind was read has none, and grouping those as they
+ * were grouped is better than taking every show apart until the next crawl.
+ */
+export function isSeasonEntry(item: Pick<CatalogItem, 'subtype'>): boolean {
+  return !item.subtype || item.subtype === 'tv'
+}
+
+/** One franchise's card: its TV entries in season order, the first in front
+ *  — or null when fewer than two of its entries are seasons. */
+function mergedShow(group: readonly GroupMember[]): CatalogItem | null {
+  const seasons = group.filter((member) => isSeasonEntry(member.item))
+  if (seasons.length < 2) return null
+  seasons.sort((a, b) => {
+    // Tier 1: a real TheTVDB season number, when both sides have one.
+    if (a.season !== null && b.season !== null) return a.season - b.season
+    if (a.season !== null) return -1
+    if (b.season !== null) return 1
+    // Tier 2: AniList's own broadcast season+year — a real chronological
+    // signal, closer to the truth than Kitsu's upload-order id below —
+    // for the members TheTVDB couldn't season-number but AniList could
+    // still place on a timeline.
+    if (a.anilistOrderKey !== null && b.anilistOrderKey !== null) {
+      return a.anilistOrderKey - b.anilistOrderKey
+    }
+    if (a.anilistOrderKey !== null) return -1
+    if (b.anilistOrderKey !== null) return 1
+    // Tier 3: last resort — Kitsu ids are assigned roughly in upload
+    // order, which in practice tracks real release order for sequels
+    // closely enough to use once nothing else is known.
+    return Number(a.item.id.replace(/^kitsu:/, '')) - Number(b.item.id.replace(/^kitsu:/, ''))
+  })
+  const [canonical, ...siblings] = seasons
+  const extras = group.filter((member) => !isSeasonEntry(member.item))
+  return {
+    ...canonical.item,
+    groupedIds: siblings.map((s) => s.item.id),
+    episodeCounts: combineGroupEpisodeCounts(seasons.map((g) => g.item)),
+    seasonStarts: seasons.map((g) => String(g.item.releaseDate || '')),
+    ...(extras.length ? { groupedExtras: extras.map((g) => g.item.id) } : {})
+  }
 }
 
 /**

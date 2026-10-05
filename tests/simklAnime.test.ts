@@ -390,6 +390,58 @@ check('a season whose member cannot be shown to be it is not sent to Simkl', () 
   )
 })
 
+check('a film is not a season: out of the show, each season reaches its own entry', () => {
+  // TheTVDB files a film at season 0 of its series, so the grouping sorted
+  // it first and it fronted the show. Every place was then one off its
+  // season: nothing after season 1 could be sent, and season 1 was sent to
+  // the film's own entry. groupAnimeCatalog now keeps the film out of the
+  // show (it is not a TV entry) and names it in groupedExtras instead.
+  const tvdb: Record<string, { seriesId: string; season: number }> = {
+    'kitsu:7001': { seriesId: '371028', season: 0 },
+    'kitsu:7002': { seriesId: '371028', season: 1 },
+    'kitsu:7003': { seriesId: '371028', season: 2 }
+  }
+  const tvdbFor: AnimeTvdbSeason = (id) => tvdb[id] ?? null
+  const gated = (front: string, members: string[]): AnimeSiblings => {
+    return (id) =>
+      id === front
+        ? members.map((member, index) =>
+            animeSeasonMatchesPage(front, member, index + 2, tvdbFor) ? member : null
+          )
+        : undefined
+  }
+  const before = gated('kitsu:7001', ['kitsu:7002', 'kitsu:7003'])
+  const filmFront = { id: 'kitsu:7001', type: 'anime' as const, title: 'Show', year: '2019' }
+  assert.deepEqual(historyPayload(filmFront, { season: 1, episode: 5 }, before), {
+    anime: [{ title: 'Show', year: 2019, ids: { kitsu: 7001 }, episodes: [{ number: 5 }] }]
+  })
+  assert.deepEqual(historyPayload(filmFront, { season: 2, episode: 5 }, before), {})
+
+  const after = gated('kitsu:7002', ['kitsu:7003'])
+  const showNow = { id: 'kitsu:7002', type: 'anime' as const, title: 'Show', year: '2019' }
+  assert.deepEqual(historyPayload(showNow, { season: 1, episode: 5 }, after), {
+    anime: [{ title: 'Show', year: 2019, ids: { kitsu: 7002 }, episodes: [{ number: 5 }] }]
+  })
+  assert.deepEqual(historyPayload(showNow, { season: 2, episode: 5 }, after), {
+    anime: [{ ids: { kitsu: 7003 }, episodes: [{ number: 5 }] }]
+  })
+  // The film is a title of its own: its one episode is its own entry's.
+  const film = { id: 'kitsu:7001', type: 'anime' as const, title: 'Show: The Movie', year: '2020' }
+  assert.deepEqual(historyPayload(film, { season: 1, episode: 1 }, after), {
+    anime: [
+      { title: 'Show: The Movie', year: 2020, ids: { kitsu: 7001 }, episodes: [{ number: 1 }] }
+    ]
+  })
+  // And a later season's own id is the show's at its season, the film's is
+  // nobody's.
+  const later = laterSeasonsOf(
+    animeGroupIndexesOf([{ id: 'kitsu:7002', groupedIds: ['kitsu:7003'] }, { id: 'kitsu:7001' }])
+      .positions,
+    (showId, member, season) => animeSeasonMatchesPage(showId, member, season, tvdbFor)
+  )
+  assert.deepEqual([...later], [['kitsu:7003', { id: 'kitsu:7002', season: 2 }]])
+})
+
 // ---------------------------------------------------------------------------
 console.log('\nrequest bodies')
 

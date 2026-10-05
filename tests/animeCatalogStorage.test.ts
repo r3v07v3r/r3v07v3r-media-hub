@@ -16,7 +16,8 @@ import {
 } from '../src/main/media-hub/core'
 import {
   combineGroupEpisodeCounts,
-  groupedVideosAreComplete
+  groupedVideosAreComplete,
+  isSeasonEntry
 } from '../src/main/media-hub/animeSeasons'
 
 let pass = 0
@@ -308,5 +309,22 @@ check(
     assert.equal(item.originalTitle, undefined)
   }
 )
+
+// The kind of entry decides whether the grouping may make it a season
+// (animeSeasons.ts's isSeasonEntry): only a TV entry is one.
+check("normalizeKitsuAnime keeps Kitsu's kind of entry, lowercased", () => {
+  const kind = (attributes: Record<string, unknown>): string | undefined =>
+    normalizeKitsuAnime({ id: '1', attributes: { canonicalTitle: 'x', ...attributes } }).subtype
+  assert.equal(kind({ subtype: 'TV' }), 'tv')
+  assert.equal(kind({ subtype: 'movie' }), 'movie')
+  assert.equal(kind({ subtype: 'OVA', showType: 'OVA' }), 'ova')
+  assert.equal(kind({ showType: 'ONA' }), 'ona')
+  assert.equal(kind({}), undefined, 'none given: the key is absent, not empty')
+  assert.equal(isSeasonEntry({ subtype: 'tv' }), true)
+  assert.equal(isSeasonEntry({}), true, 'unknown is grouped as it always was')
+  for (const subtype of ['movie', 'ova', 'ona', 'special', 'music']) {
+    assert.equal(isSeasonEntry({ subtype }), false, subtype)
+  }
+})
 
 console.log(`\n${pass} passed`)
