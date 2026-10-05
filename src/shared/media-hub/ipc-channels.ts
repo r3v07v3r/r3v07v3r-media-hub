@@ -152,6 +152,10 @@ export const MEDIA_HUB_CHANNELS = {
   recommendationsChanged: 'mediahub:recommendations:changed', // push event
   trackingList: 'mediahub:tracking:list',
   trackingToggle: 'mediahub:tracking:toggle',
+  /** The Undo on the "off your plan" toast: puts back the tracked row the
+   *  toggle just removed, its date, episode baseline and details as they
+   *  were, rather than planning the title afresh. See tracking.ts. */
+  trackingRestorePlan: 'mediahub:tracking:restore-plan',
   /** Bring this device up to date with the tracking services: the watchlist
    *  pull, then Simkl's watched history taken into the local record. Asked
    *  for by the phone and TV app, which has no review panel to settle a

@@ -147,6 +147,15 @@ check('a request is one invoke carrying exactly the payload the handler reads', 
     args: [{ id: 'tt0000001', action: 'here-match-service', service: 'trakt' }]
   })
 
+  // The Undo of Remove from plan: the card's item, as toggle sends it, on
+  // the restore channel, which puts back the row the toggle removed.
+  void api.mediaHub.tracking.restorePlan({ id: 'tt0000002', type: 'movie', title: 'Dune' })
+  assert.deepEqual(calls.at(-1), {
+    kind: 'invoke',
+    channel: MEDIA_HUB_CHANNELS.trackingRestorePlan,
+    args: [{ id: 'tt0000002', type: 'movie', title: 'Dune' }]
+  })
+
   // No payload means NO argument, not an explicit undefined: a handler that
   // counts its arguments must see the same call it always has.
   void api.mediaHub.bootstrap()
