@@ -2006,6 +2006,17 @@ function showSyncRows(): ShowSyncRow[] {
       .indexByIds(entries.map((entry) => entry.id))
       .items.map((item) => [String(item.id), item.poster || ''] as const)
   )
+  // What is held here now, per show in the section: the panel works each
+  // side's own set back from this and the parts.
+  const wanted = new Set(entries.map((entry) => entry.id))
+  const held = new Map<string, Ep[]>()
+  for (const row of db.history()) {
+    const id = String(row.id)
+    if (!wanted.has(id) || row.season == null || row.episode == null) continue
+    const list = held.get(id) ?? []
+    list.push({ season: row.season, episode: row.episode })
+    held.set(id, list)
+  }
   return entries.map((entry) => {
     const services: ShowSyncRow['services'] = {}
     for (const [service, part] of Object.entries(entry.parts) as [
@@ -2029,6 +2040,7 @@ function showSyncRows(): ShowSyncRow[] {
       year: entry.year ?? '',
       poster: posters.get(entry.id) ?? '',
       at: entry.at,
+      held: held.get(entry.id) ?? [],
       services
     }
   })

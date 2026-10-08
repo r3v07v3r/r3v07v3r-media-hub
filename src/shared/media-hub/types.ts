@@ -1189,6 +1189,10 @@ export interface ShowSyncRow {
   poster: string
   /** When a pass last added to this row, ms. */
   at: number
+  /** Every episode of the show held here now, merged: what each side held
+   *  before the merge is worked back from this and the parts below
+   *  (shared/media-hub/showSyncSides.ts). */
+  held: SyncEpisode[]
   services: Partial<Record<EpisodeSyncService, ShowSyncServiceRow>>
 }
 

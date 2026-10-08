@@ -1,74 +1,99 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
-import type {
-  EpisodeSyncService,
-  ShowSyncRow,
-  ShowSyncServiceRow,
-  SyncEpisode
-} from '@shared/media-hub/types'
+import type { EpisodeSyncService, ShowSyncRow } from '@shared/media-hub/types'
+import {
+  seasonTotals,
+  showSyncSides,
+  type SeasonBubble,
+  type ShowSyncSideKey
+} from '@shared/media-hub/showSyncSides'
 import overlayStyles from './Overlays.module.css'
 import styles from './SyncReviewPanel.module.css'
 
 const SERVICE_NAMES: Record<EpisodeSyncService, string> = { simkl: 'Simkl', trakt: 'Trakt' }
+const SIDE_NAMES: Record<ShowSyncSideKey, string> = { local: 'Here', ...SERVICE_NAMES }
 
-/** "1–3, 5" for episodes 1, 2, 3 and 5 of one season. */
-function episodeRanges(numbers: number[]): string {
-  const sorted = [...new Set(numbers)].sort((a, b) => a - b)
-  const parts: string[] = []
-  for (let i = 0; i < sorted.length; i++) {
-    let j = i
-    while (j + 1 < sorted.length && sorted[j + 1] === sorted[j] + 1) j++
-    parts.push(j > i ? `${sorted[i]}–${sorted[j]}` : String(sorted[i]))
-    i = j
-  }
-  return parts.join(', ')
+/** Episodes per season, per title, kept while the app runs: the panel is
+ *  opened and closed many times for the same rows, and main's own cache
+ *  still costs a round trip each time. */
+const totalsCache = new Map<string, Map<number, number>>()
+
+/** The title's episodes per season, from its metadata, once it has loaded;
+ *  an empty map until then and when the lookup fails (no season turns green
+ *  without one). */
+function useSeasonTotals(row: ShowSyncRow): Map<number, number> {
+  const [totals, setTotals] = useState<Map<number, number>>(
+    () => totalsCache.get(row.id) ?? new Map()
+  )
+  useEffect(() => {
+    // The initial state already read the cache; a row is keyed by its id.
+    if (totalsCache.has(row.id)) return
+    const api = window.api?.mediaHub?.catalog
+    if (!api) return
+    let current = true
+    api
+      .meta(row.type, row.id)
+      .then((item) => {
+        const next = seasonTotals(item.videos)
+        totalsCache.set(row.id, next)
+        if (current) setTotals(next)
+      })
+      .catch(() => {})
+    return () => {
+      current = false
+    }
+  }, [row.id, row.type])
+  return totals
 }
 
-function count(list: SyncEpisode[]): string {
-  return `${list.length} ${list.length === 1 ? 'episode' : 'episodes'}`
+function bubbleTitle(bubble: SeasonBubble, side: string): string {
+  const season = `Season ${bubble.season}`
+  const progress =
+    bubble.state === 'done'
+      ? `all ${bubble.total} episodes`
+      : bubble.state === 'none'
+        ? 'nothing watched'
+        : bubble.total
+          ? `${bubble.watched} of ${bubble.total} episodes, up to episode ${bubble.last}`
+          : `${bubble.watched} episodes, up to episode ${bubble.last}`
+  const blocked = bubble.blocked ? ` · cannot be sent to ${side}, so it stays as it is there` : ''
+  return `${season} — ${progress}${blocked}`
 }
 
-/** One line per season: what arrived, what was sent, what cannot be sent. */
-function seasonLines(part: ShowSyncServiceRow, name: string): string[] {
-  const seasons = [
-    ...new Set([...part.arrived, ...part.sent, ...part.unsendable].map((ep) => ep.season))
-  ].sort((a, b) => a - b)
-  return seasons.map((season) => {
-    const of = (list: SyncEpisode[]): number[] =>
-      list.filter((ep) => ep.season === season).map((ep) => ep.episode)
-    const said: string[] = []
-    const arrived = of(part.arrived)
-    const sent = of(part.sent)
-    const unsendable = of(part.unsendable)
-    if (arrived.length) said.push(`from ${name}: ${episodeRanges(arrived)}`)
-    if (sent.length) said.push(`sent to ${name}: ${episodeRanges(sent)}`)
-    if (unsendable.length) said.push(`not at ${name}: ${episodeRanges(unsendable)}`)
-    if (part.blockedSeasons.includes(season)) said.push(`cannot be sent to ${name}`)
-    return `${season === 0 ? 'Specials' : `Season ${season}`} — ${said.join(' · ')}`
-  })
+/** One season on one side: green when every episode is held, blue with the
+ *  episode reached when some are, grey when none are. */
+function Bubble({ bubble, side }: { bubble: SeasonBubble; side: string }) {
+  const className = [
+    styles.bubble,
+    bubble.state === 'done' ? styles.bubbleDone : '',
+    bubble.state === 'part' ? styles.bubblePart : '',
+    bubble.state === 'none' ? styles.bubbleNone : '',
+    bubble.blocked ? styles.bubbleBlocked : ''
+  ]
+    .filter(Boolean)
+    .join(' ')
+  return (
+    <span className={className} title={bubbleTitle(bubble, side)}>
+      S{bubble.season}
+      {bubble.state === 'part' && <em>E{bubble.last}</em>}
+    </span>
+  )
 }
 
-/** A show the automatic step merged: what arrived from where and what was
- *  sent where, the seasons and episodes on demand, and the choices. */
+/** A show the automatic step merged: a line per side with what that side
+ *  held on its own, and Use beside each to make every other side match it. */
 function ShowRow({ row }: { row: ShowSyncRow }) {
   const { decideSyncShow } = useAppState()
-  const [open, setOpen] = useState(false)
-  const services = (Object.keys(row.services) as EpisodeSyncService[]).filter(
-    (service) => row.services[service]
-  )
-  const arrivedAnywhere = services.some((service) => row.services[service]!.arrived.length)
-  const summary = services.flatMap((service) => {
-    const part = row.services[service]!
-    const name = SERVICE_NAMES[service]
-    const said: string[] = []
-    if (part.arrived.length) said.push(`${count(part.arrived)} from ${name}`)
-    if (part.sent.length) said.push(`${count(part.sent)} sent to ${name}`)
-    if (part.unsendable.length) said.push(`${count(part.unsendable)} cannot be sent to ${name}`)
-    return said
-  })
+  const totals = useSeasonTotals(row)
+  const sides = showSyncSides(row, totals)
+  const others = (key: ShowSyncSideKey): string =>
+    sides
+      .filter((side) => side.key !== key)
+      .map((side) => SIDE_NAMES[side.key])
+      .join(' and ')
   return (
     <div className={styles.showRow}>
       <div className={styles.row}>
@@ -77,73 +102,47 @@ function ShowRow({ row }: { row: ShowSyncRow }) {
           <span className={styles.itemTitle}>
             {row.title} {row.year ? `(${row.year})` : ''}
           </span>
-          <span className={styles.statusRow}>{summary.join(' · ')}</span>
         </div>
         <div className={styles.actions}>
-          {arrivedAnywhere && (
-            <button
-              type="button"
-              className={styles.actionButton}
-              title="Remove the episodes that arrived, here and at the service they came from"
-              onClick={() => decideSyncShow(row, 'undo')}
-            >
-              Undo
-            </button>
-          )}
-          <button
-            type="button"
-            className={styles.ignoreButton}
-            aria-expanded={open}
-            aria-label={`${open ? 'Hide' : 'Show'} seasons of ${row.title}`}
-            onClick={() => setOpen((value) => !value)}
-          >
-            <Icon name={open ? 'chevron-up' : 'chevron-down'} size={13} />
-          </button>
           <button
             type="button"
             className={styles.ignoreButton}
             aria-label={`Keep ${row.title} as merged`}
-            title="Keep as merged"
+            title="Keep as merged: every side now has everything"
             onClick={() => decideSyncShow(row, 'keep')}
           >
             <Icon name="x" size={13} />
           </button>
         </div>
       </div>
-      {open && (
-        <div className={styles.showDetail}>
-          {services.map((service) => {
-            const part = row.services[service]!
-            const name = SERVICE_NAMES[service]
-            return (
-              <div key={service} className={styles.serviceBlock}>
-                <span className={styles.serviceName}>{name}</span>
-                {seasonLines(part, name).map((line) => (
-                  <span key={line} className={styles.seasonLine}>
-                    {line}
-                  </span>
+      <div className={styles.sides}>
+        {sides.map((side) => {
+          const name = SIDE_NAMES[side.key]
+          const had = side.key === 'local' ? 'was here' : `${name} had`
+          return (
+            <div key={side.key} className={styles.side}>
+              <span className={styles.sideName}>{name}</span>
+              <div className={styles.bubbles}>
+                {side.seasons.map((bubble) => (
+                  <Bubble key={bubble.season} bubble={bubble} side={name} />
                 ))}
-                <div className={styles.serviceActions}>
-                  <button
-                    type="button"
-                    className={styles.actionButton}
-                    onClick={() => decideSyncShow(row, 'service-match-here', service)}
-                  >
-                    Make {name} match here
-                  </button>
-                  <button
-                    type="button"
-                    className={styles.actionButton}
-                    onClick={() => decideSyncShow(row, 'here-match-service', service)}
-                  >
-                    Make here match {name}
-                  </button>
-                </div>
               </div>
-            )
-          })}
-        </div>
-      )}
+              <button
+                type="button"
+                className={styles.actionButton}
+                title={`Make ${others(side.key)} match what ${had}`}
+                onClick={() =>
+                  side.key === 'local'
+                    ? decideSyncShow(row, 'undo')
+                    : decideSyncShow(row, 'here-match-service', side.key)
+                }
+              >
+                Use
+              </button>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -152,10 +151,13 @@ function ShowRow({ row }: { row: ShowSyncRow }) {
  *  syncDiscrepancies/syncShows/syncReviewOpen. Two sections.
  *
  *  Shows: what the automatic step merged, show by show (see
- *  main/media-hub/episodeSync.ts) — the episodes that arrived from each
- *  service and the ones sent to it. Merging both is what already happened,
- *  so the row's choices are Undo, the two "make one side match" overrides
- *  per service, and Keep (the x), which accepts the merge.
+ *  main/media-hub/episodeSync.ts), drawn as a line per side — here, then
+ *  each service with a part in the row — with a bubble per season showing
+ *  how far that side had got on its own (shared/media-hub/showSyncSides.ts).
+ *  Merging is what already happened, so the choices are the ways back:
+ *  Use beside a side makes every other side match it (here: undo; a
+ *  service: here-match-service, which also passes its set on to the other
+ *  service), and Keep (the x) accepts the merge.
  *
  *  Films: see tracking.ts's own header comment for how these
  *  disagreements are found and why nothing here is ever applied
@@ -194,9 +196,9 @@ export function SyncReviewPanel() {
           <div className={styles.headerText}>
             <span className={styles.title}>Sync review</span>
             <span className={styles.subtitle}>
-              Where this app and your tracking services differed. Shows list the episodes that were
-              merged, to keep or undo. Films wait for you to pick which side is right, or to be
-              ignored.
+              Where this app and your tracking services differed. For a show, each line is what one
+              side had before they were merged: Use makes the others match it, the x keeps the
+              merge. Films wait for you to pick which side is right, or to be ignored.
             </span>
           </div>
           <button
