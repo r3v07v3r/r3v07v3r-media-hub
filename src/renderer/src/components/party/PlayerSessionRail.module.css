@@ -266,3 +266,72 @@
   margin-right: 5px;
   color: #bbc0ff;
 }
+/* Hosting from the film: a name and one button. Same dark, self-contained
+   look as the composer; this floats over the picture, not the app. */
+.hostForm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.hostForm input {
+  min-height: 32px;
+  padding: 4px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 9px;
+  outline: 0;
+  background: rgba(0, 0, 0, 0.18);
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+}
+.hostForm input:focus {
+  border-color: rgba(101, 230, 247, 0.6);
+}
+.hostForm button {
+  min-height: 33px;
+  border-radius: 9px;
+  color: #05202a;
+  background: #65e6f7;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+.hostForm button:disabled {
+  opacity: 0.45;
+}
+.hostError {
+  color: #ff9b9b;
+  font-size: 11px;
+  text-align: center;
+}
+/* The code hosting answered with, for the host to pass on. */
+.invite {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid rgba(101, 230, 247, 0.3);
+  border-radius: 10px;
+  background: rgba(101, 230, 247, 0.08);
+  font-size: 11px;
+}
+.invite span {
+  color: rgba(255, 255, 255, 0.6);
+}
+.invite code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #fff;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.invite button {
+  padding: 4px 9px;
+  border-radius: 7px;
+  color: #05202a;
+  background: #65e6f7;
+  font-size: 11px;
+  font-weight: 700;
+}

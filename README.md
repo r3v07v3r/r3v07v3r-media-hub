@@ -248,7 +248,10 @@ Two different things, deliberately:
   relay is connected it attaches to that too, and the single invite carries every route. Guests
   chat, suggest titles and vote on a shared queue; play, pause and seek are synchronized. By
   default only the host controls playback; **Everyone can control playback** hands that to guests.
-  Each guest plays the title from their own sources, so everyone needs TorBox or Jellyfin.
+  Each guest plays the title from their own sources, so everyone needs TorBox or Jellyfin. A party
+  can also start partway through a film: the player's party rail has its own **Start a Watch
+  Party**, the party is born knowing the title and the live playhead, and guests land where you
+  are rather than at the start.
 - **A Room** is a standing group: the family, the film friends. Creating one needs the relay;
   joining with someone's room code does not. You see who is around and, per room and only if you
   turn on **Share what I'm watching here**, what they are watching. Then choose, each time, whether
