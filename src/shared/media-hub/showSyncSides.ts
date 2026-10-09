@@ -52,32 +52,39 @@ function without(all: readonly SyncEpisode[], gone: readonly SyncEpisode[]): Syn
 function bubble(
   season: number,
   held: readonly SyncEpisode[],
-  total: number,
+  expected: ReadonlySet<number> | undefined,
   blocked: boolean
 ): SeasonBubble {
-  const mine = held.filter((ep) => ep.season === season)
-  const watched = new Set(mine.map((ep) => ep.episode)).size
-  const last = mine.reduce((max, ep) => Math.max(max, ep.episode), 0)
-  const state: SeasonBubble['state'] =
-    watched === 0 ? 'none' : total > 0 && watched >= total ? 'done' : 'part'
+  const numbers = new Set(held.filter((ep) => ep.season === season).map((ep) => ep.episode))
+  const watched = numbers.size
+  const last = Math.max(0, ...numbers)
+  const total = expected?.size ?? 0
+  // Done means every listed episode is held, by number: ten held out of
+  // ten listed is not it when the ten are E2–E11 (a service's own
+  // numbering, or a list that has since moved).
+  const done = total > 0 && [...expected!].every((episode) => numbers.has(episode))
+  const state: SeasonBubble['state'] = watched === 0 ? 'none' : done ? 'done' : 'part'
   return { season, watched, last, total, state, blocked }
 }
 
+/** The episode numbers each season has, as the title's metadata lists them. */
+export type SeasonEpisodes = ReadonlyMap<number, ReadonlySet<number>>
+
 /**
- * The sides of one row. `totals` is episodes per season as the title's
+ * The sides of one row. `listed` is the episodes per season as the title's
  * metadata lists them, when the panel has them; a season not in it, or not
  * yet loaded, gets no green. Specials (season 0) are left out: the
  * comparison never looks at them.
  */
 export function showSyncSides(
   row: Pick<ShowSyncRow, 'held' | 'services'>,
-  totals: ReadonlyMap<number, number> = new Map()
+  listed: SeasonEpisodes = new Map()
 ): ShowSyncSide[] {
   const held = (row.held ?? []).filter((ep) => ep.season > 0)
   const services = (Object.keys(row.services) as EpisodeSyncService[]).filter(
     (service) => row.services[service]
   )
-  const seasons = new Set<number>(totals.keys())
+  const seasons = new Set<number>(listed.keys())
   for (const ep of held) seasons.add(ep.season)
   for (const service of services) {
     for (const season of row.services[service]!.blockedSeasons) seasons.add(season)
@@ -90,7 +97,7 @@ export function showSyncSides(
   const sides: ShowSyncSide[] = [
     {
       key: 'local',
-      seasons: ordered.map((season) => bubble(season, local, totals.get(season) ?? 0, false))
+      seasons: ordered.map((season) => bubble(season, local, listed.get(season), false))
     }
   ]
   for (const service of services) {
@@ -100,23 +107,28 @@ export function showSyncSides(
     sides.push({
       key: service,
       seasons: ordered.map((season) =>
-        bubble(season, theirs, totals.get(season) ?? 0, blocked.has(season))
+        bubble(season, theirs, listed.get(season), blocked.has(season))
       )
     })
   }
   return sides
 }
 
-/** Episodes per season from a title's episode list, specials left out. */
-export function seasonTotals(
-  videos: readonly { season?: number | null; unplayable?: boolean }[] | undefined
-): Map<number, number> {
-  const totals = new Map<number, number>()
+/** The episode numbers per season from a title's episode list, specials
+ *  left out. */
+export function seasonEpisodes(
+  videos:
+    readonly { season?: number | null; episode?: number | null; unplayable?: boolean }[] | undefined
+): Map<number, Set<number>> {
+  const listed = new Map<number, Set<number>>()
   for (const video of videos ?? []) {
     if (video.unplayable) continue
     const season = Number(video.season)
-    if (!Number.isFinite(season) || season <= 0) continue
-    totals.set(season, (totals.get(season) ?? 0) + 1)
+    const episode = Number(video.episode)
+    if (!Number.isFinite(season) || season <= 0 || !Number.isFinite(episode)) continue
+    const numbers = listed.get(season) ?? new Set<number>()
+    numbers.add(episode)
+    listed.set(season, numbers)
   }
-  return totals
+  return listed
 }

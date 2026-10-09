@@ -5,9 +5,10 @@ import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import type { EpisodeSyncService, ShowSyncRow } from '@shared/media-hub/types'
 import {
-  seasonTotals,
+  seasonEpisodes,
   showSyncSides,
   type SeasonBubble,
+  type SeasonEpisodes,
   type ShowSyncSideKey
 } from '@shared/media-hub/showSyncSides'
 import overlayStyles from './Overlays.module.css'
@@ -16,37 +17,35 @@ import styles from './SyncReviewPanel.module.css'
 const SERVICE_NAMES: Record<EpisodeSyncService, string> = { simkl: 'Simkl', trakt: 'Trakt' }
 const SIDE_NAMES: Record<ShowSyncSideKey, string> = { local: 'Here', ...SERVICE_NAMES }
 
-/** Episodes per season, per title, kept while the app runs: the panel is
- *  opened and closed many times for the same rows, and main's own cache
- *  still costs a round trip each time. */
-const totalsCache = new Map<string, Map<number, number>>()
+/** The episodes listed per season, per title, kept while the app runs: the
+ *  panel is opened and closed many times for the same rows, and main's own
+ *  cache still costs a round trip each time. */
+const listedCache = new Map<string, SeasonEpisodes>()
 
 /** The title's episodes per season, from its metadata, once it has loaded;
  *  an empty map until then and when the lookup fails (no season turns green
  *  without one). */
-function useSeasonTotals(row: ShowSyncRow): Map<number, number> {
-  const [totals, setTotals] = useState<Map<number, number>>(
-    () => totalsCache.get(row.id) ?? new Map()
-  )
+function useSeasonEpisodes(row: ShowSyncRow): SeasonEpisodes {
+  const [listed, setListed] = useState<SeasonEpisodes>(() => listedCache.get(row.id) ?? new Map())
   useEffect(() => {
     // The initial state already read the cache; a row is keyed by its id.
-    if (totalsCache.has(row.id)) return
+    if (listedCache.has(row.id)) return
     const api = window.api?.mediaHub?.catalog
     if (!api) return
     let current = true
     api
       .meta(row.type, row.id)
       .then((item) => {
-        const next = seasonTotals(item.videos)
-        totalsCache.set(row.id, next)
-        if (current) setTotals(next)
+        const next = seasonEpisodes(item.videos)
+        listedCache.set(row.id, next)
+        if (current) setListed(next)
       })
       .catch(() => {})
     return () => {
       current = false
     }
   }, [row.id, row.type])
-  return totals
+  return listed
 }
 
 function bubbleTitle(bubble: SeasonBubble, side: string): string {
@@ -87,13 +86,25 @@ function Bubble({ bubble, side }: { bubble: SeasonBubble; side: string }) {
  *  held on its own, and Use beside each to make every other side match it. */
 function ShowRow({ row }: { row: ShowSyncRow }) {
   const { decideSyncShow } = useAppState()
-  const totals = useSeasonTotals(row)
-  const sides = showSyncSides(row, totals)
-  const others = (key: ShowSyncSideKey): string =>
-    sides
-      .filter((side) => side.key !== key)
-      .map((side) => SIDE_NAMES[side.key])
-      .join(' and ')
+  const listed = useSeasonEpisodes(row)
+  const sides = showSyncSides(row, listed)
+  const serviceNames = sides
+    .filter((side) => side.key !== 'local')
+    .map((side) => SIDE_NAMES[side.key])
+  /** What Use beside a side does, as exactly as a tooltip can. Beside a
+   *  service it is not "every side matches": here takes that service's set,
+   *  and the other service is sent what it had, but an episode the other
+   *  service recorded on its own is left there (planShowDecision). */
+  const titleForUse = (key: ShowSyncSideKey): string => {
+    if (key === 'local') {
+      return `Put ${serviceNames.join(' and ')} back to what was here: what came in from them is removed here and there`
+    }
+    const name = SIDE_NAMES[key]
+    const other = serviceNames.filter((n) => n !== name)
+    return other.length
+      ? `Make here match ${name}; ${other.join(' and ')} is sent what ${name} had, keeping what it recorded on its own`
+      : `Make here match ${name}`
+  }
   return (
     <div className={styles.showRow}>
       <div className={styles.row}>
@@ -118,7 +129,6 @@ function ShowRow({ row }: { row: ShowSyncRow }) {
       <div className={styles.sides}>
         {sides.map((side) => {
           const name = SIDE_NAMES[side.key]
-          const had = side.key === 'local' ? 'was here' : `${name} had`
           return (
             <div key={side.key} className={styles.side}>
               <span className={styles.sideName}>{name}</span>
@@ -130,7 +140,7 @@ function ShowRow({ row }: { row: ShowSyncRow }) {
               <button
                 type="button"
                 className={styles.actionButton}
-                title={`Make ${others(side.key)} match what ${had}`}
+                title={titleForUse(side.key)}
                 onClick={() =>
                   side.key === 'local'
                     ? decideSyncShow(row, 'undo')

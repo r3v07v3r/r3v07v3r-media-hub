@@ -122,6 +122,13 @@ export function PlayerSessionRail({ open, onClose }: { open: boolean; onClose: (
   const [hostError, setHostError] = useState<string | null>(null)
   const [inviteCode, setInviteCode] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  /** Every status read lands here: a code belongs to the party it was
+   *  answered for, and a normal leave emits no event of its own, so "not in
+   *  a party" is what clears it. */
+  const applyStatus = (next: PartyStatusResult): void => {
+    setStatus(next)
+    if (!next.inParty) setInviteCode(null)
+  }
 
   useEffect(() => {
     if (!open) return
@@ -129,7 +136,7 @@ export function PlayerSessionRail({ open, onClose }: { open: boolean; onClose: (
     if (!api) return
     api
       .status()
-      .then(setStatus)
+      .then(applyStatus)
       .catch(() => {})
     window.api?.mediaHub?.settings
       .get()
@@ -139,11 +146,10 @@ export function PlayerSessionRail({ open, onClose }: { open: boolean; onClose: (
       if (event.type === 'party-state') {
         api
           .status()
-          .then(setStatus)
+          .then(applyStatus)
           .catch(() => {})
       } else if (event.type === 'host-disconnected') {
-        setStatus({ inParty: false })
-        setInviteCode(null)
+        applyStatus({ inParty: false })
       } else if (event.type === 'chat') {
         setMessages((previous) => {
           if (previous.some((message) => message.id === event.chat.id)) return previous
@@ -185,7 +191,7 @@ export function PlayerSessionRail({ open, onClose }: { open: boolean; onClose: (
       window.api?.mediaHub?.settings.setPartyDisplayName(name).catch(() => {})
       api
         .status()
-        .then(setStatus)
+        .then(applyStatus)
         .catch(() => {})
     } catch (reason) {
       setHostError(reason instanceof Error ? reason.message : 'Could not start a watch party.')

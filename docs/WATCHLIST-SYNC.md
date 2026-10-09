@@ -598,9 +598,9 @@ each service the row has a part for. On each line is a bubble per season
 showing how far that side had got **on its own, before the merge** (worked
 back from what is held here now and the row's parts,
 `src/shared/media-hub/showSyncSides.ts`, tested in
-`tests/showSyncSides.test.ts`): green when every episode of the season is
-held (judged against the title's episode list, fetched as the row is
-shown), blue with the episode reached when some are, grey when none are. A
+`tests/showSyncSides.test.ts`): green when every episode the title's episode
+list names for the season is held, by number (the list is fetched as the
+row is shown), blue with the episode reached when some are, grey when none are. A
 season a service cannot be sent is drawn dashed on that service's line.
 Merging is what has already happened, so the choices are the ways back,
 each a **Use** button beside a side, and the x:

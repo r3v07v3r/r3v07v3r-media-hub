@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { seasonTotals, showSyncSides } from '../src/shared/media-hub/showSyncSides'
+import { seasonEpisodes, showSyncSides } from '../src/shared/media-hub/showSyncSides'
 
 const ep = (season: number, episode: number): { season: number; episode: number } => ({
   season,
@@ -37,8 +37,8 @@ test('here is held minus what arrived; a service is held minus what it lacked', 
       }
     },
     new Map([
-      [1, 12],
-      [2, 12]
+      [1, new Set(run(1, 1, 12).map((e) => e.episode))],
+      [2, new Set(run(2, 1, 12).map((e) => e.episode))]
     ])
   )
   assert.deepEqual(
@@ -85,18 +85,30 @@ test('no total means no green, and a season the service cannot take is marked', 
   ])
 })
 
-test('seasons come from the totals too, and specials are left out everywhere', () => {
+test('done means every listed episode by number, not a matching count', () => {
+  // Ten held, ten listed, but the held ones are E2–E11: E1 is missing.
+  const sides = showSyncSides(
+    { held: run(1, 2, 11), services: {} },
+    new Map([[1, new Set(run(1, 1, 10).map((e) => e.episode))]])
+  )
+  assert.deepEqual(
+    sides[0].seasons.map((s) => [s.state, s.watched, s.total, s.last]),
+    [['part', 10, 10, 11]]
+  )
+})
+
+test('seasons come from the listed episodes too, and specials are left out everywhere', () => {
   const sides = showSyncSides(
     {
       held: [ep(0, 1), ep(1, 1)],
       services: { trakt: { arrived: [ep(1, 1)], sent: [], unsendable: [], blockedSeasons: [] } }
     },
-    seasonTotals([
-      { season: 0 },
-      { season: 1 },
-      { season: 1 },
-      { season: 2 },
-      { season: 2, unplayable: true }
+    seasonEpisodes([
+      { season: 0, episode: 1 },
+      { season: 1, episode: 1 },
+      { season: 1, episode: 2 },
+      { season: 2, episode: 1 },
+      { season: 2, episode: 2, unplayable: true }
     ])
   )
   assert.deepEqual(
