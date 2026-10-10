@@ -905,6 +905,11 @@ export function registerWatchPartyIpc(): void {
           })
         : encodeShareCode({ lan, wan, secret })
     hostState.code = code
+    // Both renderers hear the party exists now, not at the first join: the
+    // player rail hosts too, and the main window otherwise keeps showing
+    // the host/join form (and cannot leave) until a guest's arrival
+    // triggers the first roster broadcast.
+    if (party === hostState) broadcastPartyState()
     return {
       ok: true,
       code,

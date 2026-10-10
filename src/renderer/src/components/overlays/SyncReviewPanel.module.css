@@ -172,7 +172,8 @@
   color: var(--text-muted);
 }
 
-/* A show row is the ordinary row plus its seasons, opened on demand. */
+/* A show row is the ordinary row (poster, title, the x) over one line per
+   side: its name, a bubble per season, and Use. */
 .showRow {
   display: flex;
   flex-direction: column;
@@ -180,31 +181,67 @@
 }
 .showRow .row {
   border-bottom: none;
+  padding-bottom: 6px;
 }
-.showDetail {
+.sides {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 6px;
   padding: 0 22px 14px 76px;
 }
-.serviceBlock {
+.side {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  gap: 10px;
 }
-.serviceName {
-  font-size: 12px;
+.sideName {
+  flex: 0 0 48px;
+  font-size: 11.5px;
   font-weight: 600;
   color: var(--text-secondary);
 }
-.seasonLine {
-  font-size: 11.5px;
-  line-height: 1.5;
-  color: var(--text-muted);
-}
-.serviceActions {
+.bubbles {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 4px;
+  gap: 5px;
+}
+/* One season on one side. Green: every episode held. Blue, with the
+   episode reached: some. Grey: none. Dashed: a season the service cannot
+   be sent, which stays as it is there whatever is chosen. */
+.bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 11px;
+  border: 1px solid transparent;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: default;
+}
+.bubble em {
+  font-style: normal;
+  font-weight: 600;
+  opacity: 0.85;
+}
+.bubbleDone {
+  color: #0b2f1f;
+  background: var(--accent-green);
+}
+.bubblePart {
+  color: #fff;
+  background: var(--accent-blue);
+}
+.bubbleNone {
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.08);
+}
+.bubbleBlocked {
+  border-style: dashed;
+  border-color: rgba(255, 255, 255, 0.35);
+  opacity: 0.7;
 }

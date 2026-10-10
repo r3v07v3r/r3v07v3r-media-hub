@@ -593,25 +593,35 @@ pulls write the record all the same. What the phone takes in reaches the
 desktop through the services, and the desktop's own pulls record it there.
 
 **The shows section of the review panel.** The desktop's **Sync review**
-panel lists each show in the record: how many episodes arrived from which
-service, how many were sent where, how many cannot be sent, and, opened,
-which, season by season. Merging both is what has already happened, so the
-choices are the ways back from it:
+panel lists each show in the record as a line per side: **Here**, then
+each service the row has a part for. On each line is a bubble per season
+showing how far that side had got **on its own, before the merge** (worked
+back from what is held here now and the row's parts,
+`src/shared/media-hub/showSyncSides.ts`, tested in
+`tests/showSyncSides.test.ts`): green when every episode the title's episode
+list names for the season is held, by number (the list is fetched as the
+row is shown), blue with the episode reached when some are, grey when none are. A
+season a service cannot be sent is drawn dashed on that service's line.
+Merging is what has already happened, so the choices are the ways back,
+each a **Use** button beside a side, and the x:
 
 - **Keep** (the x): the merge stands, and the row goes.
-- **Undo**: the episodes that arrived are removed here, at the service
-  they came from, and at any service the comparison passed them on to.
-- **Make _service_ match here**: the service ends up with what was held
-  here before the merge. What arrived from it is removed here and there
-  (and wherever it was passed on), and what it lacked is sent again.
-- **Make here match _service_**: this app ends up with that service's set.
-  What was held here and not there is removed here, taken back from the
-  service where the comparison had sent it, and removed at the other
-  service as well, except what this app saw arrive from that other
-  service. That one was recorded there by itself, not put there from here,
-  and like a planned title (rules 2 and 3) a removal only goes where this
-  app put the thing. What arrived from the service is sent on to the other
-  service (rule 1).
+- **Use** beside **Here** (undo): the episodes that arrived are removed
+  here, at the service they came from, and at any service the comparison
+  passed them on to, so every side is back to what was held here.
+- **Use** beside a service (make here match it): this app ends up with
+  that service's set. What was held here and not there is removed here,
+  taken back from the service where the comparison had sent it, and
+  removed at the other service as well, except what this app saw arrive
+  from that other service. That one was recorded there by itself, not put
+  there from here, and like a planned title (rules 2 and 3) a removal only
+  goes where this app put the thing. What arrived from the service is sent
+  on to the other service (rule 1).
+
+The record also keeps, per service, the "make the service match here"
+choice (`service-match-here`: what arrived from it is removed here and
+there, and what it lacked is sent again), which the panel no longer
+offers; Use beside Here covers it without a second add at Trakt.
 
 These are the only way an episode is ever removed at a service, and each
 is somebody's decision about one show. Every removal names its episodes; a

@@ -114,6 +114,22 @@ export function PlayerSessionRail({ open, onClose }: { open: boolean; onClose: (
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const endRef = useRef<HTMLDivElement>(null)
+  // Hosting from here, mid-film: the saved display name, the form's state,
+  // and the invite code hosting answered with (party:status never returns
+  // it, so this window keeps its own copy). The code is kept with the host
+  // id of the party it was answered for and shown only while status names
+  // that same host: the rail is unsubscribed while closed, so it cannot
+  // count on seeing the leave that ended party A before party B, hosted
+  // from the main window, is the one on screen.
+  const [hostName, setHostName] = useState('')
+  const [hosting, setHosting] = useState(false)
+  const [hostError, setHostError] = useState<string | null>(null)
+  const [invite, setInvite] = useState<{ code: string; hostId: string } | null>(null)
+  const [copied, setCopied] = useState(false)
+  const applyStatus = (next: PartyStatusResult): void => {
+    setStatus(next)
+    if (!next.inParty) setInvite(null)
+  }
 
   useEffect(() => {
     if (!open) return
@@ -121,16 +137,20 @@ export function PlayerSessionRail({ open, onClose }: { open: boolean; onClose: (
     if (!api) return
     api
       .status()
-      .then(setStatus)
+      .then(applyStatus)
+      .catch(() => {})
+    window.api?.mediaHub?.settings
+      .get()
+      .then((settings) => setHostName((name) => name || settings.partyDisplayName || ''))
       .catch(() => {})
     return api.onEvent((event) => {
       if (event.type === 'party-state') {
         api
           .status()
-          .then(setStatus)
+          .then(applyStatus)
           .catch(() => {})
       } else if (event.type === 'host-disconnected') {
-        setStatus({ inParty: false })
+        applyStatus({ inParty: false })
       } else if (event.type === 'chat') {
         setMessages((previous) => {
           if (previous.some((message) => message.id === event.chat.id)) return previous
@@ -156,10 +176,47 @@ export function PlayerSessionRail({ open, onClose }: { open: boolean; onClose: (
     }
   }
 
+  /** Starts a party around the film on screen. Main seeds the party with
+   *  the title and the live playhead (watchParty.ts's host path), so whoever
+   *  joins lands where this player is, not at the start. */
+  async function host(): Promise<void> {
+    const name = hostName.trim()
+    const api = window.api?.mediaHub?.party
+    if (!name || hosting || !api) return
+    setHosting(true)
+    setHostError(null)
+    try {
+      const result = await api.host(name)
+      setCopied(false)
+      window.api?.mediaHub?.settings.setPartyDisplayName(name).catch(() => {})
+      const next = await api.status()
+      applyStatus(next)
+      if (next.inParty && next.role === 'host') {
+        setInvite({ code: result.code, hostId: next.selfId ?? '' })
+      }
+    } catch (reason) {
+      setHostError(reason instanceof Error ? reason.message : 'Could not start a watch party.')
+    } finally {
+      setHosting(false)
+    }
+  }
+
+  async function copyInvite(): Promise<void> {
+    if (!invite) return
+    try {
+      await window.api?.mediaHub?.clipboard.write(invite.code)
+      setCopied(true)
+    } catch {
+      setCopied(false)
+    }
+  }
+
   if (!open) return null
 
   const members = status?.members ?? []
   const inParty = status?.inParty === true
+  const showInvite =
+    inParty && status?.role === 'host' && invite !== null && status.selfId === invite.hostId
 
   return (
     <aside className={styles.rail} aria-label="Watch Party controls">
@@ -177,6 +234,15 @@ export function PlayerSessionRail({ open, onClose }: { open: boolean; onClose: (
 
       {inParty ? (
         <>
+          {showInvite && (
+            <div className={styles.invite}>
+              <span>Invite code</span>
+              <code>{invite.code}</code>
+              <button type="button" onClick={() => void copyInvite()}>
+                {copied ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+          )}
           <div className={styles.memberStrip} aria-label="People in this watch party">
             {members.slice(0, 5).map((member) => (
               <span key={member.id} title={`${member.name}${member.isHost ? ' (host)' : ''}`}>
@@ -232,9 +298,29 @@ export function PlayerSessionRail({ open, onClose }: { open: boolean; onClose: (
           </button>
         </>
       ) : (
-        <p className={styles.empty}>
-          Open the Rooms panel in the app to start or join a Watch Party.
-        </p>
+        <form
+          className={styles.hostForm}
+          onSubmit={(event) => {
+            event.preventDefault()
+            void host()
+          }}
+        >
+          <p className={styles.empty}>
+            Start a Watch Party here and friends join the film where you are now. To join someone
+            else’s, use the Rooms panel in the app.
+          </p>
+          <input
+            value={hostName}
+            onChange={(event) => setHostName(event.target.value)}
+            placeholder="Your name"
+            maxLength={40}
+            aria-label="Your name in the party"
+          />
+          <button type="submit" disabled={!hostName.trim() || hosting}>
+            {hosting ? 'Starting…' : 'Start a Watch Party'}
+          </button>
+          {hostError && <span className={styles.hostError}>{hostError}</span>}
+        </form>
       )}
     </aside>
   )
