@@ -116,18 +116,19 @@ export function PlayerSessionRail({ open, onClose }: { open: boolean; onClose: (
   const endRef = useRef<HTMLDivElement>(null)
   // Hosting from here, mid-film: the saved display name, the form's state,
   // and the invite code hosting answered with (party:status never returns
-  // it, so this window keeps its own copy while the party lasts).
+  // it, so this window keeps its own copy). The code is kept with the host
+  // id of the party it was answered for and shown only while status names
+  // that same host: the rail is unsubscribed while closed, so it cannot
+  // count on seeing the leave that ended party A before party B, hosted
+  // from the main window, is the one on screen.
   const [hostName, setHostName] = useState('')
   const [hosting, setHosting] = useState(false)
   const [hostError, setHostError] = useState<string | null>(null)
-  const [inviteCode, setInviteCode] = useState<string | null>(null)
+  const [invite, setInvite] = useState<{ code: string; hostId: string } | null>(null)
   const [copied, setCopied] = useState(false)
-  /** Every status read lands here: a code belongs to the party it was
-   *  answered for, and a normal leave emits no event of its own, so "not in
-   *  a party" is what clears it. */
   const applyStatus = (next: PartyStatusResult): void => {
     setStatus(next)
-    if (!next.inParty) setInviteCode(null)
+    if (!next.inParty) setInvite(null)
   }
 
   useEffect(() => {
@@ -186,13 +187,13 @@ export function PlayerSessionRail({ open, onClose }: { open: boolean; onClose: (
     setHostError(null)
     try {
       const result = await api.host(name)
-      setInviteCode(result.code)
       setCopied(false)
       window.api?.mediaHub?.settings.setPartyDisplayName(name).catch(() => {})
-      api
-        .status()
-        .then(applyStatus)
-        .catch(() => {})
+      const next = await api.status()
+      applyStatus(next)
+      if (next.inParty && next.role === 'host') {
+        setInvite({ code: result.code, hostId: next.selfId ?? '' })
+      }
     } catch (reason) {
       setHostError(reason instanceof Error ? reason.message : 'Could not start a watch party.')
     } finally {
@@ -201,9 +202,9 @@ export function PlayerSessionRail({ open, onClose }: { open: boolean; onClose: (
   }
 
   async function copyInvite(): Promise<void> {
-    if (!inviteCode) return
+    if (!invite) return
     try {
-      await window.api?.mediaHub?.clipboard.write(inviteCode)
+      await window.api?.mediaHub?.clipboard.write(invite.code)
       setCopied(true)
     } catch {
       setCopied(false)
@@ -214,7 +215,8 @@ export function PlayerSessionRail({ open, onClose }: { open: boolean; onClose: (
 
   const members = status?.members ?? []
   const inParty = status?.inParty === true
-  const showInvite = inParty && status?.role === 'host' && inviteCode
+  const showInvite =
+    inParty && status?.role === 'host' && invite !== null && status.selfId === invite.hostId
 
   return (
     <aside className={styles.rail} aria-label="Watch Party controls">
@@ -235,7 +237,7 @@ export function PlayerSessionRail({ open, onClose }: { open: boolean; onClose: (
           {showInvite && (
             <div className={styles.invite}>
               <span>Invite code</span>
-              <code>{inviteCode}</code>
+              <code>{invite.code}</code>
               <button type="button" onClick={() => void copyInvite()}>
                 {copied ? 'Copied' : 'Copy'}
               </button>
