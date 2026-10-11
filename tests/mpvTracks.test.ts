@@ -401,6 +401,93 @@ async function main(): Promise<void> {
     )
   })
 
+  // --- Hang watchdog (MpvPlayer.checkForHang) -------------------------------
+  // A player whose socket swallows every request, with a stub child whose
+  // kill() is recorded: the shape of mpv stuck in a blocking read, which is
+  // what left a frozen picture over the whole app (see HANG_MS in mpv.ts).
+
+  type Silent = {
+    player: MpvPlayer
+    killed: () => boolean
+    hung: () => number
+    receive: (message: object) => void
+  }
+  function silentPlayer(): Silent {
+    const player = new MpvPlayer()
+    let killed = false
+    let hung = 0
+    const inner = player as unknown as {
+      socket: unknown
+      child: unknown
+      onHung: () => void
+      onData(chunk: string): void
+    }
+    inner.socket = {
+      write: () => true,
+      destroy: () => undefined
+    }
+    inner.child = {
+      killed: false,
+      kill: () => {
+        killed = true
+        return true
+      },
+      once: (_event: string, handler: () => void) => setImmediate(handler)
+    }
+    inner.onHung = () => {
+      hung++
+    }
+    return {
+      player,
+      killed: () => killed,
+      hung: () => hung,
+      receive: (message) => inner.onData(`${JSON.stringify(message)}\n`)
+    }
+  }
+  await checkAsync('a request unanswered for ten silent seconds kills the player', async () => {
+    const { player, killed, hung } = silentPlayer()
+    const now = Date.now()
+    const seek = player.command('seek', 100, 'absolute')
+    assert.strictEqual(player.checkForHang(now + 5_000), false, 'five seconds is not a hang')
+    assert.strictEqual(player.checkForHang(now + 10_500), true, 'ten seconds is')
+    await assert.rejects(seek, /shut down/)
+    await settle()
+    assert.ok(killed(), 'the process was not killed')
+    assert.strictEqual(hung(), 1, 'onHung should have been told exactly once')
+  })
+
+  await checkAsync('a player that is still talking is never killed', async () => {
+    const { player, killed, receive } = silentPlayer()
+    const now = Date.now()
+    void player.command('seek', 100, 'absolute').catch(() => {})
+    // mpv emits time-pos several times a second while it plays; one such
+    // event after the request means the core is alive, however slow this
+    // particular command is.
+    receive({ event: 'property-change', id: 999, data: 101 })
+    assert.strictEqual(player.checkForHang(now + 30_000), false)
+    assert.ok(!killed())
+    await player.kill()
+  })
+
+  await checkAsync('nothing is judged while a file is opening', async () => {
+    const { player, killed } = silentPlayer()
+    const now = Date.now()
+    // loadFile sends `loadfile` and then waits on file-loaded, during which
+    // mpv blocks on the network by design. The hang check stands down.
+    const load = player.loadFile('https://example.com/x.mkv')
+    await settle()
+    assert.strictEqual(player.checkForHang(now + 30_000), false)
+    assert.ok(!killed())
+    await player.kill()
+    await load.catch(() => {})
+  })
+
+  await checkAsync('an idle player with nothing outstanding is left alone', async () => {
+    const { player, killed } = silentPlayer()
+    assert.strictEqual(player.checkForHang(Date.now() + 60_000), false)
+    assert.ok(!killed())
+  })
+
   console.log(`
 ${pass} checks passed`)
 }
