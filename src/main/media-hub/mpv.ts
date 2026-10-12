@@ -313,6 +313,8 @@ export class MpvPlayer {
   /** True between `loadfile` and `file-loaded`, when the hang check stands down. */
   private loading = false
   private hangTimer: NodeJS.Timeout | null = null
+  /** The most recent request that gave up waiting — see checkForHang. */
+  private lastTimedOut: { sentAt: number; timedOutAt: number; description: string } | null = null
 
   get running(): boolean {
     return Boolean(this.child && !this.child.killed && this.socket)
@@ -470,6 +472,7 @@ export class MpvPlayer {
       this.socket = null
       this.child = null
       this.failAllPending(new Error('mpv exited'))
+      this.forgetProcessState()
     })
 
     await this.connect()
@@ -489,20 +492,35 @@ export class MpvPlayer {
    * whether it did. `now` is a parameter for the tests' sake.
    */
   checkForHang(now = Date.now()): boolean {
-    if (!this.child || this.loading || this.pending.size === 0) return false
+    if (!this.child || this.loading) return false
+    // Two things have to be true at once: a request has gone unanswered for
+    // HANG_MS, and mpv has said NOTHING for HANG_MS. The second alone is a
+    // paused player nobody is talking to; the first alone is a slow command
+    // from a core still emitting time-pos. A message arriving after the
+    // request does not clear it — a last time-pos event can slip out just
+    // before the loop wedges — it only restarts the silence clock.
+    if (now - this.lastMessageAt < HANG_MS) return false
     let oldestSentAt = Infinity
-    let oldest: PendingRequest | undefined
+    let oldest = ''
     for (const entry of this.pending.values()) {
       if (entry.sentAt < oldestSentAt) {
         oldestSentAt = entry.sentAt
-        oldest = entry
+        oldest = entry.description
       }
     }
-    if (!oldest || now - oldestSentAt < HANG_MS || this.lastMessageAt >= oldestSentAt) return false
-    const unanswered = this.pending.size
+    // A request that already timed out still counts, as long as nothing has
+    // been heard since it gave up — otherwise a hang that outlasts
+    // COMMAND_TIMEOUT_MS with no further request behind it would go unseen.
+    const timedOut = this.lastTimedOut
+    if (timedOut && timedOut.timedOutAt > this.lastMessageAt && timedOut.sentAt < oldestSentAt) {
+      oldestSentAt = timedOut.sentAt
+      oldest = timedOut.description
+    }
+    if (now - oldestSentAt < HANG_MS) return false
     this.onLog(
-      `[r3] mpv has not answered "${oldest.description}" or anything after it for ` +
-        `${Math.round((now - oldestSentAt) / 1000)}s (${unanswered} waiting); killing the process`
+      `[r3] mpv has not answered "${oldest}" for ${Math.round((now - oldestSentAt) / 1000)}s ` +
+        `and has said nothing for ${Math.round((now - this.lastMessageAt) / 1000)}s ` +
+        `(${this.pending.size} waiting); killing the process`
     )
     void this.kill().then(() => this.onHung())
     return true
@@ -609,8 +627,10 @@ export class MpvPlayer {
       .join(' ')
     return new Promise<T>((resolve, reject) => {
       const id = this.nextId++
+      const sentAt = Date.now()
       const timer = setTimeout(() => {
         this.pending.delete(id)
+        this.lastTimedOut = { sentAt, timedOutAt: Date.now(), description }
         reject(new Error(`Player command timed out: ${description}`))
       }, COMMAND_TIMEOUT_MS)
       this.pending.set(id, {
@@ -618,7 +638,7 @@ export class MpvPlayer {
         reject,
         timer,
         description,
-        sentAt: Date.now()
+        sentAt
       })
       socket.write(`${JSON.stringify({ command: args, request_id: id })}\n`)
     })
@@ -792,6 +812,20 @@ export class MpvPlayer {
     }
     this.child = null
     this.failAllPending(new Error('The player was shut down.'))
+    this.forgetProcessState()
+  }
+
+  /** Observers and event handlers belong to a PROCESS: the bridge attaches
+   *  them once per spawn (observe_property has to be re-sent to a new mpv
+   *  anyway), so a respawn after a crash or a hang-kill must start from
+   *  none — or every end-file and client-message handler runs twice, and the
+   *  duplicate end-file sees `retried` already set and declares the one
+   *  permitted reload a failure. */
+  private forgetProcessState(): void {
+    this.observers.clear()
+    this.eventHandlers.clear()
+    this.lastTimedOut = null
+    this.lastMessageAt = 0
   }
 }
 
