@@ -54,10 +54,12 @@ import type {
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import {
   applyPushOutcome,
+  markPushed,
   queuePendingPush,
   reviewRemovalsOwed,
   splitForFlush,
   traktFollowUps,
+  verifyPushed,
   withPushedRemoteState
 } from '../../shared/media-hub/reconcileQueue'
 import {
@@ -160,6 +162,7 @@ import { cachedRemoteLists, fetchRemoteLists } from './remoteLists'
 import type { RemoteList } from '../../shared/media-hub/types'
 import {
   batchHistoryPayload,
+  completedListPayload,
   hasExpressibleSimklId,
   hasSimklContent,
   historyPayload,
@@ -176,6 +179,7 @@ import {
   forgetSimklWatchedCache,
   invalidateSimklWatchedCache,
   simklActivities,
+  simklCompletedAnimeImdbIds,
   simklLibrary,
   simklRequest,
   simklUrl,
@@ -1214,11 +1218,15 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
   // write the exact opposite of the local truth this pass exists to
   // defend. Presence in history is what "watched" means for a movie,
   // which is all this pass ever queues (see the header comment).
-  const locallyWatched = new Set(
-    getDatabase()
-      .history()
-      .map((entry) => String(entry.id))
-  )
+  const localHistory = getDatabase().history()
+  const locallyWatched = new Set(localHistory.map((entry) => String(entry.id)))
+  /** When each film was watched here, for the list move below. */
+  const watchedAtOf = new Map<string, string>()
+  for (const entry of localHistory) {
+    if (entry.type === 'movie' && entry.watchedAt) {
+      watchedAtOf.set(String(entry.id), entry.watchedAt)
+    }
+  }
 
   // Local has since come round to what the remote already said, so the
   // two sides now agree on their own — which is also how a "Use Simkl"
@@ -1255,6 +1263,23 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
         priority
       )
       const unmatched = new Set(unmatchedCatalogIds(response, items))
+      // A history add alone leaves a film the account has dropped exactly
+      // where it is (see completedListPayload). The list move is sent for
+      // the whole add group, matched items only, and a failure here fails
+      // the group the same way the add's own would: the history write
+      // stood, and is repeated harmlessly on the retry.
+      if (watched) {
+        const matched = items.filter((item) => !unmatched.has(String(item.id)))
+        const list = completedListPayload(matched, (id) => watchedAtOf.get(id))
+        if (list.movies?.length) {
+          if (disowned()) return new Set()
+          await simklRequest(
+            '/sync/add-to-list',
+            { method: 'POST', body: JSON.stringify(list) },
+            priority
+          )
+        }
+      }
       for (const entry of group) {
         if (unmatched.has(entry.id)) {
           failed.add(entry.id)
@@ -1362,14 +1387,21 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
   // Re-read rather than reusing `queue` — anything queued while the
   // requests above were in flight belongs to the next flush, not this
   // one's verdict.
+  // Settled entries leave; confirmed ones do NOT — a 200 from Simkl is an
+  // acceptance, not a sighting, and the entry stays queued (flagged, see
+  // markPushed) until a read of the account shows what was sent. Until
+  // then its title stays out of the review list and the flush leaves it
+  // alone; computeMovieDiscrepancies is where it is let go of, or counted
+  // as a failed attempt and sent again.
   const { queue: remaining, abandoned } = applyPushOutcome(
     // The captured profile, like every other queue touch in this function:
     // this read happens after the requests above and would otherwise pick up
     // whichever profile is active by now.
     pendingPushes(profile),
-    [...confirmed, ...settled],
+    settled,
     failed
   )
+  const landed = new Map([...pushedValue].filter(([id]) => confirmed.has(id)))
 
   // Suppression BEFORE the queue write, not after. Giving up on a push
   // and then asking about the same title again — in this very pass,
@@ -1388,7 +1420,7 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
 
   // Entries that were pushed and stayed queued now know something new
   // about the remote side — see withPushedRemoteState.
-  const kept = withPushedRemoteState([...remaining, ...stillHeld], pushedValue)
+  const kept = markPushed(withPushedRemoteState([...remaining, ...stillHeld], pushedValue), landed)
   const persisted = writePendingPushes(kept, profile)
   // A successful write only vouches for what THIS flush corrected. An
   // entry carrying staleness from an earlier one was written straight
@@ -1436,7 +1468,11 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
   // queued and this flush did not send it, a wake-up is armed for the
   // earliest moment it could be. Bounded by the attempt cap — entries
   // that keep failing are let go of, and an empty queue arms nothing.
-  if (onDisk.length) {
+  // Entries awaiting verification are not waiting on a flush — a wake-up
+  // would find nothing to send — so they arm nothing here. The next diff
+  // (a launch, the half-hourly pass, a focus) is what moves them on.
+  const waiting = onDisk.filter((entry) => !entry.pushed)
+  if (waiting.length) {
     // Which wake-up depends on what is actually eligible, because the
     // eligibility rule above and this one have to agree or they park
     // work that could go out now. An entry still at zero attempts has
@@ -1444,10 +1480,56 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
     // the batch timer that every fresh decision uses; parking it behind
     // the failure cooldown would sit on a corrected decision for five
     // minutes. The cooldown is for entries that actually failed.
-    if (onDisk.some((entry) => entry.attempts === 0)) scheduleFlush()
+    if (waiting.some((entry) => entry.attempts === 0)) scheduleFlush()
     else scheduleRetry(retryPacingDeadline(profile) - Date.now())
   }
   return confirmed
+}
+
+/**
+ * Settles the pushes Simkl accepted against a read of the account made
+ * after they went out — see verifyPushed for the rule, and
+ * PendingWatchStatusPush.pushed for why a 200 is not the end of a push.
+ * One the read confirms leaves the queue quietly. One it does not goes
+ * back to being sendable with an attempt spent, and is said out loud as a
+ * retry; at the cap it is given up on and reported like any other
+ * failure, with the title suppressed before the queue write for the same
+ * reason the flush suppresses first (see addAbandonedReconcileId's
+ * read-back). Nothing is sent from here: the retry is armed and the next
+ * flush sends it.
+ */
+function verifyAcceptedPushes(profile: string, remoteWatched: (id: string) => boolean): void {
+  const before = pendingPushes(profile)
+  if (!before.some((entry) => entry.pushed)) return
+  const { queue, verified, abandoned } = verifyPushed(before, remoteWatched)
+  const letGo: PendingWatchStatusPush[] = []
+  const stillHeld: PendingWatchStatusPush[] = []
+  for (const entry of abandoned) {
+    ;(addAbandonedReconcileId(entry.id, profile) ? letGo : stillHeld).push(entry)
+  }
+  const kept = [...queue, ...stillHeld]
+  const persisted = writePendingPushes(kept, profile)
+  if (!persisted) {
+    logError('reconcile:queue-write', new Error('Could not record which pushes Simkl kept.'))
+  }
+  const retrying = (persisted ? kept : before).filter(
+    (entry) => !entry.pushed && entry.attempts > 0
+  )
+  logError(
+    'reconcile:verify',
+    `verified=${verified.map((e) => e.id).join(',') || '-'} ` +
+      `retrying=${retrying.map((e) => e.id).join(',') || '-'} ` +
+      `abandoned=${(persisted ? letGo : []).map((e) => e.id).join(',') || '-'}`
+  )
+  if (retrying.length || (persisted && letGo.length)) {
+    sendToRenderer(MEDIA_HUB_CHANNELS.trackingReconcileSync, {
+      pushed: [],
+      retrying: retrying.map((entry) => entry.title),
+      abandoned: persisted ? letGo.map((entry) => entry.title) : [],
+      error: 'Simkl accepted the change but did not keep it.'
+    } satisfies ReconcileSyncReport)
+  }
+  if (retrying.length) scheduleRetry(Math.max(0, retryPacingDeadline(profile) - Date.now()))
 }
 
 /**
@@ -1719,6 +1801,27 @@ async function computeMovieDiscrepancies(
   const remoteMovies = new Map(
     snapshot.entries.filter((h) => h.type === 'movie').map((h) => [h.id, h] as const)
   )
+  // A film watched here that Simkl's movies list lacks may be a film Simkl
+  // files as anime (see simklCompletedAnimeImdbIds): completed there, it
+  // is watched at Simkl, and saying otherwise asked about the same two
+  // films on every launch. Read only when there is such a film, and only
+  // ever to confirm a local movie — a completed TV anime is not a film
+  // Simkl has watched that this library lacks, and must not become a row.
+  const missingAtSimkl = [...localMovies.keys()].filter((id) => !remoteMovies.has(id))
+  if (missingAtSimkl.length) {
+    const completedAnime = await simklCompletedAnimeImdbIds(priority)
+    for (const id of missingAtSimkl) {
+      const local = localMovies.get(id)
+      if (local && completedAnime?.has(id)) remoteMovies.set(id, local)
+    }
+  }
+  // Pushes Simkl accepted earlier, checked against this read of the account
+  // — a read made just now, after the flush that sent them, which is what
+  // `fetched` says. The snapshot's own cache is expired when a push is
+  // confirmed (invalidateSimklWatchedCache), so the next diff reads afresh;
+  // one served from the cache or a stale fallback predates the push and
+  // can say nothing about it, and the entries wait for one that can.
+  if (snapshot.fetched) verifyAcceptedPushes(db.activeProfile(), (id) => remoteMovies.has(id))
   const ids = new Set([...localMovies.keys(), ...remoteMovies.keys()])
   const out: WatchStatusDiscrepancy[] = []
   for (const id of ids) {

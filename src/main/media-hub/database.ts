@@ -564,6 +564,7 @@ function indexRowToItem(row: Row, kind: MediaKind, genres: string[]): CatalogIte
     trailers: [],
     ...(Number.isFinite(simklId) && simklId ? { simklId } : {}),
     ...(row.grouped_ids ? { groupedIds: parse<string[]>(String(row.grouped_ids), []) } : {}),
+    ...(row.release_date ? { releaseDate: String(row.release_date) } : {}),
     ...(seasons != null && episodes != null
       ? { episodeCounts: { totalSeasons: seasons, totalEpisodes: episodes } }
       : {})
@@ -1656,8 +1657,8 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     // would let whichever source happened to be written second ERASE a good
     // value with an empty string. Blank never overwrites non-blank.
     indexPut: sql.prepare(
-      `INSERT INTO catalog_index(id,kind,title,title_sort,title_key,year,rating,runtime_min,status,poster,background,logo,description,total_seasons,total_episodes,aired_episodes,simkl_id,grouped_ids,rank,source,first_seen,updated_at)
-       VALUES(@id,@kind,@title,@titleSort,@titleKey,@year,@rating,@runtime,@status,@poster,@background,@logo,@description,@totalSeasons,@totalEpisodes,@airedEpisodes,@simklId,@groupedIds,@rank,@source,@now,@now)
+      `INSERT INTO catalog_index(id,kind,title,title_sort,title_key,year,rating,runtime_min,status,poster,background,logo,description,total_seasons,total_episodes,aired_episodes,simkl_id,grouped_ids,release_date,rank,source,first_seen,updated_at)
+       VALUES(@id,@kind,@title,@titleSort,@titleKey,@year,@rating,@runtime,@status,@poster,@background,@logo,@description,@totalSeasons,@totalEpisodes,@airedEpisodes,@simklId,@groupedIds,@releaseDate,@rank,@source,@now,@now)
        ON CONFLICT(id,kind) DO UPDATE SET
          title=excluded.title,
          title_sort=excluded.title_sort,
@@ -1675,6 +1676,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
          aired_episodes=COALESCE(excluded.aired_episodes,catalog_index.aired_episodes),
          simkl_id=COALESCE(excluded.simkl_id,catalog_index.simkl_id),
          grouped_ids=COALESCE(excluded.grouped_ids,catalog_index.grouped_ids),
+         release_date=COALESCE(excluded.release_date,catalog_index.release_date),
          rank=excluded.rank,
          source=excluded.source,
          updated_at=excluded.updated_at`
@@ -1721,7 +1723,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     // two genres that do not exist.
     indexList: sql.prepare(
       `SELECT id,kind,title,year,rating,runtime_min,status,poster,background,logo,description,
-              total_seasons,total_episodes,simkl_id,grouped_ids,
+              total_seasons,total_episodes,simkl_id,grouped_ids,release_date,
               (SELECT group_concat(genre, char(31)) FROM catalog_index_genre g
                 WHERE g.id = catalog_index.id AND g.kind = catalog_index.kind) AS genres
        FROM catalog_index WHERE kind=? ORDER BY rank, id LIMIT ? OFFSET ?`
@@ -3121,6 +3123,11 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
               airedEpisodes: counts.airedEpisodes,
               simklId: item.simklId != null ? String(item.simklId) : null,
               groupedIds: item.groupedIds?.length ? JSON.stringify(item.groupedIds) : null,
+              // Null, never '', so a source without dates cannot erase one
+              // (the COALESCE in the upsert). What the Home cards read to
+              // say "Releases 12 Mar" instead of offering Play on a title
+              // that is not out yet — see titleUnreleased in the renderer.
+              releaseDate: item.releaseDate ? String(item.releaseDate) : null,
               rank: ranks?.[offset] ?? rankBase + offset,
               source,
               now
@@ -3193,7 +3200,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           const rows = sql
             .prepare(
               `SELECT id,kind,title,year,rating,runtime_min,status,poster,background,logo,description,
-                      total_seasons,total_episodes,aired_episodes,simkl_id,grouped_ids,
+                      total_seasons,total_episodes,aired_episodes,simkl_id,grouped_ids,release_date,
                       (SELECT group_concat(genre, char(31)) FROM catalog_index_genre g
                         WHERE g.id = catalog_index.id AND g.kind = catalog_index.kind) AS genres,
                       ${COMPLETED_SQL} AS completed
@@ -3304,7 +3311,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         const rows = sql
           .prepare(
             `SELECT id,kind,title,year,rating,runtime_min,status,poster,background,logo,description,
-                    total_seasons,total_episodes,aired_episodes,simkl_id,grouped_ids,
+                    total_seasons,total_episodes,aired_episodes,simkl_id,grouped_ids,release_date,
                     (SELECT group_concat(genre, char(31)) FROM catalog_index_genre g
                       WHERE g.id = catalog_index.id AND g.kind = catalog_index.kind) AS genres,
                     ${COMPLETED_SQL} AS completed
@@ -3378,7 +3385,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         const rows = sql
           .prepare(
             `SELECT id,kind,title,year,rating,runtime_min,status,poster,background,logo,description,
-                    total_seasons,total_episodes,simkl_id,grouped_ids,
+                    total_seasons,total_episodes,simkl_id,grouped_ids,release_date,
                     (SELECT group_concat(genre, char(31)) FROM catalog_index_genre g
                       WHERE g.id = catalog_index.id AND g.kind = catalog_index.kind) AS genres
              FROM catalog_index

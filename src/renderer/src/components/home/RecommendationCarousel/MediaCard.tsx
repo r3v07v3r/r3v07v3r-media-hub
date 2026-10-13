@@ -7,6 +7,7 @@ import { resolveArtwork } from '@renderer/lib/artwork'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { WatchStatusBadge } from '@renderer/components/media/WatchStatusBadge'
 import { getWatchStatus } from '@renderer/lib/mediaHub/watchStatus'
+import { titleUnreleased } from '@renderer/lib/mediaHub/releaseDate'
 import styles from './RecommendationCarousel.module.css'
 import { RatingBadge } from '@renderer/components/detail/RatingBadge'
 import { ratingSourceFor } from '@renderer/components/detail/ratingSource'
@@ -99,6 +100,10 @@ export function MediaCard({
   // a recommendation held in place until the page is left).
   const disliked = dislikedIds.has(media.id)
 
+  // "Releases 12 Mar 2027" / "Coming 2027", or null for a title that is out
+  // — see titleUnreleased for which fact decides.
+  const unreleased = titleUnreleased(media)
+
   function handleContextMenu(e: React.MouseEvent) {
     e.preventDefault()
     openContextMenu(e.clientX, e.clientY, media)
@@ -135,27 +140,39 @@ export function MediaCard({
         />
         <div className={styles.cardScrim} aria-hidden="true" />
         <WatchStatusBadge status={watchStatus} />
-        <button
-          type="button"
-          className={styles.playButton}
-          onClick={(e) => {
-            e.stopPropagation()
-            startPartyPlayback(media)
-          }}
-          disabled={isResolving}
-          aria-busy={isResolving}
-          aria-label={
-            isResolving
-              ? `${resolvingMedia?.stage === 'resolving' ? 'Searching' : 'Preparing'} ${media.title}`
-              : `Play ${media.title}`
-          }
-        >
-          {isResolving ? (
-            <span className={styles.playButtonSpinner} aria-hidden="true" />
-          ) : (
-            <Icon name="play" />
-          )}
-        </button>
+        {/* A title that is not out yet says when, where Play would be —
+            and nothing on the card starts it. A recommendation can be
+            for a film out next month; offering Play on it was offering a
+            stream nothing can resolve. The detail page applies the same
+            gate from the full record (DetailHero). */}
+        {unreleased ? (
+          <span className={styles.unreleasedChip} aria-label={`${media.title}: ${unreleased}`}>
+            <Icon name="clock" />
+            {unreleased}
+          </span>
+        ) : (
+          <button
+            type="button"
+            className={styles.playButton}
+            onClick={(e) => {
+              e.stopPropagation()
+              startPartyPlayback(media)
+            }}
+            disabled={isResolving}
+            aria-busy={isResolving}
+            aria-label={
+              isResolving
+                ? `${resolvingMedia?.stage === 'resolving' ? 'Searching' : 'Preparing'} ${media.title}`
+                : `Play ${media.title}`
+            }
+          >
+            {isResolving ? (
+              <span className={styles.playButtonSpinner} aria-hidden="true" />
+            ) : (
+              <Icon name="play" />
+            )}
+          </button>
+        )}
         <button
           type="button"
           className={styles.moreButton}
