@@ -18,7 +18,12 @@ import path from 'node:path'
 
 import { createDatabase } from '../src/main/media-hub/database'
 import { setDatabase } from '../src/main/media-hub/dbState'
-import { enrichCredits, searchCredits, titlesFeaturing } from '../src/main/media-hub/credits'
+import {
+  creditsFor,
+  enrichCredits,
+  matchCredits,
+  titlesFeaturing
+} from '../src/main/media-hub/credits'
 import { invalidateSearchPool, searchByCredits } from '../src/main/media-hub/searchPool'
 import type { CatalogItem, TitleCredits } from '../src/shared/media-hub/types'
 
@@ -74,32 +79,36 @@ const ids = ['tt1', 'tt2', 'tt3', 'tt4', 'never-enriched']
 
 // ---------------------------------------------------------------------
 // Typing a query: substring, because somebody is part-way through it.
+// Matched over the credits as read, the way searchPool.ts matches the ones
+// it holds.
 // ---------------------------------------------------------------------
+const matching = (titles: string[], query: string): { people: string[]; labels: string[] } =>
+  matchCredits(creditsFor(titles), query)
 {
-  assert.deepEqual(searchCredits(ids, 'villeneuve').people.sort(), ['tt1', 'tt2'])
-  assert.deepEqual(searchCredits(ids, 'gosl').people.sort(), ['tt2', 'tt3'])
+  assert.deepEqual(matching(ids, 'villeneuve').people.sort(), ['tt1', 'tt2'])
+  assert.deepEqual(matching(ids, 'gosl').people.sort(), ['tt2', 'tt3'])
 
   // A name match and a label match are separated so the caller can put names
   // first — somebody typing "drive" wants the film before everything tagged
   // "driving".
-  const dystopia = searchCredits(ids, 'dystopia')
+  const dystopia = matching(ids, 'dystopia')
   assert.deepEqual(dystopia.people, [])
   assert.deepEqual(dystopia.labels, ['tt2'])
 
   // A title matching on BOTH is counted once, on the stronger signal.
-  const gosling = searchCredits(ids, 'gosling')
+  const gosling = matching(ids, 'gosling')
   assert.ok(gosling.people.includes('tt3'))
   assert.ok(!gosling.labels.includes('tt3'))
 
   // One character matches most of a catalog and means nothing.
-  assert.deepEqual(searchCredits(ids, 'a'), { people: [], labels: [] })
-  assert.deepEqual(searchCredits(ids, ' '), { people: [], labels: [] })
+  assert.deepEqual(matching(ids, 'a'), { people: [], labels: [] })
+  assert.deepEqual(matching(ids, ' '), { people: [], labels: [] })
 }
 
 // ---------------------------------------------------------------------
 // Titles with nothing cached contribute nothing rather than throwing.
 // ---------------------------------------------------------------------
-assert.deepEqual(searchCredits(['never-enriched'], 'anything'), { people: [], labels: [] })
+assert.deepEqual(matching(['never-enriched'], 'anything'), { people: [], labels: [] })
 assert.deepEqual(titlesFeaturing(['tt4'], 'Ryan Gosling'), { cast: [], creators: [] })
 
 // ---------------------------------------------------------------------

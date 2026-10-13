@@ -100,10 +100,25 @@ globalThis.fetch = (async (input: string | URL) => {
     return json([{ movie: { title: 'Pulled Harbour', year: 2019, ids: { imdb: 'tt7200001' } } }])
   }
   if (url.startsWith('https://api.trakt.tv/')) return json([])
+  // Kitsu's search, for anime: answers as the movie search does.
+  if (url.startsWith('https://kitsu.io/api/edge/anime?filter')) {
+    if (providerMode === 'down') throw new TypeError('fetch failed')
+    if (providerMode === 'fail') return json({ errors: [] }, 429)
+    return json({ data: [] })
+  }
   const meta = url.match(/\/meta\/movie\/(tt\d+)\.json$/)
   if (meta) {
     return json({
-      meta: { id: meta[1], type: 'movie', name: 'Remote Harbour', year: '2021', runtime: '101 min' }
+      meta: {
+        id: meta[1],
+        type: 'movie',
+        name: 'Remote Harbour',
+        year: '2021',
+        runtime: '101 min',
+        poster: `https://img.example/${meta[1]}/poster.jpg`,
+        background: `https://img.example/${meta[1]}/background.jpg`,
+        logo: `https://img.example/${meta[1]}/logo.png`
+      }
     })
   }
   throw new TypeError(`no stub for ${url}`)
@@ -380,6 +395,17 @@ async function main(): Promise<void> {
     assert.equal(row[0]?.year, '2019')
   })
 
+  await check('opening a pulled title fills in the art it arrived without', async () => {
+    // A pull brings a name and a year; the crawl may never list the title,
+    // so until it is opened it is a blank tile.
+    assert.ok(!db.indexByIds(['tt7200001']).items[0]?.poster, 'no art from the pull')
+    await metadata('movie', 'tt7200001')
+    const [row] = db.indexByIds(['tt7200001']).items
+    assert.equal(row?.poster, 'https://img.example/tt7200001/poster.jpg')
+    assert.equal(row?.background, 'https://img.example/tt7200001/background.jpg')
+    assert.equal(row?.logo, 'https://img.example/tt7200001/logo.png')
+  })
+
   await check('the crawl announces the index it wrote', async () => {
     // Anything the checks above announced has gone out (to no window) first.
     await new Promise((resolve) => setTimeout(resolve, 400))
@@ -396,6 +422,83 @@ async function main(): Promise<void> {
       changes.some((push) => {
         const event = push.payload as { scopes: string[]; sources: string[] }
         return event.scopes.includes('index') && event.sources.includes('catalog-crawl')
+      }),
+      `pushed: ${JSON.stringify(pushed)}`
+    )
+    setActiveWindow(null)
+  })
+
+  // A merged anime: kitsu:10 fronts the show, kitsu:11 is its second season.
+  // The grid and search list the show and leave the season out.
+  const { ANIME_GROUPED_KEY, invalidateAnimeGroupIndex, laterSeasons } =
+    await import('../src/main/media-hub/animeSeasons')
+  const anime = (id: string, title: string, releaseDate: string): CatalogItem =>
+    ({
+      id,
+      type: 'anime',
+      title,
+      releaseDate,
+      year: releaseDate.slice(0, 4),
+      videos: []
+    }) as unknown as CatalogItem
+  const HOUR = 60 * 60 * 1000
+  // No TheTVDB mapping and the links between the two seasons, cached as the
+  // grouping pass would cache them, so nothing is asked of Kitsu.
+  const noMapping = { seriesId: '', season: -1 }
+  db.putCache('kitsu:tvdb:10', noMapping, HOUR)
+  db.putCache('kitsu:tvdb:11', noMapping, HOUR)
+  db.putCache('kitsu:edges:10', [{ role: 'sequel', destId: '11' }], HOUR)
+  db.putCache('kitsu:edges:11', [{ role: 'prequel', destId: '10' }], HOUR)
+  const show = anime('kitsu:10', 'Naruto', '2002-10-03')
+  const second = anime('kitsu:11', 'Naruto Shippuuden', '2007-02-15')
+  db.indexUpsert('anime', [show, second], { source: 'kitsu' })
+
+  await check('offline, a later season’s own name finds its show in the library', async () => {
+    db.putCache('catalog:v2:anime', [{ ...show, groupedIds: ['kitsu:11'] }], HOUR)
+    db.putCache(ANIME_GROUPED_KEY, true, HOUR)
+    invalidateAnimeGroupIndex()
+    assert.equal(laterSeasons()?.get('kitsu:11')?.id, 'kitsu:10', 'grouped')
+    providerMode = 'down'
+    const result = (await search({
+      kind: 'anime',
+      query: 'shippuuden',
+      report: true
+    })) as CatalogSearchResult
+    assert.equal(result.providerUnreachable, true)
+    assert.deepEqual(ids(result.items), ['kitsu:10'])
+    // The show's own name still finds it once, and the season is not listed.
+    const byShow = (await search({
+      kind: 'anime',
+      query: 'naruto',
+      report: true
+    })) as CatalogSearchResult
+    assert.deepEqual(ids(byShow.items), ['kitsu:10'])
+  })
+
+  await check('the anime grouping announces the index it changed', async () => {
+    // A crawl's raw catalog, not grouped yet: what the crawl leaves for the
+    // minutes its grouping pass takes, after its own announcement went out.
+    db.putCache('catalog:v2:anime', [show, second], HOUR)
+    db.putCache(ANIME_GROUPED_KEY, false, HOUR)
+    invalidateAnimeGroupIndex()
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    const pushed: Array<{ channel: string; payload: unknown }> = []
+    window.webContents.setPushSink((channel, payload) => pushed.push({ channel, payload }))
+    setActiveWindow(window as never)
+    // The cached raw catalog answers, and its grouping starts behind it.
+    await catalogData('anime')
+    const deadline = Date.now() + 10_000
+    while (!laterSeasons()?.has('kitsu:11') && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    assert.equal(laterSeasons()?.get('kitsu:11')?.id, 'kitsu:10', 'the pass grouped the show')
+    // library:changed is coalesced for 300 ms.
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    assert.ok(
+      pushed.some((push) => {
+        if (push.channel !== MEDIA_HUB_CHANNELS.libraryChanged) return false
+        const event = push.payload as { scopes: string[]; sources: string[] }
+        return event.scopes.includes('index') && event.sources.includes('anime-grouping')
       }),
       `pushed: ${JSON.stringify(pushed)}`
     )

@@ -290,6 +290,11 @@ function runAnimeGrouping(items: CatalogItem[], generation: number): void {
       // answer moves now, in this same tick, before anything is read or
       // written under the new one. See animeRegroup.ts.
       keepAnimeHistoryWithShows()
+      // Said out loud, as the crawl says it: the crawl's own announcement
+      // went out while the catalog was raw, so a grid that re-read then
+      // lists every season as a tile of its own, and nothing else tells it
+      // the seasons are one show now.
+      notifyLibraryChanged('anime-grouping', 'index')
     })
     .catch((error) => logError('catalog:anime-grouping', error))
     .finally(() => {
@@ -993,8 +998,9 @@ async function resolveMetadata(
   // episodes, so its counts — the denominator the Completed badge and the
   // browse grid's "N episodes" read — are empty until a crawl happens to
   // re-list it. A full resolve is exactly the moment those counts are
-  // known: every title somebody opens heals its own row. Counts only —
-  // never the rank or the source a crawl assigned.
+  // known: every title somebody opens heals its own row. Counts, and the
+  // art a row was written without (a watchlist pull's) — never the rank,
+  // the source or any art a crawl assigned.
   if (!degraded) {
     db.indexRefreshFromMetadata(type, item)
     // A title the index has no row for at all — found by a remote search,
@@ -1130,6 +1136,12 @@ async function providerSearch(kind: MediaKind, query: string): Promise<CatalogIt
  *  index's own ORDER BY guarantees those come first (see indexSearch). */
 const INDEX_SEARCH_CANDIDATES = 100
 
+/** How many later seasons of merged anime one search considers, apart from
+ *  INDEX_SEARCH_CANDIDATES so they never take a place there. Each is folded
+ *  into its show, so this bounds how many shows a season's own name can
+ *  bring in. */
+const LATER_SEASON_CANDIDATES = 20
+
 /** How many title matches one search returns. Enough to page through a
  *  common word; bounded so the IPC reply stays a reply. */
 const MAX_SEARCH_RESULTS = 120
@@ -1172,10 +1184,17 @@ async function searchCatalog(kind: MediaKind, q: string): Promise<CatalogSearchR
   // provider is the only hope, and it gets its full time.
   const remotePending = providerSearch(kind, q)
   // A later season of a merged anime is answered as its show, as the
-  // grid shows it: the index leaves its row out, and a provider hit for
-  // it is folded into the show below.
+  // grid shows it. The index leaves its row out of the main match, so it
+  // takes no place there, and finds it in a small match of its own: a
+  // season's own name ("Shippuuden") is in no show's title, and without
+  // that match only the provider could find it, and offline nothing would.
+  // Those rows, and a provider hit for a later season, are folded into the
+  // show below.
   const later = kind === 'anime' ? laterSeasons() : undefined
-  const local = getDatabase().indexSearch(kind, q, INDEX_SEARCH_CANDIDATES, later)
+  const local = [
+    ...getDatabase().indexSearch(kind, q, INDEX_SEARCH_CANDIDATES, later),
+    ...getDatabase().indexSearch(kind, q, LATER_SEASON_CANDIDATES, later, true)
+  ]
   const remote = await settleProvider(remotePending, local.length ? PROVIDER_GRACE_MS : undefined)
   const merged = mergeSearchResults(q, [local, remote.items], MAX_SEARCH_RESULTS)
   const folding = later?.size ? merged.filter((item) => later.has(String(item.id))) : []

@@ -32,6 +32,7 @@
 import fs from 'node:fs'
 import type { DatabaseSync, SQLOutputValue } from 'node:sqlite'
 
+import { backupBeforeRewrite } from './autoBackup'
 import { SCHEMA_VERSION } from './migrations'
 
 /** Tables a backup carries, each keyed by profile. Order matters on restore:
@@ -158,8 +159,20 @@ export function writeBackup(
   // app the person chose the location of) leaves whatever was already there
   // intact instead of truncating it to a half-written backup.
   const temp = `${filePath}.partial`
-  fs.writeFileSync(temp, JSON.stringify(backup), 'utf8')
-  fs.renameSync(temp, filePath)
+  try {
+    fs.writeFileSync(temp, JSON.stringify(backup), 'utf8')
+    fs.renameSync(temp, filePath)
+  } catch (error) {
+    // Nor is the half-written file left beside it. On a full disk it holds
+    // whatever space there was, and the automatic backups name every try
+    // afresh (autoBackup.ts), so each failure would leave one more.
+    try {
+      fs.rmSync(temp, { force: true })
+    } catch {
+      // Left for the automatic backups' rotation, which deletes an old one.
+    }
+    throw error
+  }
 }
 
 /** The ledger as the file carries it, or nothing when none is recorded. */
@@ -280,6 +293,15 @@ export function readBackup(filePath: string): BackupFile {
  */
 export function restoreBackup(sql: DatabaseSync, backup: BackupFile): RestoreSummary {
   const restored: Record<string, number> = {}
+
+  // The library this replaces, saved first with the automatic backups
+  // (autoBackup.ts), so restoring the wrong file can itself be undone. Only
+  // a file readBackup accepted gets this far. The automatic backup reads
+  // the app's own database, which is the one being replaced: backup:import
+  // (appIpc.ts) is the only caller, and it restores into that one. As for
+  // every step that takes one, a backup that cannot be written is logged
+  // and does not stop the restore.
+  backupBeforeRewrite('restore')
 
   sql.exec('BEGIN')
   try {

@@ -413,7 +413,7 @@ export function findDemoGhostHistoryRows(rows: HistoryRowForCleanup[]): HistoryR
       String(row.title).trim().toLowerCase(),
       row.season ?? '',
       row.episode ?? ''
-    ].join(' ')
+    ].join('\u0000')
   const realKeys = new Set(
     rows.filter((row) => hasExpressibleSimklId(String(row.content_id))).map(coordKey)
   )

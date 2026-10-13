@@ -304,10 +304,14 @@ export function startBackgroundJobs(): void {
   registerRecurringJob({
     name: 'anime-sync-repair',
     label: 'Repairing anime watch history',
-    // A recurring job for work that happens at most once, because what it
-    // is really waiting for is the anime-grouping pass, and there is no
-    // event to hang that on — see animeSyncRepair.ts. Every run after the
-    // repair lands is one settings read that returns immediately.
+    // Two things. The repair is work that happens at most once, and it is
+    // a recurring job because what it is really waiting for is the
+    // anime-grouping pass, and there is no event to hang that on — see
+    // animeSyncRepair.ts. Once it has landed, its part of a run is one
+    // settings read. The other part runs every time (see run below):
+    // keepAnimeHistoryWithShows builds the group records from the catalog
+    // and compares them with the ledger, and moves rows only when the two
+    // differ.
     //
     // Hourly rather than tighter for the same reason: on the one launch
     // where it has something to do, grouping takes minutes, so the cost of

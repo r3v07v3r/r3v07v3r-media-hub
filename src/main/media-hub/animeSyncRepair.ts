@@ -88,6 +88,28 @@ function animeRepairDone(): boolean {
 }
 
 /**
+ * Whether a regroup plan moves rows somebody here holds, which is when a
+ * backup is worth writing before it. `held` is every Kitsu id a profile has
+ * history or plays under (the database's animeHistoryIds), read only when
+ * the plan moves anything.
+ *
+ * A plan names every show whose grouping changed, across the whole
+ * catalog, and almost none of them is one anybody here has watched.
+ * Backing up for each such plan wrote a backup on every grouping change,
+ * and those took places in the rotation (autoBackup.ts). An id that is not
+ * a Kitsu id is taken to hold rows, as that list would not name it.
+ */
+export function regroupMovesHeldRows(
+  plan: { moves: { fromId: string }[]; ratings?: { fromId: string }[] },
+  held: () => readonly string[]
+): boolean {
+  const from = [...plan.moves, ...(plan.ratings ?? [])].map((move) => String(move.fromId))
+  if (!from.length) return false
+  const holding = new Set(held())
+  return from.some((id) => !id.startsWith('kitsu:') || holding.has(id))
+}
+
+/**
  * Moves anime rows to where the grouping now in the catalog puts them, and
  * notes that grouping as the one they are filed under — animeRegroup.ts
  * has the rules. Returns how many rows moved.
@@ -118,9 +140,12 @@ export function keepAnimeHistoryWithShows(): number {
       {
         animeGroupLedger: () => db.animeGroupLedger(),
         // A backup first whenever the regroup is about to move rows, not
-        // when it only records the grouping (autoBackup.ts).
+        // when it only records the grouping (autoBackup.ts), nor when the
+        // only shows it moves are ones nobody here has watched.
         moveAnimeHistory: (plan, ledger) => {
-          if (plan.moves.length || plan.ratings?.length) backupBeforeRewrite('anime-regroup')
+          if (regroupMovesHeldRows(plan, () => db.animeHistoryIds())) {
+            backupBeforeRewrite('anime-regroup')
+          }
           return db.moveAnimeHistory(plan, ledger)
         }
       },

@@ -505,6 +505,18 @@ check('an id whose rows are a whole show gives up only its season 1 that way', (
   assert.deepEqual(keys(db, 'b'), ['2:1'])
 })
 
+check('a special numbered like an episode does not make the rows a whole show’s', () => {
+  const db = tempDb()
+  // One entry's rows, as Kitsu labelled them, and a special of its own.
+  mark(db, 'b', 2, [1, 2])
+  mark(db, 'b', 0, [1])
+
+  db.moveAnimeHistory({ moves: [move('b', null, 'a', 3)] })
+
+  assert.deepEqual(keys(db, 'a'), ['3:1', '3:2'])
+  assert.deepEqual(keys(db, 'b'), ['0:1'], 'the special stays, as on any move onto one season')
+})
+
 check('an id that now fronts a show has its own episodes at season 1', () => {
   const db = tempDb()
   mark(db, 'a', 3, [1, 2])

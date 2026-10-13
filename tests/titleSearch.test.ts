@@ -298,6 +298,30 @@ check('the limit bounds the answer but never drops the best match', () => {
   assert.deepEqual(db.indexSearch('series', 'foundation', 0), [])
 })
 
+check('a later season of a merged anime is left out, and can be asked for on its own', () => {
+  // kitsu:11 is the second season of the show kitsu:10 fronts. Its own name
+  // is in no row but its own, so the search that answers with its show
+  // (catalog.ts) has to be able to find that row with no provider.
+  seed('anime', [
+    item('kitsu:10', 'Naruto', { type: 'anime' }),
+    item('kitsu:11', 'Naruto Shippuuden', { type: 'anime' })
+  ])
+  const later = new Map([['kitsu:11', { id: 'kitsu:10', season: 2 }]])
+  assert.deepEqual(ids(db.indexSearch('anime', 'shippuuden', 100, later)), [])
+  assert.deepEqual(ids(db.indexSearch('anime', 'naruto', 100, later)), ['kitsu:10'])
+  assert.deepEqual(ids(db.indexSearch('anime', 'shippuuden', 100, later, true)), ['kitsu:11'])
+  assert.deepEqual(
+    ids(db.indexSearch('anime', 'naruto', 100, later, true)),
+    ['kitsu:11'],
+    'the later seasons and nothing else'
+  )
+  assert.deepEqual(db.indexSearch('anime', 'shippuuden', 0, later, true), [], 'its own limit')
+  // Nothing is a later season while nothing is grouped, or outside anime.
+  assert.deepEqual(db.indexSearch('anime', 'shippuuden', 100, undefined, true), [])
+  assert.deepEqual(db.indexSearch('anime', 'shippuuden', 100, new Map(), true), [])
+  assert.deepEqual(db.indexSearch('series', 'foundation', 100, later, true), [])
+})
+
 check(
   'an exact title survives the candidate limit however many better-ranked rows share its words',
   () => {

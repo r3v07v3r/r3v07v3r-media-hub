@@ -181,6 +181,27 @@ check('an id that once held the whole show gives up only its own season 1', () =
   )
 })
 
+// A special under the season's own id, numbered like one of its episodes,
+// used to read as a second season: the id's rows were taken for a whole
+// show's, only season 1 could move, and the season's rows (labelled 2 by
+// Kitsu) stayed under the id for good.
+check('a special does not make one entry’s rows a whole show’s, and is not moved', () => {
+  const db = tempDb()
+  for (const episode of [1, 2, 3]) db.markWatched(sibling, { season: 2, episode })
+  db.markWatched(sibling, { season: 0, episode: 1 })
+
+  assert.deepEqual(db.wholeShowRowsUnder('kitsu:sennen'), [], 'one entry’s rows')
+  const moved = db.remapContentIds([{ fromId: 'kitsu:sennen', toId: canonical, season: 2 }])
+
+  assert.equal(moved, 3)
+  assert.deepEqual(keys(db, canonical), ['2:1', '2:2', '2:3'])
+  assert.deepEqual(
+    keys(db, 'kitsu:sennen'),
+    ['0:1'],
+    'the special is not relabelled as the season’s first episode'
+  )
+})
+
 check('a row with no episode stays where it is', () => {
   const db = tempDb()
   db.markWatched(sibling)

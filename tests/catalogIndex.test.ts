@@ -421,6 +421,38 @@ check('a title whose episodes have all still to air stores a confirmed zero', ()
   db.close()
 })
 
+check('a resolve fills in the artwork a row has none of, and never replaces any', () => {
+  // A watchlist pull writes a name and a year (catalog.ts's
+  // indexTrackedTitle), so until something opens the title its tile is
+  // blank. The crawl's art is the row's own and stays.
+  const dbPath = tempDbPath()
+  const db = createDatabase(dbPath, TEST_PROFILE)
+  db.indexUpsert('movie', [
+    item('tt1', { title: 'Pulled' }),
+    item('tt2', { title: 'Crawled', poster: 'https://img.example/crawl-poster.jpg' })
+  ])
+  const art = {
+    poster: 'https://img.example/poster.jpg',
+    background: 'https://img.example/background.jpg',
+    logo: 'https://img.example/logo.png'
+  }
+  db.indexRefreshFromMetadata('movie', item('tt1', { title: 'Pulled', ...art }))
+  db.indexRefreshFromMetadata('movie', item('tt2', { title: 'Crawled', ...art }))
+  const pulled = raw(dbPath, 'tt1')
+  assert.deepEqual(
+    [pulled?.poster, pulled?.background, pulled?.logo],
+    [art.poster, art.background, art.logo]
+  )
+  const crawled = raw(dbPath, 'tt2')
+  assert.equal(crawled?.poster, 'https://img.example/crawl-poster.jpg', 'the crawl’s poster stays')
+  assert.equal(crawled?.background, art.background, 'only what was blank is filled')
+
+  // A resolve with no art leaves what is there.
+  db.indexRefreshFromMetadata('movie', item('tt1', { title: 'Pulled' }))
+  assert.equal(raw(dbPath, 'tt1')?.poster, art.poster)
+  db.close()
+})
+
 // --- a title found only by a remote search (deepScanRules.ts) ------------
 //
 // Opened or tracked, it gets a row, or the grids and My Stuff (which read
