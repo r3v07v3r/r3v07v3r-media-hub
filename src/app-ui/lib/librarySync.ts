@@ -27,6 +27,12 @@ export interface CatchUpSnapshot {
  *  (anime, until the catalog has been organised into its seasons). */
 const DEFERRED_RETRY_MS = 3 * 60 * 1000
 
+/** How many failed passes in a row are asked again on that same timer. A
+ *  quarter of an hour covers a backend restarting or a network blip; past
+ *  it the backend is down, and polling it every few minutes for the rest of
+ *  the session would be noise. The next resume still asks. */
+const FAILED_RETRY_LIMIT = 5
+
 /** How long a burst of change signals is collapsed for before one refetch. */
 const REFRESH_DEBOUNCE_MS = 800
 
@@ -38,6 +44,8 @@ let running = false
 /** A forced pass was asked for while another was running — see requestCatchUp. */
 let forceAfter = false
 let retryTimer: number | undefined
+/** Passes that failed since the last one that did not — see retryFailedPass. */
+let failedPasses = 0
 
 function update(patch: Partial<CatchUpSnapshot>): void {
   snapshot = { ...snapshot, ...patch }
@@ -78,6 +86,18 @@ function armDeferredRetry(): void {
 }
 
 /**
+ * Asks again, on the same timer, after a pass that failed or reported an
+ * error. Without it the next ask is the next resume, and a TV that stays in
+ * the foreground may never have one. Capped (FAILED_RETRY_LIMIT) so a dead
+ * backend is not polled for the whole session.
+ */
+function retryFailedPass(): void {
+  if (failedPasses >= FAILED_RETRY_LIMIT) return
+  failedPasses += 1
+  armDeferredRetry()
+}
+
+/**
  * Ask the backend to catch up. Safe to call as often as anything likes: the
  * backend answers a call made within a couple of minutes of the last pass, or
  * during one, with that pass's report rather than doing the work again.
@@ -107,11 +127,13 @@ export function requestCatchUp(options?: { force?: boolean }): void {
     .catchUp(options)
     .then((report) => {
       update({ report })
+      if (report.error) retryFailedPass()
+      else failedPasses = 0
       if (report.deferred) armDeferredRetry()
     })
     // A pass that failed outright has nothing to show; the last report stands
-    // and the next resume asks again.
-    .catch(() => {})
+    // and it is asked again in a few minutes.
+    .catch(() => retryFailedPass())
     .finally(() => {
       running = false
       update({ inFlight: false })

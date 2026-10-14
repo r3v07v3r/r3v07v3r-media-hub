@@ -206,6 +206,39 @@ check('a pushed payload reaches the subscriber as-is', () => {
   assert.deepEqual(seen, [{ paused: true }])
 })
 
+check('the party status reaches the renderer with the host invite as main answered it', () => {
+  const answer = {
+    inParty: true,
+    role: 'host' as const,
+    selfId: 'h1',
+    inviteCode: 'R3P-abc',
+    beyondLan: true,
+    port: 4123
+  }
+  const calls: string[] = []
+  const api = createApi({
+    invoke: <T>(channel: string) => {
+      calls.push(channel)
+      return Promise.resolve(answer as T)
+    },
+    on: () => () => {},
+    send: () => {}
+  })
+  const pending = api.mediaHub.party.status()
+  assert.deepEqual(calls, [MEDIA_HUB_CHANNELS.partyStatus])
+  // check() is synchronous; the answer is checked when it lands.
+  pending
+    .then((status) => {
+      assert.equal(status.inviteCode, 'R3P-abc')
+      assert.equal(status.beyondLan, true)
+      assert.equal(status.port, 4123)
+    })
+    .catch((error: Error) => {
+      console.log(`FAIL  the party status answer\n      ${error.message}`)
+      process.exitCode = 1
+    })
+})
+
 check('the telemetry feed asks to start, and asks to stop before it stops listening', () => {
   const { transport, calls } = recordingTransport()
   const stop = createApi(transport).system.subscribe(() => {})

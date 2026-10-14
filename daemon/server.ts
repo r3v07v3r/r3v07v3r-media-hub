@@ -659,12 +659,15 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       // KNOWN LIMIT: only `items` is entitlement-scoped. `inFlight` and
       // `tombstoned` answer for any key the caller names, whoever queued
       // it, so a device can learn that a title it names is being fetched or
-      // was recently expired. Scoping them would change fetching, not just
-      // visibility: a feeder that stopped seeing a housemate's queued job
-      // would queue it again, and enqueue's ownership healing would hand
-      // that job to the second device; tombstones carry no owner at all, so
-      // hiding them would let every other device re-fetch what the TTL just
-      // expired. See "Known limits" in docs/CACHE-PERMISSIONS.md.
+      // was recently expired. Filtering `inFlight` here would not close
+      // that on its own: POST /api/jobs answers with the state of the job
+      // the caller joins, so the same fact is one request away. Scoping
+      // would also change fetching, not just visibility: a feeder that
+      // stopped seeing a housemate's queued job would queue it again on
+      // every pass (enqueue keeps the first owner, so that joins rather
+      // than takes over); tombstones carry no owner at all, so hiding them
+      // would let every other device re-fetch what the TTL just expired.
+      // See "Known limits" in docs/CACHE-PERMISSIONS.md.
       const filter = (url.searchParams.get('keys') ?? '')
         .split(',')
         .map((key) => key.trim())
@@ -736,20 +739,27 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
           return
         }
       }
-      const record = jobs.enqueue({
-        contentKey: String(body.contentKey ?? ''),
-        infoHash: String(body.infoHash ?? '').toLowerCase(),
-        title: String(body.title ?? ''),
-        fileIdx: Number.isFinite(Number(body.fileIdx)) ? Number(body.fileIdx) : undefined,
-        resolution: Number(body.resolution) || undefined,
-        sizeBytes: Number(body.sizeBytes) || undefined,
-        sources: Array.isArray(body.sources) ? body.sources.map(String).slice(0, 20) : undefined,
-        // Why the app wants it, for the queue to show. Matched against the
-        // two it may be rather than cast, so an unknown value is dropped
-        // instead of being stored and rendered as a label nobody wrote.
-        reason: body.reason === 'watching' || body.reason === 'prefetch' ? body.reason : undefined,
-        ownerDeviceId: callerDeviceId
-      })
+      const record = jobs.enqueue(
+        {
+          contentKey: String(body.contentKey ?? ''),
+          infoHash: String(body.infoHash ?? '').toLowerCase(),
+          title: String(body.title ?? ''),
+          fileIdx: Number.isFinite(Number(body.fileIdx)) ? Number(body.fileIdx) : undefined,
+          resolution: Number(body.resolution) || undefined,
+          sizeBytes: Number(body.sizeBytes) || undefined,
+          sources: Array.isArray(body.sources) ? body.sources.map(String).slice(0, 20) : undefined,
+          // Why the app wants it, for the queue to show. Matched against the
+          // two it may be rather than cast, so an unknown value is dropped
+          // instead of being stored and rendered as a label nobody wrote.
+          reason:
+            body.reason === 'watching' || body.reason === 'prefetch' ? body.reason : undefined,
+          ownerDeviceId: callerDeviceId
+        },
+        // The same test the fetcher applies before it spends anything: a
+        // device can fetch when it has shared a TorBox credential. A queued
+        // job only changes hands when its owner cannot and the caller can.
+        { canFetch: (deviceId) => Boolean(credentials.tokenForDevice(deviceId)) }
+      )
       if (!record) {
         json(res, 400, { error: 'A job needs a contentKey, a 40-hex infoHash, and a title.' })
         return

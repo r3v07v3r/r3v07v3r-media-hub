@@ -1695,6 +1695,171 @@ async function statusScopeTest(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------
+// Who owns a queued job when a second device asks for the same title.
+//
+// Ownership is whose TorBox account pays, whose allocation is charged,
+// who the finished item is entitled to and who may cancel it. Any queued
+// job used to change hands to whoever asked for it last, so a housemate
+// naming the same title took all four — and could then cancel a download
+// that was never theirs. A second requester joins now. The job moves only
+// when its owner cannot fetch it at all and the newcomer can.
+// ---------------------------------------------------------------------
+
+async function jobOwnershipTest(): Promise<void> {
+  const hash = 'e'.repeat(40)
+
+  // The store on its own: every combination of who can fetch.
+  {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-owner-store-'))
+    try {
+      const jobs = createJobStore(root)
+      const ownerOf = (key: string): string | undefined =>
+        jobs.list().find((job) => job.contentKey === key)?.ownerDeviceId
+      const queue = (key: string, owner: string | undefined, canFetch?: string[]): void => {
+        jobs.enqueue(
+          { contentKey: key, infoHash: hash, title: key, ownerDeviceId: owner },
+          canFetch ? { canFetch: (id) => canFetch.includes(id) } : undefined
+        )
+      }
+
+      queue('k-1', 'alice')
+      queue('k-1', 'bob')
+      assert.equal(ownerOf('k-1'), 'alice', 'with nothing to go on, the first owner keeps it')
+
+      queue('k-2', 'alice')
+      queue('k-2', 'bob', ['alice', 'bob'])
+      assert.equal(ownerOf('k-2'), 'alice', 'an owner who can fetch keeps the job')
+
+      queue('k-3', 'alice')
+      queue('k-3', 'bob', [])
+      assert.equal(ownerOf('k-3'), 'alice', 'nobody can fetch, so nothing is gained by moving it')
+
+      queue('k-4', 'alice')
+      queue('k-4', 'bob', ['bob'])
+      assert.equal(
+        ownerOf('k-4'),
+        'bob',
+        'a job its owner cannot fetch goes to a requester who can — the case the rule was for'
+      )
+
+      queue('k-5', undefined)
+      queue('k-5', 'bob', ['bob'])
+      assert.equal(ownerOf('k-5'), 'bob', 'an ownerless job is one nobody can fetch, too')
+
+      queue('k-6', 'alice')
+      jobs.update('k-6', { state: 'fetching' })
+      queue('k-6', 'bob', ['bob'])
+      assert.equal(ownerOf('k-6'), 'alice', 'a download already running is never moved')
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+    }
+  }
+
+  // Through the routes, where the takeover was a way to cancel somebody
+  // else's download.
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-owner-'))
+  const store = createItemStore(root, {
+    idleTtlMs: 60_000,
+    hardMaxMs: 600_000,
+    budgetBytes: 10 ** 9,
+    tombstoneMs: 60_000
+  })
+  const pairing = createPairing(root)
+  await pairing.load()
+  const admin = createAdmin(root)
+  await admin.load()
+  const jobs = createJobStore(root)
+
+  // Somebody else administers the box, so neither device below has the
+  // admin's licence to cancel anyone's work.
+  await admin.claim(deviceIdForToken(await joinApproved(pairing, 'the admin')))
+  const firstToken = await joinApproved(pairing, 'first device')
+  const secondToken = await joinApproved(pairing, 'second device')
+  const thirdToken = await joinApproved(pairing, 'third device')
+  const firstId = deviceIdForToken(firstToken)
+  const secondId = deviceIdForToken(secondToken)
+
+  const server = createDaemonServer({
+    storage: store,
+    jobs,
+    pairing,
+    admin,
+    credentials: createCredentials(root),
+    activity: createActivityTracker(root),
+    updaterStatus: () => ({
+      channel: 'preview',
+      enabled: true,
+      checkedAt: 0,
+      latestSeen: '',
+      staged: '',
+      stagedAt: 0,
+      lastError: ''
+    }),
+    serverName: 'test',
+    version: '0.0.0',
+    diskBudgetBytes: 10 ** 9
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+
+  const postAs = (token: string, route: string, body: unknown): Promise<Response> =>
+    fetch(`${base}${route}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+  const queueAs = (token: string, key: string): Promise<Response> =>
+    postAs(token, '/api/jobs', { contentKey: key, infoHash: hash, title: 'A Film' })
+  const ownerOf = (key: string): string | undefined =>
+    jobs.list().find((job) => job.contentKey === key)?.ownerDeviceId
+  const statusAs = async (token: string): Promise<{ jobs: Array<{ contentKey: string }> }> =>
+    (await (
+      await fetch(`${base}/api/status`, { headers: { Authorization: `Bearer ${token}` } })
+    ).json()) as { jobs: Array<{ contentKey: string }> }
+
+  try {
+    await postAs(firstToken, '/api/credentials', { torboxToken: 'first-torbox-token' })
+    await postAs(secondToken, '/api/credentials', { torboxToken: 'second-torbox-token' })
+
+    assert.equal((await queueAs(firstToken, 'k-film')).status, 200)
+    const joined = await queueAs(secondToken, 'k-film')
+    assert.equal(joined.status, 200, 'asking for a title already queued is still a yes')
+    assert.deepEqual(await joined.json(), { state: 'queued' }, 'answered with the existing job')
+    assert.equal(ownerOf('k-film'), firstId, 'and the device that queued it still owns it')
+    assert.equal(jobs.list().filter((job) => job.contentKey === 'k-film').length, 1)
+
+    const cancel = await postAs(secondToken, '/api/jobs/cancel', { contentKey: 'k-film' })
+    assert.equal(cancel.status, 404, 'joining a job does not buy the right to cancel it')
+    assert.equal(
+      jobs.list().find((job) => job.contentKey === 'k-film')?.state,
+      'queued',
+      "and the first device's download is still there"
+    )
+    assert.ok(
+      (await statusAs(firstToken)).jobs.some((job) => job.contentKey === 'k-film'),
+      "it stays in the owner's own queue"
+    )
+    assert.equal(
+      (await statusAs(secondToken)).jobs.some((job) => job.contentKey === 'k-film'),
+      false,
+      "and does not appear in the second device's as if it were theirs"
+    )
+
+    // The case the old rule was written for still works: the owner has no
+    // TorBox access, so the job could never be fetched as it stands.
+    await postAs(firstToken, '/api/credentials', { torboxToken: '' })
+    await queueAs(thirdToken, 'k-film')
+    assert.equal(ownerOf('k-film'), firstId, 'a requester who cannot fetch it either gains nothing')
+    await queueAs(secondToken, 'k-film')
+    assert.equal(ownerOf('k-film'), secondId, 'one who can fetch it takes over the stuck job')
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  }
+  console.log('ok  a second requester joins a queued job, it does not take it')
+}
+
+// ---------------------------------------------------------------------
 // Sharing — the owner deciding who else may reach what they fetched.
 // ---------------------------------------------------------------------
 
@@ -2643,5 +2808,6 @@ void main()
   .then(quotaStoreTest)
   .then(budgetRoomTest)
   .then(statusScopeTest)
+  .then(jobOwnershipTest)
   .then(sharingRouteTest)
   .then(myItemsTest)

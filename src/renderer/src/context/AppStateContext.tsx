@@ -59,6 +59,9 @@ import {
 import {
   planToastAfterStatus,
   plannedToast,
+  readShowsAnnouncedAt,
+  rememberShowsAnnounced,
+  showsToAnnounce,
   toastAfterPlanToggle,
   toggleApplies,
   unplannedToast
@@ -393,7 +396,7 @@ interface AppStateValue {
   // AIAssistantInput.tsx, which is route-aware): when the current route is
   // /movies, /series, or /anime, typing + Enter calls catalog:search(kind,
   // query) — a real backend search (main/media-hub/catalog.ts's
-  // catalogSearch handler, Simkl for movies/series, Kitsu for anime) —
+  // searchCatalog handler, Cinemeta for movies/series, Kitsu for anime) —
   // instead of the fake assistant response Home's search still uses.
   // `kind` doubles as "is a category search currently active" — a
   // CategoryPage only renders the search-results view when this matches
@@ -884,7 +887,18 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     // so stringifying them is far cheaper than the render it avoids.
     api
       .status()
-      .then((next) => setPartyStatus((prev) => (prev && sameJson(prev, next) ? prev : next)))
+      .then((next) => {
+        setPartyStatus((prev) => (prev && sameJson(prev, next) ? prev : next))
+        // A party hosted from the player rail never went through hostParty
+        // below, so its invite comes from the status: the Party panel's
+        // Invite and a Rooms join request both need it, and the rail's copy
+        // goes when the player closes.
+        if (next.inParty && next.role === 'host' && next.inviteCode) {
+          setPartyHostCode(next.inviteCode)
+          setPartyWanAvailable(next.beyondLan ?? null)
+          setPartyHostPort(next.port ?? null)
+        }
+      })
       .catch(() => {})
     api
       .queue()
@@ -1199,10 +1213,29 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           forgetContinueWatching(id)
           if (typeof result?.tracked === 'boolean') rememberTrackedId(trackedId, result.tracked)
           homeFeed.refresh()
+          // Remove took the title off the plan, so it gets the same "off
+          // your plan" toast as Remove from plan, and its Undo restores the
+          // row main held (restorePlan), which brings the row back here too.
+          // The plan set is updated first, or the Undo would find the title
+          // still planned and do nothing (toggleApplies).
+          if (result?.tracked === false) {
+            const removed = { ...entry.media, id: trackedId }
+            setMyList((prev) => {
+              if (!prev.has(trackedId)) return prev
+              const next = new Set(prev)
+              next.delete(trackedId)
+              return next
+            })
+            pushNotification(
+              unplannedToast(removed, activeProfileId, () =>
+                toggleMyListRef.current(removed, true, true)
+              )
+            )
+          }
         })
         .catch(() => {})
     },
-    [continueWatching, homeFeed]
+    [continueWatching, homeFeed, pushNotification, activeProfileId]
   )
 
   // A refused download is never routine — it's either something hostile
@@ -1245,6 +1278,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setSyncReviewOpen(false)
   }
 
+  // The launch check below runs once, 8 s in; by then the profile has loaded,
+  // and the record of which rows were already announced is that profile's.
+  const launchProfileRef = useRef(activeProfileId)
+  useEffect(() => {
+    launchProfileRef.current = activeProfileId
+  }, [activeProfileId])
+
   useEffect(() => {
     const api = window.api?.mediaHub?.tracking
     if (!api) return
@@ -1252,10 +1292,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       api
         .reconcileCheck()
         .then((result) => {
-          const shows = result.shows ?? []
-          setSyncShows(shows)
+          const listed = result.shows ?? []
+          setSyncShows(listed)
+          // Only rows a pass added to since the last toast are named; the
+          // rest are still in the panel, behind the bell (statusToasts.ts).
+          const profileId = launchProfileRef.current
+          const shows = showsToAnnounce(listed, readShowsAnnouncedAt(profileId))
           if (!result.discrepancies.length && !shows.length) return
           setSyncDiscrepancies(result.discrepancies)
+          if (shows.length) {
+            rememberShowsAnnounced(profileId, Math.max(...shows.map((row) => row.at)))
+          }
           const said: string[] = []
           if (result.discrepancies.length) {
             said.push(
@@ -2730,6 +2777,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             partyCode: partyHostCode
           })
           .catch(() => {})
+        return
+      }
+      // Hosting, but the code has not reached this window yet (the status
+      // that carries it is a moment behind a party hosted from the player).
+      if (partyStatus?.inParty && partyStatus.role === 'host') {
+        decline("They're starting a watch party. Try again in a moment.")
         return
       }
       if (partyStatus?.inParty) {

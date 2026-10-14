@@ -2,9 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import type { CatalogItem, MediaKind } from '@shared/media-hub/types'
 import { api } from '../lib/api'
-import { browsePagingDone, indexMayHaveGrown } from '../lib/browsePaging'
+import { browsePagingDone, browseWaitingForIndex, indexMayHaveGrown } from '../lib/browsePaging'
 import { isMediaKind, kindLabel } from '../lib/mediaKind'
 import { toPosterItem } from '../lib/posterItem'
+import { useSlowLoad } from '../lib/useSlowLoad'
 import PosterCard from '../components/PosterCard'
 import PosterSkeleton from '../components/PosterSkeleton'
 import Spinner from '../components/Spinner'
@@ -24,6 +25,10 @@ const SKELETON_COUNT = 12
 // infinite in practice long before it's reached.
 const MAX_ITEMS = 300
 const PAGE_SIZE = 60
+
+// How long an empty grid waits on the index before it stops saying it is
+// still loading — twice the minute LoadingNote promises.
+const INDEX_WAIT_LIMIT_MS = 2 * 60 * 1000
 
 interface BrowseState {
   items: CatalogItem[]
@@ -90,7 +95,7 @@ function useBrowseCatalog(kind: MediaKind) {
   // asks. The backend announces every index write (the crawl, the deep
   // scan, the household sync), and the grid starts over on the first one,
   // rather than saying "Nothing here yet" until the screen is opened again.
-  const waitingForIndex = state.done && !state.loading && !state.error && state.items.length === 0
+  const waitingForIndex = browseWaitingForIndex({ ...state, count: state.items.length })
   useEffect(() => {
     if (!waitingForIndex) return
     return api()?.library.onChanged((event) => {
@@ -101,7 +106,7 @@ function useBrowseCatalog(kind: MediaKind) {
     })
   }, [waitingForIndex])
 
-  return { ...state, loadMore }
+  return { ...state, waitingForIndex, loadMore }
 }
 
 /** Fires `onVisible` whenever the returned ref's element is on screen.
@@ -129,10 +134,16 @@ function useLoadMoreOnVisible(onVisible: () => void, enabled: boolean) {
 export default function Browse() {
   const params = useParams<{ kind: string }>()
   const kind = isMediaKind(params.kind) ? params.kind : null
-  const { items, loading, error, done, loadMore } = useBrowseCatalog(kind ?? 'movie')
+  const { items, loading, error, done, waitingForIndex, loadMore } = useBrowseCatalog(
+    kind ?? 'movie'
+  )
   // Paused after an error: the observer would otherwise retry the moment it
   // is re-created, over and over. "Try again" clears the error and resumes it.
   const sentinelRef = useLoadMoreOnVisible(loadMore, Boolean(kind) && !done && !error)
+  // A first crawl takes up to a minute. One that has not filled the grid
+  // well after that has most likely found nothing for it, and saying it is
+  // still loading for ever would be the dead end the other way round.
+  const waitedTooLong = useSlowLoad(waitingForIndex, INDEX_WAIT_LIMIT_MS)
 
   if (!kind) return <StatusNote tone="error">Unknown category.</StatusNote>
 
@@ -171,9 +182,13 @@ export default function Browse() {
           <Spinner />
         </div>
       )}
-      {!loading && !items.length && !error && <StatusNote>Nothing here yet.</StatusNote>}
+      {waitingForIndex && waitedTooLong && <StatusNote>Nothing here yet.</StatusNote>}
+      {/* An empty grid with nothing failing is still loading, between pages
+          as much as during one: the first crawl lands as several index
+          writes, and the note must not drop out and wait its delay again
+          after each. */}
       <LoadingNote
-        loading={loading}
+        loading={loading || (!items.length && !error && !waitedTooLong)}
         subject={kind === 'anime' ? 'the anime catalogue' : 'a catalogue'}
       />
       {!done && <div ref={sentinelRef} className="browse-sentinel" aria-hidden="true" />}

@@ -85,7 +85,11 @@ current pricing page before relying on either plan.
   invite key, host token, join secret and signed cryptograms.
 - Limits: at most 32 connections per room (`Party is full.`, HTTP 429), at
   most 40 messages per connection per 10 seconds, and no message over 60 KiB;
-  exceeding the last two closes that socket (codes 1008 and 1009).
+  exceeding the last two closes that socket (codes 1008 and 1009). Only a
+  message that fits in the socket's 16 KiB attachment (Cloudflare's cap) is
+  kept for the replay above; a larger one is still relayed to everyone
+  connected, but a later joiner is not replayed anything from that sender
+  until it sends something smaller.
 - Rooms expire after 30 days with no activity (`ROOM_IDLE_TTL_MS`, `touch()`
   and `alarm()` in `src/room.ts`). Every `/init`, `/kick`, WebSocket connect
   and relayed message pushes the deadline out, and `alarm()` re-arms instead

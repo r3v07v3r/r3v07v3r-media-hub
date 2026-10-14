@@ -5,6 +5,8 @@
 // with nothing on screen to say why, which is what pins them here.
 
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
 import zlib from 'node:zlib'
 
 import {
@@ -147,5 +149,24 @@ assert.equal(anime4kStartsActive('anime', true), true)
 
 // Not a zip at all — an HTML error page with a 200, say.
 assert.throws(() => extractAnime4kShaders(Buffer.from('<html>oops</html>')))
+
+// Installing is the opt-in: a successful Install from Settings also switches
+// "Use Anime4K while watching" on, and nothing else does. Read from the
+// source, as the page needs the CSS-module build to render; main still
+// refuses the switch without the files (settingsSetAnime4kEnabled).
+{
+  const settingsPage = fs
+    .readFileSync(path.join(__dirname, '..', 'src/renderer/src/routes/SettingsPage.tsx'), 'utf8')
+    .replace(/\r\n/g, '\n')
+  const handler = settingsPage.slice(
+    settingsPage.indexOf('async function handleAnime4kInstallOrRemove'),
+    settingsPage.indexOf('async function handleSetAnime4kEnabled')
+  )
+  assert.match(
+    handler,
+    /if \(status\.state === 'installed'\) \{\s*await api\.settings\.setAnime4kEnabled\(true\)/
+  )
+  assert.equal(handler.match(/setAnime4kEnabled\(/g)?.length, 1)
+}
 
 console.log('anime4k tests passed')

@@ -48,11 +48,24 @@ const JOB_EXPIRY_MS = 48 * 60 * 60 * 1000
 
 const INFO_HASH_RE = /^[a-f0-9]{40}$/
 
+export interface EnqueueOptions {
+  /** Whether a device has shared a TorBox credential this daemon can fetch
+   *  with. Consulted only when a second device asks for a job that is still
+   *  queued, to decide whether the job may change hands. Left out, nobody
+   *  is assumed able to fetch, so a job keeps the device that queued it. */
+  canFetch?: (deviceId: string) => boolean
+}
+
 export interface JobStore {
   list(): JobRecord[]
   /** Adds or refreshes a job. An existing ready/fetching entry for the same
-   *  content is left alone — queueing is idempotent from the feeder's view. */
-  enqueue(job: Omit<JobRecord, 'state' | 'queuedAt' | 'attempts'>): JobRecord | null
+   *  content is left alone — queueing is idempotent from the feeder's view.
+   *  A queued one keeps its owner unless that owner cannot fetch it and the
+   *  new requester can (see the ownership rule inside). */
+  enqueue(
+    job: Omit<JobRecord, 'state' | 'queuedAt' | 'attempts'>,
+    options?: EnqueueOptions
+  ): JobRecord | null
   cancel(contentKey: string): boolean
   /** The next job the fetch loop should work on, oldest first. */
   nextQueued(): JobRecord | null
@@ -90,7 +103,7 @@ export function createJobStore(dataDir: string): JobStore {
 
   return {
     list: () => [...jobs],
-    enqueue(input) {
+    enqueue(input, options) {
       if (!INFO_HASH_RE.test(input.infoHash)) return null
       if (!input.contentKey || !input.title) return null
       const existing = jobs.find((job) => job.contentKey === input.contentKey)
@@ -103,12 +116,33 @@ export function createJobStore(dataDir: string): JobStore {
           existing.state === 'fetching' ||
           existing.state === 'ready'
         ) {
-          // Ownership healing: a job stuck queued because its owner never
-          // shared a TorBox credential is adopted by a later requester of
-          // the same title — the second household member wanting it may be
-          // the one whose account CAN fetch it.
-          if (existing.state === 'queued' && input.ownerDeviceId) {
-            existing.ownerDeviceId = input.ownerDeviceId
+          // A SECOND REQUESTER JOINS, it does not take over.
+          //
+          // This used to hand any queued job to whoever asked for it last.
+          // Ownership decides whose TorBox account pays, whose allocation the
+          // file is charged to, who the finished item is entitled to and who
+          // may cancel it — so a housemate who named the same title took all
+          // four, and could then cancel a download the first device was
+          // about to make. The first owner keeps it now. The second device
+          // loses nothing: its feeder sees the title in flight and waits,
+          // and when it asks again after the file lands it is granted the
+          // copy that exists (the dedupe path in POST /api/jobs).
+          //
+          // The one case where the job still changes hands is the one the
+          // old rule was written for: a job stuck queued because its owner
+          // never shared a TorBox credential, wanted by somebody whose
+          // account CAN fetch it. That job could not be fetched at all as it
+          // stood, so moving it takes nothing from anyone.
+          const adopter = input.ownerDeviceId
+          if (
+            existing.state === 'queued' &&
+            adopter &&
+            adopter !== existing.ownerDeviceId &&
+            options?.canFetch &&
+            !options.canFetch(existing.ownerDeviceId ?? '') &&
+            options.canFetch(adopter)
+          ) {
+            existing.ownerDeviceId = adopter
             schedulePersist()
           }
           // A prefetch that somebody has since started watching is a watch.

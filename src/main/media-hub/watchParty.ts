@@ -129,6 +129,9 @@ interface PartyStateHost {
   /** The invite code minted at host time — republished to rooms so a
    *  member's "Watch" button can join without the request round trip. */
   code: string
+  /** Whether that code reaches beyond the LAN (a mapped port or the relay),
+   *  as party:host answered; party:status repeats both for the main window. */
+  beyondLan: boolean
   secret: string
   members: Map<string, PartyHostMember>
   hostId: string
@@ -623,6 +626,7 @@ export function registerWatchPartyIpc(): void {
       relayCreds: null,
       relayReattempts: 0,
       code: '',
+      beyondLan: false,
       secret,
       members,
       hostId,
@@ -905,6 +909,7 @@ export function registerWatchPartyIpc(): void {
           })
         : encodeShareCode({ lan, wan, secret })
     hostState.code = code
+    hostState.beyondLan = Boolean(wan) || Boolean(hostState.relay)
     // Both renderers hear the party exists now, not at the first join: the
     // player rail hosts too, and the main window otherwise keeps showing
     // the host/join form (and cannot leave) until a guest's arrival
@@ -1185,7 +1190,15 @@ export function registerWatchPartyIpc(): void {
       selfName: current.selfName || '',
       hostName: current.hostName || '',
       allowMemberControl: Boolean(current.allowMemberControl),
-      nowPlaying: nowPlayingSummary(current)
+      nowPlaying: nowPlayingSummary(current),
+      // The host's own invite, so a party hosted from the player rail can
+      // still be shared from the main window, and after the player closes.
+      // Whoever can ask (this app's renderers, a paired device of the
+      // headless backend) can host a party anyway; a guest of someone
+      // else's party never gets a code here.
+      ...(current.role === 'host' && current.code
+        ? { inviteCode: current.code, beyondLan: current.beyondLan, port: current.port }
+        : {})
     }
   })
 

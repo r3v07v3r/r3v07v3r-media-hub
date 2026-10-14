@@ -886,6 +886,14 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
   )
   const kindState = catalogKindStates[config.kind]
   const searchActive = categorySearch.kind === config.kind && categorySearch.query.trim().length > 0
+  // The page's query: its filters, Hide toggles and search. A selection made
+  // under another one is shown only while its title is still on the page
+  // (librarySelection.ts), so a filter that hides it moves the panel on.
+  // Stamped during render when the selection changes, as AppStateContext
+  // resets its review state, so no frame shows a stale stamp.
+  const queryKey = `${JSON.stringify(filters)}|${searchActive ? categorySearch.query.trim() : ''}`
+  const [selectedUnder, setSelectedUnder] = useState({ selection, query: queryKey })
+  if (selectedUnder.selection !== selection) setSelectedUnder({ selection, query: queryKey })
   // STAGE 3: the browse grid pages from the index (catalog:query) — SQL
   // filters, SQL sort, exact totals — instead of filtering the loaded
   // array. The array (`library`) remains only for the curated rails and
@@ -1172,9 +1180,19 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
       resolveLibrarySelection(
         [browseItems, continuing, recommended, heroItems],
         selection,
-        activeHero
+        activeHero,
+        selectedUnder.query !== queryKey
       ),
-    [activeHero, browseItems, continuing, heroItems, recommended, selection]
+    [
+      activeHero,
+      browseItems,
+      continuing,
+      heroItems,
+      recommended,
+      selection,
+      selectedUnder,
+      queryKey
+    ]
   )
   const heroArt = activeHero ? resolveArtwork(activeHero) : null
 

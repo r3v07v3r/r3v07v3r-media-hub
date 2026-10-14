@@ -12,7 +12,11 @@
 
 import assert from 'node:assert/strict'
 
-import { browsePagingDone, indexMayHaveGrown } from '../src/app-ui/lib/browsePaging'
+import {
+  browsePagingDone,
+  browseWaitingForIndex,
+  indexMayHaveGrown
+} from '../src/app-ui/lib/browsePaging'
 
 let pass = 0
 function check(name: string, fn: () => void): void {
@@ -44,6 +48,19 @@ check('an index write or a wholesale change can have grown the grid', () => {
     false,
     'watch history moving adds no titles to a grid'
   )
+})
+
+check('an empty grid that stopped paging cleanly is waiting, not empty', () => {
+  const grid = { done: true, loading: false, error: null, count: 0 }
+  assert.equal(browseWaitingForIndex(grid), true, 'the first crawl has not landed')
+  assert.equal(browseWaitingForIndex({ ...grid, done: false }), false, 'not asked yet')
+  assert.equal(browseWaitingForIndex({ ...grid, loading: true }), false, 'still fetching')
+  assert.equal(
+    browseWaitingForIndex({ ...grid, error: 'Not connected to a backend.' }),
+    false,
+    'a failure says so itself'
+  )
+  assert.equal(browseWaitingForIndex({ ...grid, count: 12 }), false, 'titles on screen')
 })
 
 console.log(`\n${pass} passed`)

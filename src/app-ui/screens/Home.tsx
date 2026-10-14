@@ -93,6 +93,11 @@ export default function Home() {
   // the rows are empty precisely because it has not answered yet.
   const empty = !loading && !catchUp.inFlight && noPersonalRows && !rails.length
   const firstLoad = loading && !data
+  // Set when every catalogue read failed: the local rows still arrive, and
+  // only the suggestions are missing. Read loosely so this screen works
+  // against a backend that predates the field.
+  const catalogError = (data as (HomePersonalizedResult & { catalogError?: string }) | null)
+    ?.catalogError
   // A report with no `at` is the backend declining to run (something was
   // playing) before any pass ever has; it knows nothing about what is
   // connected, so it must not be read as "nothing is".
@@ -112,10 +117,18 @@ export default function Home() {
           {error && (
             <StatusNote tone="error">Could not reach the backend for recommendations.</StatusNote>
           )}
+          {!error && catalogError && (
+            <StatusNote>
+              The online catalogue is unavailable right now, so there are no suggestions.
+            </StatusNote>
+          )}
           {updating && <StatusNote>Updating…</StatusNote>}
+          {/* Linking hands this device the computer's own Simkl sign-in, so
+              linking again alone brings back the same refused one. */}
           {report?.signedOut ? (
             <StatusNote>
-              Simkl signed this device out. Link your computer again in Settings.
+              Simkl signed this device out. Reconnect Simkl on your computer, then link this device
+              again in Settings.
             </StatusNote>
           ) : (
             report?.connected === false &&
@@ -131,7 +144,7 @@ export default function Home() {
           {rails.map((rail) => (
             <PosterRow key={rail.id} title={rail.title} items={rail.items} />
           ))}
-          {empty && !error && (
+          {empty && !error && !catalogError && (
             <StatusNote>
               Nothing to show yet — browse Movies, Series or Anime to get started.
             </StatusNote>

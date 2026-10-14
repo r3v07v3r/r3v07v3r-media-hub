@@ -9,18 +9,25 @@
 // now kept as the item that was selected; a fresh copy from the page is
 // preferred while there is one, and the hero stands in only when nothing has
 // been selected.
+//
+// That holding is for a title that left because of something done to it. A
+// title the person hid themselves, by changing the page's query (a filter,
+// a Hide toggle, a search), is not held: once the query has changed since
+// it was selected, it is shown only while it is still on the page.
 
 import type { MediaItem } from '@renderer/types'
 
 export function resolveLibrarySelection(
   pools: ReadonlyArray<readonly MediaItem[]>,
   selection: MediaItem | null,
-  fallback: MediaItem | null
+  fallback: MediaItem | null,
+  /** The page's query has changed since `selection` was made. */
+  queryChanged = false
 ): MediaItem | null {
   if (!selection) return fallback
   for (const pool of pools) {
     const found = pool.find((item) => item.id === selection.id)
     if (found) return found
   }
-  return selection
+  return queryChanged ? fallback : selection
 }

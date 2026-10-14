@@ -838,6 +838,11 @@ export interface PlannedSyncReport {
    *  and are waiting to be retried — see historyRetry.ts. Filled in when the
    *  report is handed to the interface, not stored with it. */
   historyPending?: number
+  /** The same changes as the panel says them: how many titles they are
+   *  about, and the services they are owed to (tracking.ts's
+   *  summarizeHistoryPending). Filled in alongside historyPending. */
+  historyPendingTitles?: number
+  historyPendingServices?: ('simkl' | 'trakt' | 'mal')[]
 }
 
 /**
@@ -1738,6 +1743,14 @@ export interface PartyStatusResult {
   allowMemberControl?: boolean
   /** See PartyNowPlayingSummary; null when nothing is playing. */
   nowPlaying?: PartyNowPlayingSummary | null
+  /** Host only: the invite code party:host answered, so the main window can
+   *  offer Invite for a party hosted from the player rail. */
+  inviteCode?: string
+  /** Host only: whether that code reaches beyond the LAN (a mapped port or
+   *  the relay) — PartyHostResult's wanAvailable || relayAttached. */
+  beyondLan?: boolean
+  /** Host only: the direct listener's port, as party:host answered. */
+  port?: number
 }
 
 export type PartyEventPayload =

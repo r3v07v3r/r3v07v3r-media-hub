@@ -30,3 +30,44 @@ export function notificationTtlMs(
   if (notification.action) return null
   return notification.tone !== 'error' ? NOTIFICATION_TTL_MS : ERROR_TTL_MS
 }
+
+/** The most toasts on screen at once. The column has no scroll of its own,
+ *  and a toast that waits to be dismissed (an error with Retry, an Undo)
+ *  would otherwise stack once per failed Play until each was closed by hand. */
+export const MAX_NOTIFICATIONS = 8
+
+type Placed = Pick<AppNotification, 'tone' | 'message' | 'action' | 'durationMs' | 'profileId'>
+
+/** Whether two toasts say the same thing: same tone, words, action and
+ *  profile. A second one replaces the first rather than standing under it. */
+function sameNotification(a: Placed, b: Placed): boolean {
+  return (
+    a.tone === b.tone &&
+    a.message === b.message &&
+    a.action?.label === b.action?.label &&
+    a.profileId === b.profileId
+  )
+}
+
+/**
+ * The toasts on screen once `next` is added, and the ones it pushed off
+ * (their timers are the caller's to clear). An earlier toast saying the same
+ * thing goes, so a fourth failed Play of the same title leaves one Retry,
+ * and past MAX_NOTIFICATIONS the oldest goes, one that would have left by
+ * itself first: a waiting Undo or Retry is kept over a passing "Synced".
+ * `next` itself is always kept.
+ */
+export function addNotification<T extends Placed>(
+  current: readonly T[],
+  next: T
+): { kept: T[]; dropped: T[] } {
+  const dropped = current.filter((x) => sameNotification(x, next))
+  const kept = current.filter((x) => !dropped.includes(x))
+  while (kept.length >= MAX_NOTIFICATIONS) {
+    const timed = kept.findIndex((x) => notificationTtlMs(x) !== null)
+    const [gone] = kept.splice(timed >= 0 ? timed : 0, 1)
+    dropped.push(gone)
+  }
+  kept.push(next)
+  return { kept, dropped }
+}

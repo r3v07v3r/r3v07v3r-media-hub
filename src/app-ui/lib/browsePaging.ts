@@ -24,6 +24,22 @@ export function browsePagingDone(
   return pageLength === 0 || loaded >= total || loaded >= max
 }
 
+/**
+ * Whether the grid is empty because the index has nothing for it YET: paging
+ * stopped on an empty first page with nothing failing and nothing still
+ * loading. That is the first crawl not having landed, so the screen says it
+ * is still loading rather than "Nothing here yet", and starts over when the
+ * index changes (see indexMayHaveGrown).
+ */
+export function browseWaitingForIndex(grid: {
+  done: boolean
+  loading: boolean
+  error: string | null
+  count: number
+}): boolean {
+  return grid.done && !grid.loading && !grid.error && grid.count === 0
+}
+
 /** Whether a library:changed event can have added titles to a Browse grid:
  *  the index scope (a crawl, the deep scan, the household sync, a search
  *  title indexed when opened) or a wholesale change. */

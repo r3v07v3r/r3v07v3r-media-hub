@@ -51,11 +51,18 @@ import {
   planToastAfterStatus,
   plannedToast,
   QUICK_UNDO_MS,
+  readShowsAnnouncedAt,
+  rememberShowsAnnounced,
+  showsToAnnounce,
   toastAfterPlanToggle,
   toggleApplies,
   unplannedToast
 } from '../src/renderer/src/lib/mediaHub/statusToasts'
-import { notificationTtlMs } from '../src/renderer/src/lib/notificationTtl'
+import {
+  addNotification,
+  MAX_NOTIFICATIONS,
+  notificationTtlMs
+} from '../src/renderer/src/lib/notificationTtl'
 import {
   hideDislikedDefault,
   logoutSettings,
@@ -139,6 +146,92 @@ check('the quick Undo toasts leave by themselves; other Undo toasts still wait',
     null
   )
   assert.ok((notificationTtlMs({ tone: 'info' }) ?? 0) > 0)
+})
+
+check('a repeated toast replaces the one it repeats', () => {
+  const retry = (id: string) => ({
+    id,
+    tone: 'error' as const,
+    message: 'No source found for Dune.',
+    action: { label: 'Retry', run: () => {} }
+  })
+  const other = { id: 'b', tone: 'error' as const, message: 'No source found for Alien.' }
+  const first = addNotification([], retry('a'))
+  const second = addNotification([...first.kept, other], retry('c'))
+  assert.deepEqual(
+    second.kept.map((x) => x.id),
+    ['b', 'c']
+  )
+  assert.deepEqual(
+    second.dropped.map((x) => x.id),
+    ['a']
+  )
+  // The same words with another action, or for another profile, are not a repeat.
+  const undo = { id: 'd', tone: 'error' as const, message: retry('').message }
+  assert.equal(addNotification(second.kept, undo).dropped.length, 0)
+  assert.equal(addNotification([retry('e')], { ...retry('f'), profileId: 'p2' }).dropped.length, 0)
+})
+
+check('the launch toast names only show rows added to since the last toast, per profile', () => {
+  const store = new Map<string, string>()
+  const g = globalThis as { window?: unknown }
+  const before = g.window
+  g.window = {
+    localStorage: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value)
+    }
+  }
+  try {
+    const rows = [
+      { id: 'a', at: 100 },
+      { id: 'b', at: 200 }
+    ]
+    // Nothing announced yet: every row is new.
+    assert.deepEqual(showsToAnnounce(rows, readShowsAnnouncedAt('p1')), rows)
+    rememberShowsAnnounced('p1', 200)
+    // The next launch, the same rows: nothing to say.
+    assert.deepEqual(showsToAnnounce(rows, readShowsAnnouncedAt('p1')), [])
+    // A pass adds to one row (its `at` moves on): only that one is named.
+    const later = [rows[0], { id: 'b', at: 300 }]
+    assert.deepEqual(
+      showsToAnnounce(later, readShowsAnnouncedAt('p1')).map((row) => row.id),
+      ['b']
+    )
+    // Another profile keeps its own record.
+    assert.equal(readShowsAnnouncedAt('p2'), 0)
+  } finally {
+    g.window = before
+  }
+  // No storage at all: everything is named, nothing throws.
+  assert.equal(readShowsAnnouncedAt('p1'), 0)
+  rememberShowsAnnounced('p1', 5)
+})
+
+check('the toast column is capped, and a toast that waits is kept over one that passes', () => {
+  const waiting = (id: string) => ({
+    id,
+    tone: 'success' as const,
+    message: `Marked show ${id}`,
+    action: { label: 'Undo', run: () => {} }
+  })
+  let list = Array.from({ length: MAX_NOTIFICATIONS - 1 }, (_, i) => waiting(`w${i}`))
+  list = addNotification(list, { id: 'synced', tone: 'info' as const, message: 'Synced' }).kept
+  assert.equal(list.length, MAX_NOTIFICATIONS)
+  // Full: the passing "Synced" goes before any Undo.
+  const next = addNotification(list, waiting('new'))
+  assert.equal(next.kept.length, MAX_NOTIFICATIONS)
+  assert.deepEqual(
+    next.dropped.map((x) => x.id),
+    ['synced']
+  )
+  // Nothing passing left: the oldest goes, and the new one is always kept.
+  const after = addNotification(next.kept, waiting('newer'))
+  assert.deepEqual(
+    after.dropped.map((x) => x.id),
+    ['w0']
+  )
+  assert.equal(after.kept.at(-1)?.id, 'newer')
 })
 
 check('an Undo reverses only a change that is still there', () => {
@@ -592,6 +685,74 @@ check('the status actions hold the title, and leaving the page lets it go and re
   )
 })
 
+check(
+  "Continue Watching's Remove raises the off-your-plan toast, whose Undo restores the row",
+  () => {
+    const source = contextSource.replace(/\r\n/g, '\n')
+    const start = source.indexOf('const removeContinueWatching = useCallback(')
+    assert.ok(start >= 0, 'removeContinueWatching not found')
+    const body = source.slice(start, source.indexOf('\n  )\n', start))
+    // Only once the toggle answered that the title is off the plan.
+    assert.match(body, /if \(result\?\.tracked === false\) \{/)
+    // The plan set drops the title first, so the Undo's toggleApplies check
+    // sees it unplanned and goes ahead.
+    assert.match(body, /setMyList\(\(prev\) => \{[\s\S]*?next\.delete\(trackedId\)/)
+    // The Undo is the plan toggle's own (fromUndo, to true), which sends
+    // restorePlan rather than planning the title afresh.
+    assert.match(
+      body,
+      /unplannedToast\(removed, activeProfileId, \(\) =>\s*toggleMyListRef\.current\(removed, true, true\)/
+    )
+    assert.match(source, /fromUndo && to === true \? tracking\?\.restorePlan\(payload\)/)
+  }
+)
+
+check('a profile switch asks for a catch-up, with the ten minutes counted per profile', () => {
+  const hook = fs
+    .readFileSync(path.resolve(__dirname, '../src/renderer/src/hooks/useServiceCatchUp.ts'), 'utf8')
+    .replace(/\r\n/g, '\n')
+  // The gap is read for the profile on screen, and each ask is stamped
+  // against that profile.
+  assert.match(hook, /lastAsked\.get\(profileRef\.current\) \?\? 0\) >= FOCUS_GAP_MS\) ask\(\)/)
+  assert.match(hook, /lastAsked\.set\(profileRef\.current, Date\.now\(\)\)/)
+  // A change of profile asks (if that profile is due), and a switch that
+  // lands while a pass runs is asked for once the pass ends.
+  assert.match(
+    hook,
+    /if \(profileRef\.current === activeProfileId\) return\s*profileRef\.current = activeProfileId\s*askIfDueRef\.current\?\.\(\)\s*\}, \[activeProfileId\]\)/
+  )
+  assert.match(hook, /if \(running\) \{\s*askAfter = true/)
+  assert.match(hook, /if \(askAfter\) \{\s*askAfter = false\s*askIfDue\(\)/)
+})
+
+check('a MyAnimeList Apply that partly fails says why and keeps only the failed rows', () => {
+  const sections = fs
+    .readFileSync(
+      path.resolve(__dirname, '../src/renderer/src/routes/MediaHubSettingsSections.tsx'),
+      'utf8'
+    )
+    .replace(/\r\n/g, '\n')
+  const apply = sections.slice(
+    sections.indexOf('async function applyReconcile'),
+    sections.indexOf(
+      'const connected = status?.connected',
+      sections.indexOf('async function applyReconcile')
+    )
+  )
+  // Each list keeps the rows an error names, by that list's own id.
+  assert.match(
+    apply,
+    /toLocal: preview\.toLocal\.filter\(\(item\) => failed\('kitsuId', item\.kitsuId\)\)/
+  )
+  assert.match(apply, /toMal: preview\.toMal\.filter\(\(item\) => failed\('malId', item\.malId\)\)/)
+  assert.match(apply, /failed\('targetId', item\.targetId\)/)
+  // No failure clears the preview, as before.
+  assert.match(apply, /: null\s*\)/)
+  // The first reason follows the count.
+  assert.match(apply, /const reason = result\.errors\[0\]\?\.error/)
+  assert.match(apply, /\}\.\$\{reason \? ` \$\{reason\}` : ''\}`/)
+})
+
 // --- the library side panel keeps its title ----------------------------------
 
 check('the side panel keeps the selected title after it leaves every shelf', () => {
@@ -601,6 +762,30 @@ check('the side panel keeps the selected title after it leaves every shelf', () 
   assert.equal(resolveLibrarySelection([[hero, fresh]], picked, hero), fresh)
   assert.equal(resolveLibrarySelection([[hero]], picked, hero), picked)
   assert.equal(resolveLibrarySelection([[hero]], null, hero), hero)
+})
+
+check('a filter, Hide toggle or search that hides the selected title moves the panel on', () => {
+  const hero = media('hero')
+  const picked = media('picked')
+  const fresh = media('picked', { inMyList: true })
+  // The query changed since it was picked, and the title is gone: the hero.
+  assert.equal(resolveLibrarySelection([[hero]], picked, hero, true), hero)
+  // The query changed, and the title is still on the page: kept, fresh copy.
+  assert.equal(resolveLibrarySelection([[hero, fresh]], picked, hero, true), fresh)
+  // Nothing selected is unchanged.
+  assert.equal(resolveLibrarySelection([[hero]], null, hero, true), hero)
+  // The page stamps the query when the selection changes and compares it.
+  const page = fs
+    .readFileSync(
+      path.resolve(__dirname, '../src/renderer/src/components/category/AnimeLibraryPage.tsx'),
+      'utf8'
+    )
+    .replace(/\r\n/g, '\n')
+  assert.match(
+    page,
+    /if \(selectedUnder\.selection !== selection\) setSelectedUnder\(\{ selection, query: queryKey \}\)/
+  )
+  assert.match(page, /activeHero,\s*selectedUnder\.query !== queryKey\s*\)/)
 })
 
 // --- the phone's Not interested ---------------------------------------------

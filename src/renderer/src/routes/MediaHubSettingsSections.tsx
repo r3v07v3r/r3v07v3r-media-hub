@@ -594,13 +594,32 @@ export function MalSection() {
     setReconcileStatus({ kind: 'busy' })
     try {
       const result = await api.mal.reconcileApply(preview)
-      setPreview(null)
+      // The rows that failed stay in the preview, so the count below still
+      // shows them and Apply can try them again; the ones that went through
+      // leave. Each error names its row by the id its own list uses.
+      const failed = (key: 'kitsuId' | 'malId' | 'targetId', id: string | number): boolean =>
+        result.errors.some((error) => error[key] === id)
+      setPreview(
+        result.errors.length
+          ? {
+              ...preview,
+              toLocal: preview.toLocal.filter((item) => failed('kitsuId', item.kitsuId)),
+              toMal: preview.toMal.filter((item) => failed('malId', item.malId)),
+              ratingsToLocal: preview.ratingsToLocal.filter((item) =>
+                failed('targetId', item.targetId)
+              )
+            }
+          : null
+      )
       const applied = result.toLocal.length + result.toMal.length + result.ratings.length
+      // The first reason is shown, not only the count: "can no longer be
+      // placed" and a MAL refusal need different next steps.
+      const reason = result.errors[0]?.error
       setReconcileStatus({
         kind: result.errors.length ? 'error' : 'ok',
         message: `Applied ${applied} update${applied === 1 ? '' : 's'}${
           result.errors.length ? `, ${result.errors.length} failed` : ''
-        }.`
+        }.${reason ? ` ${reason}` : ''}`
       })
     } catch (error) {
       setReconcileStatus({

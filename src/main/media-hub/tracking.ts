@@ -546,6 +546,40 @@ function historyPendingCount(): number {
   }
 }
 
+/** The owed history changes as the Watchlists panel says them: how many
+ *  titles they are about, and which services they are owed to. The count
+ *  above has one entry per service, title and episode, so a season marked
+ *  offline with two services connected read as two dozen "watched changes". */
+export function summarizeHistoryPending(pending: Record<string, PendingHistoryPush>): {
+  titles: number
+  services: HistoryService[]
+} {
+  const titles = new Set<string>()
+  const services = new Set<HistoryService>()
+  for (const entry of Object.values(pending)) {
+    titles.add(entry.item.id)
+    services.add(entry.service)
+  }
+  return { titles: titles.size, services: [...services].sort() }
+}
+
+/** summarizeHistoryPending for the active profile, as fields of the sync
+ *  report (shared PlannedSyncReport's historyPendingTitles/Services). */
+function historyPendingSummary(): {
+  historyPendingTitles: number
+  historyPendingServices: HistoryService[]
+} {
+  try {
+    const db = getDatabase()
+    const summary = summarizeHistoryPending(
+      readHistoryPending(db, db.activeProfile(), trackingAccountMarks())
+    )
+    return { historyPendingTitles: summary.titles, historyPendingServices: summary.services }
+  } catch {
+    return { historyPendingTitles: 0, historyPendingServices: [] }
+  }
+}
+
 /**
  * The active profile's history keys that a read from `service` must not
  * bring back: a removal owed to it after a failed push (historyRetry.ts), a
@@ -2163,7 +2197,7 @@ export function registerTrackingIpc(): void {
     // in both directions.
     await retryHistoryPushes('interactive')
     const report = await syncPlannedFromServices('interactive')
-    return { ...report, historyPending: historyPendingCount() }
+    return { ...report, historyPending: historyPendingCount(), ...historyPendingSummary() }
   })
 
   /** The last pull's result, so the panel has something to show before
@@ -2173,7 +2207,9 @@ export function registerTrackingIpc(): void {
     MEDIA_HUB_CHANNELS.trackingPlannedReport,
     async () => {
       const report = lastPlannedSyncReport()
-      return report ? { ...report, historyPending: historyPendingCount() } : null
+      return report
+        ? { ...report, historyPending: historyPendingCount(), ...historyPendingSummary() }
+        : null
     }
   )
 
