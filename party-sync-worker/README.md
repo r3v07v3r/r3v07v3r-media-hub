@@ -20,12 +20,12 @@ The relay keeps each room in a Durable Object with the SQLite storage
 backend (`new_sqlite_classes` in `wrangler.toml`). At the time of writing
 Cloudflare offers SQLite-backed Durable Objects on the Workers Free plan
 within that plan's limits, and the Workers Paid plan (currently $5/month)
-raises them; the comment in `wrangler.toml` that says Durable Objects need
-the Paid plan predates that. Rooms use Durable Object hibernation, so a
-room that stays open for days is not billed for duration the whole time:
-while it is idle the runtime can evict the object from memory with the
-sockets still open, and wakes it for the next message. Check Cloudflare's
-current pricing page before relying on either plan.
+raises them; the older key-value-backed Durable Objects are what need the
+Paid plan, as the comment in `wrangler.toml` says. Rooms use Durable Object
+hibernation, so a room that stays open for days is not billed for duration
+the whole time: while it is idle the runtime can evict the object from
+memory with the sockets still open, and wakes it for the next message.
+Check Cloudflare's current pricing page before relying on either plan.
 
 ## Deploy it
 
@@ -75,17 +75,22 @@ current pricing page before relying on either plan.
   under 10 minutes old, as `{"type":"retained","ageMs":...,"connId":...,
 "isHost":...,"body":...}`; subtract `ageMs` before treating `body` as
   current. Then comes `{"type":"peers","connIds":[...]}`, listing every
-  connection currently in the room.
+  other connection currently in the room (empty for the first to join).
 - The server never decrypts anything. Every real message (who is in the
   party, what is playing, seek and pause, chat, suggestions) is encrypted
   end to end by the app before it reaches this Worker; the Worker tags each
-  message with who sent it and relays it to everyone else in the room. Message bodies are always ciphertext. What the Worker does see in the
-  clear is routing metadata (connection tags, host flags, the live peer
-  list, banned identity hashes) and the admission credentials it checks:
-  invite key, host token, join secret and signed cryptograms.
-- Limits: at most 32 connections per room (`Party is full.`, HTTP 429), at
-  most 40 messages per connection per 10 seconds, and no message over 60 KiB;
-  exceeding the last two closes that socket (codes 1008 and 1009).
+  message with who sent it and relays it to everyone else in the room. What
+  the Worker does see in the clear is routing metadata (connection tags, host
+  flags, the live peer list, banned identity hashes) and the admission
+  credentials it checks: invite key, host token, join secret and signed
+  cryptograms.
+- Limits: at most 32 connections per room (`Party is full.`, HTTP 429) and
+  at most 40 messages per connection per 10 seconds; going over the rate
+  closes that socket (code 1008). In practice a message must stay under
+  about 16 KiB: the relay keeps each message on its socket before passing it
+  on, and the runtime caps what a socket can keep at about 16 KiB. A message
+  between that and 60 KiB is silently dropped (not relayed, not retained,
+  socket left open); one over 60 KiB closes the socket (code 1009).
 - Rooms expire after 30 days with no activity (`ROOM_IDLE_TTL_MS`, `touch()`
   and `alarm()` in `src/room.ts`). Every `/init`, `/kick`, WebSocket connect
   and relayed message pushes the deadline out, and `alarm()` re-arms instead
@@ -98,14 +103,23 @@ a relay-level admission layer to that room: a `joinSecret` carried in the
 invite code, per-install member keys, and a `POST /party/{roomId}/kick` call
 the room's creator uses to remove members (ban, disconnect and joinSecret
 rotation, atomically). The relay still never decrypts anything — these are
-admission credentials, not content.
+admission credentials, not content. An identity the room already knows is
+let in even with an old `joinSecret`; only a kick, which bans its hash,
+shuts it out.
 
-A Worker deployed before this feature ignores `membership`: rooms still
-work, but removing members does not until you redeploy:
+A room made on a Worker without Rooms membership has no membership layer,
+and redeploying the Worker does not add one. The app says such a room
+predates member removal and does not call the relay. To remove members,
+redeploy, then make a new room:
 
 ```
 cd party-sync-worker && npm run deploy
 ```
+
+If you call `/kick` yourself, a Worker without Rooms membership answers 404
+(it has no such route). A current Worker answers 409
+`This room has no membership layer.` for an old room, and 403
+`Only the room admin can do that.` for a missing or wrong `roomToken`.
 
 ## Rooms hop (LAN daemon)
 
@@ -115,9 +129,21 @@ subscribes to its rooms through the daemon instead of opening its own
 WebSocket to this Worker. The daemon opens one upstream connection per
 room (for a membership room it presents `?carrier=1` with the first
 member's forwarded cryptogram) and fans messages out to the local devices
-itself. It never holds the room's content key or anyone's private key; it
-forwards members' single-use cryptograms and, for a first admission, the
-room's join secret.
+itself.
+
+The daemon never holds the room's encryption key or anyone's private key.
+Each device hands it a single-use cryptogram and the room's `joinSecret`
+when it subscribes, and the daemon forwards both to the relay.
+
+Whoever holds the `joinSecret`, the daemon included, can join the room as a
+new member with a key of their own. Such a member reads only ciphertext and
+routing metadata, because the `joinSecret` does not carry the room's
+encryption key. It also never announces itself, so it never appears in the
+app's member list, and the app can only remove members it lists. Rotating
+the secret does not shut it out either: once it has joined, the room knows
+it and lets it in with an old secret, and the daemon is handed each new
+secret when members next subscribe. If you think the `joinSecret` has
+reached someone it should not have, make a new room.
 
 ## Local testing
 

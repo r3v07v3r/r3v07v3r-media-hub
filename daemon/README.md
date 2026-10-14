@@ -12,10 +12,14 @@ multicast); open the control centre, choose **Caching**, pick the server
 and **Ask to join**. There is no pairing code. The first device to claim
 the server becomes its administrator and approves everyone else from
 their own app, or lets anyone on the network join without asking.
-Everything the daemon stores expires on its own: an idle TTL (14 days,
-refreshed by playing), a hard maximum age (30 days, deferred only while someone
-is actually streaming the file), a disk budget with LRU eviction, and a
-per-device allocation inside it.
+
+Every title the daemon downloads leaves on its own: it expires after an idle
+TTL (14 days, refreshed by playing) or a hard maximum age (30 days, deferred
+only while someone is actually streaming the file), and is removed to make
+room under a disk budget with LRU eviction and a per-device allocation inside
+it. Pairings, shared TorBox keys, administrator settings and the household
+catalog do not expire; how a device and its key are removed is under
+[Who may use what](#who-may-use-what).
 
 ## Running it
 
@@ -35,12 +39,15 @@ npm run build:daemon:sea    # -> + r3-cache-win-x64.exe / r3-cache-linux-x64
 
 Every Preview release of the app publishes both automatically (see
 `.github/workflows/preview.yml`): the daemon ships from the same release
-page, stamped with the same version, so the app can judge compatibility
-from `/api/ping`, and the daemon's own self-updater (below) follows the
-same feed. For most people "install" is: download the executable for your
-OS from the latest release, run it once with `--install`, then join it
-from the app. On Windows the task first starts at your next logon, so run
-the executable once by hand (or sign out and back in) before joining.
+page, stamped with the same version as the app, and the daemon's own
+self-updater (below) follows the same feed. The app works out what a server
+supports from the fields it answers with, not from that version number.
+
+For most people "install" is: download the executable for your OS from the
+latest Preview release (stable releases carry no daemon files), run it once
+with `--install`, then join it from the app. On Windows the task first
+starts at your next logon, so run the executable once by hand (or sign out
+and back in) before joining.
 
 Data lives in `%LOCALAPPDATA%\r3-cache` (Windows) or
 `$XDG_DATA_HOME/r3-cache`, normally `~/.local/share/r3-cache` (Linux);
@@ -54,20 +61,55 @@ required:
 | `diskBudgetGb`  | 80% of the free space each time the daemon starts, capped at 50 |
 | `idleTtlDays`   | `14`                                                            |
 | `hardMaxDays`   | `30`                                                            |
-| `tombstoneDays` | `60` (how long an evicted title is not re-queued)               |
+| `tombstoneDays` | `60` (how long an expired title is not queued again)            |
 | `serverName`    | the machine's hostname                                          |
-| `updateChannel` | `"preview"` (or `"stable"`)                                     |
+| `updateChannel` | `"preview"` (`"stable"` is accepted but never finds an update)  |
 | `autoUpdate`    | `true`                                                          |
+
+A title removed to make room, or removed by hand from **What you have
+cached**, is not held back and can be queued again straight away.
 
 Environment variables: `R3_CACHE_DIR` (the data directory), `R3_CACHE_NO_MDNS=1`
 (do not announce over mDNS), `R3_CACHE_UPDATE_FEED` (a different release feed,
 for testing the updater), and `XDG_DATA_HOME`, honoured for the default data
 directory on Linux.
 
-Command-line flags: `--install`, `--uninstall`, `--claim-admin` (stop the
-daemon, run this, then start it again: the next device to claim the server
-is then let through even though one already has, which is the recovery for
-a lost administrator device) and `--version`.
+Command-line flags: `--install`, `--uninstall`, `--claim-admin` and
+`--version`.
+
+`--claim-admin` is the recovery for a lost administrator device, or for an
+administrator who chose **Leave**:
+
+1. Run `r3-cache --claim-admin`. It writes a flag to the data directory and
+   exits; you do not need to stop the daemon first, but it only reads the
+   flag when it starts. Until another device claims the server, the old
+   administrator device keeps the role.
+2. Restart the daemon:
+   - Linux: `systemctl --user restart r3-cache`.
+   - Windows: close the r3-cache console window, then run
+     `schtasks /Run /TN r3-cache` (or the executable, if you never ran
+     `--install`). After a logon you can also just wait: the task's restart
+     interval, under [Windows, at login](#windows-at-login), brings the
+     daemon back within a minute. Do not start the executable by hand while
+     that interval runs: the task then starts another copy every minute,
+     and each copy that finds the port taken counts as a failed boot of the
+     running version, so within minutes a version the daemon updated itself
+     to is marked bad.
+3. In the app, open **Control centre → Caching** and choose **Administer
+   it**. The button shows only on a device that has joined: on one that has
+   not (the administrator that chose **Leave**, or a new device), choose
+   **Ask to join** first, and on one still waiting to join, choose
+   **Cancel** and then **Ask to join**. Only a request made after the
+   restart is let in at once.
+
+If the app answers "Too many devices are waiting to join", wait a minute and
+ask again. If it still says so, eight requests are already waiting (every
+**Cancel** leaves its request behind on the server), and with the
+administrator gone nobody can deny them. Delete the entries with
+`"status":"pending"` from `auth.json` in the data directory, then restart
+the daemon as in step 2 and ask once more. The daemon reads `auth.json` only
+when it starts, and while eight requests are waiting it does not rewrite
+the file, so you can make the edit while it runs.
 
 ### Linux, as a service
 
@@ -98,18 +140,22 @@ The console window shows the same banner as above.
 
 ## Who may use what
 
-- **Joining.** A device asks to join from the app; the request waits until
-  the administrator approves it, unless open join is switched on or the
-  server has no administrator yet (then every request is let in, since any
-  device could claim the server anyway). There is
-  nothing to type on either side. Asking is unauthenticated, so requests
-  are throttled and the pending list is capped.
+- **Joining.** A device asks to join from the app, and the request waits
+  until the administrator approves it. It is let in at once when open join
+  is switched on, or while the server reports itself unclaimed (it has no
+  administrator yet, or `--claim-admin` has reopened it), since then any
+  device could claim the server outright anyway. There is nothing to type
+  on either side. Asking is unauthenticated, so requests are throttled and
+  the pending list is capped.
 - **The administrator.** The first device to claim the server. From
   **Control centre → Caching** they **Approve** or **Deny** devices that
-  ask, **Remove** approved ones, set
-  each device's disk allocation and the default allocation for new ones
-  (a percentage of the budget), turn open join on or off, and can ask the
-  daemon to check for an update now.
+  ask, **Remove** approved ones (which withdraws that device's TorBox key
+  and cancels its jobs), set each device's disk allocation and a default
+  allocation (a percentage of the budget), turn open join on or off, and
+  use **Update now** (see
+  [Auto-start, self-updating, rollback](#auto-start-self-updating-rollback)).
+  The default allocation applies to every approved device that has no
+  allocation of its own, including devices that joined before it was set.
 - **Private by default.** What one device fetches is visible only to that
   device until it shares the title with everyone, using the switch in
   **What you have cached** in the same section (the daemon's sharing API can
@@ -130,8 +176,14 @@ The console window shows the same banner as above.
   that title; the daemon never bills one household member for another's
   watchlist. A job whose owner has not shared a key waits; if anyone else
   asks for the same title while it is still queued, the job becomes theirs
-  and is fetched with their key. Unpairing revokes
-  only your own key.
+  and is fetched with their key.
+- **Leaving.** **Leave** in the app forgets the server on this device and,
+  if the server answers at that moment, withdraws your TorBox key. The
+  device stays in the administrator's list, with any key the server did not
+  hear withdrawn, until the administrator removes it. Leaving does not hand
+  on the administrator role, and coming back counts as a new device, so an
+  administrator who leaves cannot take the role back from the app;
+  `--claim-admin` (under [Running it](#running-it)) is the way back.
 
 The design is written up in [docs/CACHE-PERMISSIONS.md](../docs/CACHE-PERMISSIONS.md).
 
@@ -146,8 +198,10 @@ The design is written up in [docs/CACHE-PERMISSIONS.md](../docs/CACHE-PERMISSION
   the daemon holds a single upstream connection to the
   [R3 Party Sync](../party-sync-worker/README.md) relay per room and fans
   the traffic out locally (`roomsHop.ts`). It relays ciphertext only and
-  never sees the room's encryption key; a room's join secret passes through
-  it for a stranger's first admission but admits nobody by itself.
+  never sees the room's encryption key. Every device hands it the room's
+  join secret when it subscribes, so whoever controls the daemon could join
+  the room as a silent member that reads only ciphertext; see
+  [Rooms hop](../party-sync-worker/README.md#rooms-hop-lan-daemon).
 
 ## Auto-start, self-updating, rollback
 
@@ -166,7 +220,9 @@ it waits for a moment that interrupts nobody: never while a stream is
 open, never within 30 minutes of one closing, and preferring the
 household's historically quiet hours (a rolling hour-of-day histogram); an
 update that has waited 24 hours applies at the first idle moment
-regardless.
+regardless. The administrator's **Update now** checks the feed first, then
+skips the half-hour wait and the quiet hours, but still never interrupts
+an open stream. It does nothing while `autoUpdate` is `false`.
 
 ### What the update chain does and does not protect against
 
