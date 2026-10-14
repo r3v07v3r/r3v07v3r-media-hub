@@ -114,12 +114,78 @@ let lastDuration = 0
 let videoFacts: PlayerVideoFacts = {}
 
 // What the current title was loaded with, so an mpv error can be answered
-// with one reload at the playhead before it closes the player.
+// with one reload at the playhead before it closes the player — and so a
+// killed process (see recoverFromHang) can be respawned with the same launch
+// options and the title reloaded where it was.
 let lastLoad: {
   url: string
-  options: Pick<LoadFileOptions, 'audioLanguage' | 'subtitleLanguage' | 'videoScaling'>
+  options: Omit<StartPlayerSessionOptions, 'startSeconds'>
   retried: boolean
 } | null = null
+// The title a hang recovery has already been spent on. One per title: a
+// second hang on the same URL ends playback with an error instead of killing
+// and reloading forever.
+let hangRecoveredUrl = ''
+
+/** The subset of a session's options that `loadfile` itself takes. */
+function loadOptionsOf(options: Omit<StartPlayerSessionOptions, 'startSeconds'>): LoadFileOptions {
+  return {
+    audioLanguage: options.audioLanguage,
+    subtitleLanguage: options.subtitleLanguage,
+    videoScaling: options.videoScaling
+  }
+}
+
+/**
+ * What happens after checkForHang (mpv.ts) has killed a player that stopped
+ * answering. The kill alone has already done the urgent part — a dead process
+ * has no window, so the app's UI is back from under the frozen picture. This
+ * decides what to do about the film.
+ *
+ * With a title still wanted: respawn and reload it at the playhead, once. That
+ * is the same move the end-file handler makes for a stream error, and the
+ * person sees a hiccup of a few seconds rather than a dead player. The second
+ * hang on the same title is reported as an error instead, which closes the
+ * player the ordinary way — whatever is wrong with that title or that region
+ * of it is not going to be fixed by a third attempt.
+ *
+ * With no title wanted (lastLoad cleared by stopPlayerSession, whose `stop`
+ * was itself the request that went unanswered) there is nothing to reload:
+ * the kill has finished the stop.
+ */
+async function recoverFromHang(): Promise<void> {
+  detachEmbedTarget()
+  const load = lastLoad
+  const snapshot = sessionSnapshot
+  if (!load) {
+    logError('media-hub:player', new Error('mpv stopped answering and was killed; nothing was playing'))
+    return
+  }
+  const position = lastTimePos
+  if (hangRecoveredUrl === load.url) {
+    logError(
+      'media-hub:player',
+      new Error(`mpv stopped answering again at ${position.toFixed(1)}s; giving up on this title`)
+    )
+    queuePatch({ error: 'The player stopped responding' }, true)
+    return
+  }
+  hangRecoveredUrl = load.url
+  logError(
+    'media-hub:player',
+    new Error(`mpv stopped answering and was killed; reloading the title at ${position.toFixed(1)}s`)
+  )
+  try {
+    await startPlayerSession(load.url, { ...load.options, startSeconds: position })
+    // startPlayerSession clears the overlay's idea of which title is playing
+    // (see its hand-over note) and leaves naming the next one to its caller.
+    // Here the next one is the same one.
+    if (snapshot?.media) pushSessionSnapshot(snapshot)
+  } catch (error) {
+    logError('media-hub:player', error)
+    queuePatch({ error: 'The player stopped responding' }, true)
+  }
+}
 
 /** A dropped-frame burst is logged once it has grown by this many frames... */
 const FRAME_DROP_REPORT_MIN = 10
@@ -672,7 +738,7 @@ async function attachObservers(): Promise<void> {
         new Error(`Reloading the title once at ${lastTimePos.toFixed(1)}s after that error`)
       )
       void player
-        .loadFile(load.url, { ...load.options, startSeconds: lastTimePos })
+        .loadFile(load.url, { ...loadOptionsOf(load.options), startSeconds: lastTimePos })
         .catch((error) => {
           logError('media-hub:player', error)
           queuePatch({ error: detail }, true)
@@ -774,7 +840,8 @@ export async function startPlayerSession(
       onLog: (chunk) => {
         const line = chunk.trim()
         if (line) logError('mpv:stderr', line)
-      }
+      },
+      onHung: () => void recoverFromHang()
     })
     await attachObservers()
   } else if (!player.running) {
@@ -796,7 +863,8 @@ export async function startPlayerSession(
       onLog: (chunk) => {
         const line = chunk.trim()
         if (line) logError('mpv:stderr', line)
-      }
+      },
+      onHung: () => void recoverFromHang()
     })
     setEmbeddedPlayerPid(player.pid)
     await attachObservers()
@@ -868,16 +936,13 @@ export async function startPlayerSession(
   // film's position. The observer refreshes it within the first second.
   lastTimePos = Number(options.startSeconds) || 0
 
-  // Kept for the one reload the end-file handler is allowed — see there.
-  lastLoad = {
-    url,
-    options: {
-      audioLanguage: options.audioLanguage,
-      subtitleLanguage: options.subtitleLanguage,
-      videoScaling: options.videoScaling
-    },
-    retried: false
-  }
+  // Kept for the one reload the end-file handler is allowed — see there — and
+  // for the respawn a hang recovery makes (recoverFromHang), which needs the
+  // launch options too.
+  const sessionOptions = { ...options }
+  delete sessionOptions.startSeconds
+  lastLoad = { url, options: sessionOptions, retried: false }
+  if (hangRecoveredUrl && hangRecoveredUrl !== url) hangRecoveredUrl = ''
   // The picture facts start empty for every title, not only after a full
   // stop: mpv is kept across consecutive titles, and a property the next
   // file lacks (no container-fps for variable-frame-rate media) arrives
@@ -887,7 +952,7 @@ export async function startPlayerSession(
   queuePatch({ video: videoFacts }, true)
   await player.loadFile(url, {
     startSeconds: options.startSeconds,
-    ...lastLoad.options
+    ...loadOptionsOf(sessionOptions)
   })
 
   // Only now do the controls go on screen. The overlay was created before the

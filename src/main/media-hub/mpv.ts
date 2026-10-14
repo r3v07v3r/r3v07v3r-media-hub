@@ -219,6 +219,8 @@ interface PendingRequest {
   timer: NodeJS.Timeout
   /** The request this is waiting on, for error messages — see dispatch(). */
   description: string
+  /** When it was written to the socket — what checkForHang measures from. */
+  sentAt: number
 }
 
 export interface MpvSpawnOptions {
@@ -229,6 +231,9 @@ export interface MpvSpawnOptions {
   /** How far ahead to keep the demuxer reading — see BUFFERING on start(). */
   bufferSeconds?: number
   onLog?: (line: string) => void
+  /** Called once the process has been killed for not answering — see
+   *  checkForHang. The caller decides whether to respawn and reload. */
+  onHung?: () => void
   spawnImpl?: typeof spawn
 }
 
@@ -258,6 +263,31 @@ function bufferProfileFor(bufferSeconds: number | undefined): {
 const COMMAND_TIMEOUT_MS = 15000
 
 /**
+ * How long a request may go unanswered — with NOTHING else arriving from mpv
+ * in the meantime — before the process is declared hung and killed.
+ *
+ * mpv runs commands on its playback loop, which its own maintainers describe
+ * as able to block on I/O in the worst case, and libavformat's network reads
+ * are not reliably interruptible. Seen in the field as a film seeked
+ * repeatedly through its last minutes: each jump landed in a region the
+ * stream server still had to fetch, mpv stopped answering for half a minute
+ * (every seek and pause logged as a 15s timeout), and because the embedded
+ * video child covers the whole main window and only mpv can destroy it, the
+ * app looked frozen — Escape's `stop` went into the same dead loop. Killing
+ * the process is what destroys that window; the bridge then reloads at the
+ * playhead (see playerBridge's onHung).
+ *
+ * Measured from the oldest unanswered request, and only when no reply or
+ * event has arrived since it was sent: a healthy mpv emits time-pos several
+ * times a second while playing and answers within milliseconds while paused,
+ * so ten silent seconds behind a request is not a slow player, it is a stuck
+ * one. Opening a file is exempt (see `loading`) — mpv blocks on the network
+ * there by design, and loadFile has its own, longer timeout for that.
+ */
+const HANG_MS = 10_000
+const HANG_CHECK_MS = 1000
+
+/**
  * Owns one long-lived mpv process. Long-lived deliberately: the process
  * survives across titles (verified — the same instance loads a second title
  * cleanly), so a title change is a `loadfile`, not a respawn. This also keeps
@@ -270,11 +300,21 @@ export class MpvPlayer {
   private readonly pending = new Map<number, PendingRequest>()
   private readonly observers = new Map<number, (value: unknown) => void>()
   private readonly eventHandlers = new Map<string, Array<(msg: Record<string, unknown>) => void>>()
+  /** Every once() still waiting, so a dead process can fail them all. */
+  private readonly waiters = new Set<(error: Error) => void>()
   private buffer = ''
   private nextId = 1
   private pipeName = ''
   private ipcPath = ''
   private onLog: (line: string) => void = () => {}
+  private onHung: () => void = () => {}
+  /** When the last byte of anything — reply or event — came in from mpv. */
+  private lastMessageAt = 0
+  /** True between `loadfile` and `file-loaded`, when the hang check stands down. */
+  private loading = false
+  private hangTimer: NodeJS.Timeout | null = null
+  /** The most recent request that gave up waiting — see checkForHang. */
+  private lastTimedOut: { sentAt: number; timedOutAt: number; description: string } | null = null
 
   get running(): boolean {
     return Boolean(this.child && !this.child.killed && this.socket)
@@ -290,9 +330,10 @@ export class MpvPlayer {
     if (!mpvPath) throw new Error('Playback is unavailable (mpv not found).')
     if (this.running) return
 
-    const { wid, bufferSeconds, onLog, spawnImpl = spawn } = options
+    const { wid, bufferSeconds, onLog, onHung, spawnImpl = spawn } = options
     const profile = bufferProfileFor(bufferSeconds)
     this.onLog = onLog ?? (() => {})
+    this.onHung = onHung ?? (() => {})
     this.pipeName = `r3-media-hub-mpv-${crypto.randomBytes(12).toString('hex')}`
     // A named pipe on Windows; a Unix socket everywhere else, which is what
     // the Android app's libmpv listens on (see hostPlayer.ts).
@@ -426,13 +467,63 @@ export class MpvPlayer {
       // stall a caller awaiting it (playerBridge's raiseMainWindowOverPlayer
       // waits on setOntop before raising the main window). Torn down the same
       // way quit() does it, so both paths leave the same state.
+      this.stopHangCheck()
       this.socket?.destroy()
       this.socket = null
       this.child = null
       this.failAllPending(new Error('mpv exited'))
+      this.forgetProcessState()
     })
 
     await this.connect()
+    this.lastMessageAt = Date.now()
+    this.hangTimer = setInterval(() => this.checkForHang(), HANG_CHECK_MS)
+    this.hangTimer.unref()
+  }
+
+  private stopHangCheck(): void {
+    if (this.hangTimer) clearInterval(this.hangTimer)
+    this.hangTimer = null
+  }
+
+  /**
+   * Kills the process if it has gone silent behind an unanswered request for
+   * HANG_MS — see that constant for why and for what counts as silent. Returns
+   * whether it did. `now` is a parameter for the tests' sake.
+   */
+  checkForHang(now = Date.now()): boolean {
+    if (!this.child || this.loading) return false
+    // Two things have to be true at once: a request has gone unanswered for
+    // HANG_MS, and mpv has said NOTHING for HANG_MS. The second alone is a
+    // paused player nobody is talking to; the first alone is a slow command
+    // from a core still emitting time-pos. A message arriving after the
+    // request does not clear it — a last time-pos event can slip out just
+    // before the loop wedges — it only restarts the silence clock.
+    if (now - this.lastMessageAt < HANG_MS) return false
+    let oldestSentAt = Infinity
+    let oldest = ''
+    for (const entry of this.pending.values()) {
+      if (entry.sentAt < oldestSentAt) {
+        oldestSentAt = entry.sentAt
+        oldest = entry.description
+      }
+    }
+    // A request that already timed out still counts, as long as nothing has
+    // been heard since it gave up — otherwise a hang that outlasts
+    // COMMAND_TIMEOUT_MS with no further request behind it would go unseen.
+    const timedOut = this.lastTimedOut
+    if (timedOut && timedOut.timedOutAt > this.lastMessageAt && timedOut.sentAt < oldestSentAt) {
+      oldestSentAt = timedOut.sentAt
+      oldest = timedOut.description
+    }
+    if (now - oldestSentAt < HANG_MS) return false
+    this.onLog(
+      `[r3] mpv has not answered "${oldest}" for ${Math.round((now - oldestSentAt) / 1000)}s ` +
+        `and has said nothing for ${Math.round((now - this.lastMessageAt) / 1000)}s ` +
+        `(${this.pending.size} waiting); killing the process`
+    )
+    void this.kill().then(() => this.onHung())
+    return true
   }
 
   /** mpv creates the named pipe asynchronously after spawn, so the first
@@ -470,6 +561,7 @@ export class MpvPlayer {
   }
 
   private onData(chunk: string): void {
+    this.lastMessageAt = Date.now()
     this.buffer += chunk
     let newline: number
     while ((newline = this.buffer.indexOf('\n')) !== -1) {
@@ -521,6 +613,8 @@ export class MpvPlayer {
       entry.reject(error)
     }
     this.pending.clear()
+    for (const cancel of [...this.waiters]) cancel(error)
+    this.waiters.clear()
   }
 
   command<T = unknown>(...args: Array<string | number | boolean>): Promise<T> {
@@ -533,15 +627,18 @@ export class MpvPlayer {
       .join(' ')
     return new Promise<T>((resolve, reject) => {
       const id = this.nextId++
+      const sentAt = Date.now()
       const timer = setTimeout(() => {
         this.pending.delete(id)
+        this.lastTimedOut = { sentAt, timedOutAt: Date.now(), description }
         reject(new Error(`Player command timed out: ${description}`))
       }, COMMAND_TIMEOUT_MS)
       this.pending.set(id, {
         resolve: resolve as (value: unknown) => void,
         reject,
         timer,
-        description
+        description,
+        sentAt
       })
       socket.write(`${JSON.stringify({ command: args, request_id: id })}\n`)
     })
@@ -566,17 +663,29 @@ export class MpvPlayer {
     }
   }
 
+  /** Resolves on the next `event`, or rejects on the timeout — or at once
+   *  when the process goes away (see failAllPending), so a loadFile waiting
+   *  on file-loaded fails with the crash rather than a minute after it. */
   once(event: string, timeoutMs = COMMAND_TIMEOUT_MS): Promise<Record<string, unknown>> {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const done = (): void => {
+        clearTimeout(timer)
         off()
+        this.waiters.delete(cancel)
+      }
+      const timer = setTimeout(() => {
+        done()
         reject(new Error(`Timed out waiting for player event: ${event}`))
       }, timeoutMs)
       const off = this.on(event, (msg) => {
-        clearTimeout(timer)
-        off()
+        done()
         resolve(msg)
       })
+      const cancel = (error: Error): void => {
+        done()
+        reject(error)
+      }
+      this.waiters.add(cancel)
     })
   }
 
@@ -615,8 +724,19 @@ export class MpvPlayer {
       await this.set('start', String(startSeconds))
     }
     const loaded = this.once('file-loaded', 60000)
-    await this.command('loadfile', url, 'replace')
-    await loaded
+    // If `loadfile` itself is refused, `loaded` is never awaited below and
+    // rejects on its own later; this keeps that from being an unhandled
+    // rejection. The awaiting path below still sees the real outcome.
+    loaded.catch(() => {})
+    // The hang check stands down for the open: mpv blocks on the network
+    // here by design (see HANG_MS), and the 60s above is the limit for it.
+    this.loading = true
+    try {
+      await this.command('loadfile', url, 'replace')
+      await loaded
+    } finally {
+      this.loading = false
+    }
     // AFTER the load, not before: --reset-on-next-file (see the launch
     // arguments) puts the scalers back to mpv's defaults as each file
     // opens, which is what lets Standard mean "the default" at all — so a
@@ -674,17 +794,38 @@ export class MpvPlayer {
     try {
       if (this.socket) await this.command('quit').catch(() => {})
     } finally {
-      this.socket?.destroy()
-      this.socket = null
-      const child = this.child
-      if (child && !child.killed) {
-        const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()))
-        child.kill()
-        await Promise.race([exited, new Promise<void>((resolve) => setTimeout(resolve, 3000))])
-      }
-      this.child = null
-      this.failAllPending(new Error('The player was shut down.'))
+      await this.kill()
     }
+  }
+
+  /** Ends the process without asking it to — the way out when it is not
+   *  answering (checkForHang), and quit()'s backstop after it has asked. */
+  async kill(): Promise<void> {
+    this.stopHangCheck()
+    this.socket?.destroy()
+    this.socket = null
+    const child = this.child
+    if (child && !child.killed) {
+      const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()))
+      child.kill()
+      await Promise.race([exited, new Promise<void>((resolve) => setTimeout(resolve, 3000))])
+    }
+    this.child = null
+    this.failAllPending(new Error('The player was shut down.'))
+    this.forgetProcessState()
+  }
+
+  /** Observers and event handlers belong to a PROCESS: the bridge attaches
+   *  them once per spawn (observe_property has to be re-sent to a new mpv
+   *  anyway), so a respawn after a crash or a hang-kill must start from
+   *  none — or every end-file and client-message handler runs twice, and the
+   *  duplicate end-file sees `retried` already set and declares the one
+   *  permitted reload a failure. */
+  private forgetProcessState(): void {
+    this.observers.clear()
+    this.eventHandlers.clear()
+    this.lastTimedOut = null
+    this.lastMessageAt = 0
   }
 }
 
