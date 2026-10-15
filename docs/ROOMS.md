@@ -47,7 +47,7 @@ device** — the model is the one EMV bank cards use, and it was asked
 for by that name. A member's id is the sha256 of their public key, so
 **the identity is the key**: claiming an id without its private key is
 impossible, because nothing you say verifies. There is no registry, no
-first-use leap of faith, and no bearer string anywhere in the system —
+first-use leap of faith, and no bearer string behind any identity —
 three earlier drafts each patched a symptom of bearer credentials
 (broadcast keys, harvestable household keys, self-declared hashes)
 before this replaced the class.
@@ -71,8 +71,11 @@ intercepted cryptogram is a receipt, not a card — bound to one door,
 one moment, already spent. The relay still decrypts nothing.
 
 - The **joinSecret** (in the invite code) is the invite's proof,
-  required only of identities the room has never seen. It admits nobody
-  by itself — possession proof is not optional.
+  required only of identities the room has never seen. It is not enough
+  on its own, since the newcomer must still tap with a key, but anyone
+  can make a key: whoever holds the joinSecret can join as a new member,
+  so a joinSecret that leaks means a new room (see
+  [party-sync-worker/README.md](../party-sync-worker/README.md#rooms-hop-lan-daemon)).
 - A **known, unbanned identity is always admitted on a fresh tap**,
   even with a stale joinSecret — a family member whose laptop slept
   through a rotation is not locked out of their own room.
@@ -120,10 +123,12 @@ Stated here so a green test suite is never read as more than it proves:
   their banned key with.
 - **A device of theirs the room never saw** (never announced, never
   connected) holds the old code: unknown memberKey + stale joinSecret →
-  refused. But if it was _connected and silent_ at kick time under a
-  memberKey no announcement ever carried, it keeps its connection until
-  it drops and cannot rejoin after. Kick by person reaches the devices
-  the room could see.
+  refused. But one that connected under a key of its own and never
+  announced is not in the member list, so no kick names it: it stays
+  connected, hears the re-key, and the relay lets it back in later
+  because the room already knows it. A kick reaches the members the room
+  lists; for anyone else, make a new room (see
+  [party-sync-worker/README.md](../party-sync-worker/README.md#rooms-hop-lan-daemon)).
 - **Within-room identity is now enforced, with one bound.** Nobody can
   speak as anyone else — every message verifies against its sender's
   key. What a member (or a leaked secret) still gets is READABILITY of
@@ -143,9 +148,12 @@ Stated here so a green test suite is never read as more than it proves:
 - **The cache-server hop** carries a household's traffic on one relay
   connection — admitted on the first member's own tap, with every
   further member's tap handed up as a carry frame for the RELAY to
-  verify. The daemon holds no credential of anyone's: it forwards
+  verify. The daemon holds no member's credential: it forwards
   cryptograms it cannot mint, exactly as a payment terminal forwards a
-  card's tap to the bank. A relay ban still cannot close a kicked
+  card's tap to the bank. It does see the room's joinSecret, handed up
+  with every subscription, so whoever controls the daemon could join as
+  a silent member that reads only ciphertext (see
+  [party-sync-worker/README.md](../party-sync-worker/README.md#rooms-hop-lan-daemon)). A relay ban still cannot close a kicked
   member's transport there, so three mechanisms together are the
   removal for hop members: the relay broadcasts each kick's banned
   identities and the daemon drops and refuses those subscribers —
