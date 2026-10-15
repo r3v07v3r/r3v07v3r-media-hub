@@ -7,6 +7,7 @@ import {
   applyBundle,
   buildBundle,
   bundleContents,
+  channelChangeNote,
   newTicket,
   openBundle,
   parsePairingHost,
@@ -14,6 +15,7 @@ import {
   sealBundle,
   ticketLink
 } from '../src/main/media-hub/devicePairingCore'
+import { normalizeUpdateChannel } from '../src/main/media-hub/preferences'
 import type { MediaHubRawSettings } from '../src/main/media-hub/settingsStore'
 
 // Stand-ins for safeStorage: visibly different from the plain value, so a
@@ -62,7 +64,29 @@ assert.deepEqual(bundle.openSubtitles, {
   username: 'os-user',
   password: 'os-pass'
 })
-assert.deepEqual(bundle.prefs, { subtitleLanguage: 'en', partyDisplayName: 'Graham' })
+// A desktop that never picked an update channel is on Stable, and says so,
+// so the phone follows it instead of staying on whatever it had.
+assert.deepEqual(bundle.prefs, {
+  subtitleLanguage: 'en',
+  updateChannel: 'stable',
+  partyDisplayName: 'Graham'
+})
+assert.equal(
+  buildBundle({ ...desktop, updateChannel: 'preview' }, dec, 'X').prefs?.updateChannel,
+  'preview'
+)
+assert.equal(
+  buildBundle({ ...desktop, updateChannel: 'nonsense' }, dec, 'X').prefs?.updateChannel,
+  'stable'
+)
+// buildBundle writes the channel rule out rather than importing it; it must
+// stay the rule the desktop's own updater follows.
+for (const channel of [undefined, '', 'stable', 'preview', 'Preview', 'nonsense']) {
+  assert.equal(
+    buildBundle({ updateChannel: channel }, dec, 'X').prefs?.updateChannel,
+    normalizeUpdateChannel(channel)
+  )
+}
 
 // Rotating tokens and per-install identity never leave, in any field.
 const wire = JSON.stringify(bundle)
@@ -87,6 +111,7 @@ for (const secret of [
 
 // A TorBox token from before onboarding v2 is not a connected account.
 assert.equal(buildBundle({ ...desktop, onboardingVersion: 1 }, dec, 'X').torboxToken, undefined)
+// The channel alone is nothing to link a phone for.
 assert.deepEqual(bundleContents(buildBundle({}, dec, 'X')), [])
 
 // ---- the sealed round trip -------------------------------------------------
@@ -140,6 +165,7 @@ assert.equal(parseTicketLink(`r3hub://pair?${publicOnly}`).ok, false)
 // ---- applying it on the phone ----------------------------------------------
 
 const phoneBefore: MediaHubRawSettings = {
+  updateChannel: 'preview',
   omdbApiKey: enc('phone-own-omdb'),
   traktAccessToken: enc('phone-own-trakt'),
   osToken: enc('stale-session')
@@ -158,6 +184,20 @@ const withTrakt = openBundle(
 assert.equal('trakt' in withTrakt, false)
 assert.equal(dec(phone.osPassword), 'os-pass')
 assert.equal(phone.subtitleLanguage, 'en')
+// The phone follows the desktop's channel, Stable included.
+assert.equal(phone.updateChannel, 'stable')
+// And says so when that moves it, since the "Imported" list leaves the
+// channel out. A phone with nothing saved is on preview, as its updater
+// reads it.
+const stableBundle = openBundle(ticket, sealed)!
+assert.match(channelChangeNote(phoneBefore, stableBundle) ?? '', /Stable channel/)
+assert.match(channelChangeNote({}, stableBundle) ?? '', /Stable channel/)
+assert.equal(channelChangeNote({ updateChannel: 'stable' }, stableBundle), null)
+const previewBundle = buildBundle({ ...desktop, updateChannel: 'preview' }, dec, 'X')
+assert.equal(channelChangeNote({}, previewBundle), null)
+assert.match(channelChangeNote({ updateChannel: 'stable' }, previewBundle) ?? '', /Preview channel/)
+// A bundle from an older desktop, with no channel in it, moves nothing.
+assert.equal(channelChangeNote({ updateChannel: 'stable' }, { v: 1, from: 'X' }), null)
 // What the phone already had and the desktop didn't send is kept.
 assert.equal(dec(phone.omdbApiKey), 'phone-own-omdb')
 assert.equal(dec(phone.traktAccessToken), 'phone-own-trakt')

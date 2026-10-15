@@ -609,6 +609,48 @@ check('a show that splits and comes back together ends where it started', () => 
   assert.deepEqual(keys(db, 'c'), [])
 })
 
+console.log('\nan install with no TMDB key')
+
+// With no key a page never asks TMDB: season N is member N, mapping or not
+// (buildGroupedAnimeVideos). Recorded by its mapping, such a show read as
+// numbered by TMDB, and a new order of its seasons moved nothing.
+check('every show is recorded as numbered by its members', () => {
+  const records = animeGroupRecordsOf(
+    [
+      { id: 'kitsu:1', groupedIds: ['kitsu:2', 'kitsu:3'] },
+      { id: 'kitsu:9', groupedIds: ['kitsu:10'] }
+    ],
+    (id) => (id === 'kitsu:1' ? '305074' : null),
+    false
+  )
+  assert.deepEqual(records, [
+    { id: 'kitsu:1', members: ['kitsu:1', 'kitsu:2', 'kitsu:3'], series: '' },
+    { id: 'kitsu:9', members: ['kitsu:9', 'kitsu:10'], series: '' }
+  ])
+})
+
+check('a mapped show’s new order is followed, and a key added later moves nothing', () => {
+  const db = tempDb()
+  const mapped = (): string => '305074'
+  const inOrder = [{ id: 'a', groupedIds: ['b', 'c'] }]
+  const reordered = [{ id: 'a', groupedIds: ['c', 'b'] }]
+  followAnimeRegroup(db, animeGroupRecordsOf(inOrder, mapped, false))
+  mark(db, 'a', 2, [1, 2]) // b's episodes, on a page built from the members
+  mark(db, 'a', 3, [1]) // c's
+
+  followAnimeRegroup(db, animeGroupRecordsOf(reordered, mapped, false))
+  assert.deepEqual(keys(db, 'a'), ['2:1', '3:1', '3:2'], 'each season followed its member')
+
+  // A key set now: the page is TMDB's from here on. The ledger says the rows
+  // were filed by member, so this reads as the show gaining a mapping, and
+  // even with its order changing again at the same time they stay put.
+  const result = followAnimeRegroup(db, animeGroupRecordsOf(inOrder, mapped, true))
+  assert.equal(result.moved, 0)
+  assert.deepEqual(result.left.map((miss) => miss.id).sort(), ['b', 'c'])
+  assert.deepEqual(keys(db, 'a'), ['2:1', '3:1', '3:2'])
+  assert.deepEqual(db.animeGroupLedger(), [byTmdb('305074', 'a', 'b', 'c')])
+})
+
 console.log('\nplaceStrandedSeasons')
 
 // The two shapes found in a real library, 2026-10-04.

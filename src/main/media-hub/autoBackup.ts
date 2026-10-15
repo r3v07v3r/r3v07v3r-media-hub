@@ -107,8 +107,8 @@ export function autoBackupFiles(dir: string): string[] {
  * The newest of each reason, because the backup taken before a rare step
  * (a regroup, an import, a restore) is the only one holding the library as
  * it was before that step: every later one holds it after. The routine
- * ones, the Trakt pull and the episode comparison, are a day apart at most
- * but come every day for somebody who watches somewhere else as well, and
+ * ones, the Trakt pull and the episode comparison, come one a day at most
+ * but every day for somebody who watches somewhere else as well, and
  * with the newest `keep` alone a few days of them rotated the rare one out.
  * This keeps at most one more file per reason.
  */

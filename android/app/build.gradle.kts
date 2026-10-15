@@ -89,10 +89,15 @@ android {
     if (releaseSigning != null) {
         buildTypes {
             // Still the debug build type the workflow has always shipped
-            // (assembleDebug; MainActivity keeps chrome://inspect on for it),
-            // only signed with the release key instead of debug.p12.
+            // (assembleDebug), only signed with the release key instead of
+            // debug.p12, and not debuggable. A debuggable APK is open to
+            // anything with USB access: WebView turns chrome://inspect on by
+            // itself for any debuggable app, whatever MainActivity asks for,
+            // and `run-as` reads the app's stored tokens. Builds signed with
+            // debug.p12 stay debuggable and keep both.
             getByName("debug") {
                 signingConfig = signingConfigs.getByName("release")
+                isDebuggable = false
             }
         }
     }

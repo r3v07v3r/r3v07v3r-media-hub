@@ -557,6 +557,21 @@ async function main(): Promise<void> {
     db.close()
   })
 
+  await check('what arrived and what was sent outlives a quiet four months', () => {
+    // The record is written only when something changes. Stored for a row's
+    // ninety days, it expired and was pruned a month later, and with it the
+    // memory that stops a comparison re-sending what a service removed.
+    const db = tempDb()
+    const record = recordWith(
+      { service: 'trakt', mark: 'trakt-1', show: SHOW, arrived: eps(1, 9, 10) },
+      { service: 'simkl', mark: 'simkl-1', show: SHOW, sent: eps(1, 9, 10) }
+    )
+    assert.equal(writeShowSync(db, PROFILE, record), true)
+    db.pruneExpiredCache(Date.now() + 121 * 24 * 60 * 60 * 1000)
+    assert.deepEqual(readShowSync(db, PROFILE).settled, record.settled)
+    db.close()
+  })
+
   await check('the same unsendable set does not bring a reviewed row back; a new one does', () => {
     let record = recordWith({
       service: 'simkl',
@@ -875,6 +890,95 @@ async function main(): Promise<void> {
     }
   )
 
+  await check('Simkl’s shows and anime share one cap: one service, one allowance', async () => {
+    const db = tempDb()
+    const series: SyncShow[] = []
+    const anime: SyncShow[] = []
+    for (let n = 0; n < 15; n++) {
+      const show: SyncShow = {
+        id: `tt20000${String(n).padStart(2, '0')}`,
+        type: 'series',
+        title: `Show ${n}`
+      }
+      const entry: SyncShow = { id: `kitsu:${500 + n}`, type: 'anime', title: `Anime ${n}` }
+      series.push(show)
+      anime.push(entry)
+      seed(db, show, eps(1, 1))
+      seed(db, entry, eps(1, 1))
+    }
+    const h = harness(db)
+    h.stamps['simkl-shows'] = 'stamp-1'
+    h.stamps['simkl-anime'] = 'stamp-1'
+    h.answer['simkl-shows'] = () => readOf(series.map((show) => ({ show, eps: [] })))
+    h.answer['simkl-anime'] = () =>
+      readOf(
+        anime.map((show) => ({ show, eps: [] })),
+        (row) => row.type === 'anime'
+      )
+    await compareEpisodeSets(h.deps)
+    assert.deepEqual(h.reads, ['simkl-shows', 'simkl-anime'])
+    assert.equal(h.sent.length, MAX_SENT_SHOWS, 'twenty to Simkl, not twenty per source')
+    assert.equal(h.sent.filter((send) => send.id.startsWith('kitsu:')).length, 5)
+    const state = db.getCache<CompareState>(comparedKey(PROFILE), { allowExpired: true })
+    assert.equal(state?.['simkl-shows']?.partial, undefined)
+    assert.equal(state?.['simkl-anime']?.partial, true, 'the anime left over go next time')
+    db.close()
+  })
+
+  await check(
+    'anime left no room by the shows are read next time, though their stamp sat still',
+    async () => {
+      // The shows take all twenty. Read then, the anime would be recorded
+      // under a stamp nothing of theirs was on the way to move, and never be
+      // read again until something else moved it.
+      const db = tempDb()
+      const series: SyncShow[] = []
+      const anime: SyncShow[] = []
+      for (let n = 0; n < MAX_SENT_SHOWS + 5; n++) {
+        const show: SyncShow = {
+          id: `tt30000${String(n).padStart(2, '0')}`,
+          type: 'series',
+          title: `Show ${n}`
+        }
+        series.push(show)
+        seed(db, show, eps(1, 1))
+      }
+      for (let n = 0; n < 3; n++) {
+        const entry: SyncShow = { id: `kitsu:${700 + n}`, type: 'anime', title: `Anime ${n}` }
+        anime.push(entry)
+        seed(db, entry, eps(1, 1))
+      }
+      const h = harness(db)
+      let clock = T0
+      h.deps.now = () => clock
+      h.stamps['simkl-shows'] = 'stamp-1'
+      h.stamps['simkl-anime'] = 'stamp-1'
+      h.answer['simkl-shows'] = () => readOf(series.map((show) => ({ show, eps: [] })))
+      h.answer['simkl-anime'] = () =>
+        readOf(
+          anime.map((show) => ({ show, eps: [] })),
+          (row) => row.type === 'anime'
+        )
+      const animeSent = (): number => h.sent.filter((send) => send.id.startsWith('kitsu:')).length
+
+      await compareEpisodeSets(h.deps)
+      assert.deepEqual(h.reads, ['simkl-shows'], 'no room left: the anime list is not read')
+      assert.equal(h.sent.length, MAX_SENT_SHOWS)
+      const state = (): CompareState | null =>
+        db.getCache<CompareState>(comparedKey(PROFILE), { allowExpired: true })
+      assert.equal(state()?.['simkl-anime'], undefined, 'its stamp is not claimed')
+      // Half an hour on, the shows' own sends having moved only their stamp.
+      h.stamps['simkl-shows'] = 'stamp-2'
+      clock = T0 + PARTIAL_INTERVAL_MS
+      await compareEpisodeSets(h.deps)
+      assert.deepEqual(h.reads, ['simkl-shows', 'simkl-shows', 'simkl-anime'])
+      assert.equal(h.sent.length, MAX_SENT_SHOWS + 5 + anime.length)
+      assert.equal(animeSent(), anime.length)
+      assert.equal(state()?.['simkl-anime']?.stamp, 'stamp-1')
+      db.close()
+    }
+  )
+
   await check(
     'an episode sent once is not sent again while the service still lacks it, and a kept row stays gone',
     async () => {
@@ -961,6 +1065,44 @@ async function main(): Promise<void> {
       SEASON_MEMBERS
     )
     assert.deepEqual(withWatchedAt(anime, new Map([['2:1', OLD]])), anime)
+  })
+
+  await check('an anime send is dated too, each entry episode from the one it stands for', () => {
+    // The show's own keys, as sendEpisodesTo and the retry hold them: S1E2
+    // is kitsu:100's episode 2, S2E1 is kitsu:200's episode 1. One with no
+    // time here goes undated.
+    const dates = new Map([
+      ['1:2', OLD],
+      ['2:1', '2026-02-03T04:05:06.000Z'],
+      ['2:2', '']
+    ])
+    assert.deepEqual(
+      simklTitleHistoryPayload(
+        { ...ANIME, year: '' },
+        bySeason([...eps(1, 2), ...eps(2, 1, 2)]),
+        SEASON_MEMBERS,
+        dates
+      ),
+      {
+        anime: [
+          {
+            title: 'Frieren',
+            year: undefined,
+            ids: { kitsu: 100 },
+            episodes: [{ number: 2, watched_at: OLD }]
+          },
+          {
+            ids: { kitsu: 200 },
+            episodes: [{ number: 1, watched_at: '2026-02-03T04:05:06.000Z' }, { number: 2 }]
+          }
+        ]
+      }
+    )
+    // A removal is built without dates, exactly as before.
+    assert.deepEqual(
+      simklTitleHistoryPayload({ ...ANIME, year: '' }, bySeason(eps(2, 1)), SEASON_MEMBERS),
+      { anime: [{ ids: { kitsu: 200 }, episodes: [{ number: 1 }] }] }
+    )
   })
 
   await check('a row past 90 days is not listed, even before a write prunes it', () => {

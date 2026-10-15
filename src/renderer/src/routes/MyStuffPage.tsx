@@ -343,6 +343,11 @@ function ListsView({
   const [items, setItems] = useState<{ key: string; values: CustomListItem[] } | null>(null)
   const [naming, setNaming] = useState(false)
   const [draftName, setDraftName] = useState('')
+  // An inline field rather than window.prompt, which Electron's renderer does
+  // not implement: Rename used to throw there and rename nothing. It carries
+  // the list it was opened for, so switching lists mid-edit cannot rename the
+  // wrong one.
+  const [renaming, setRenaming] = useState<{ listId: string; draft: string } | null>(null)
   // Declared ahead of the selection below, which has to know whether a
   // remote list is the one chosen.
   const [remoteLists, setRemoteLists] = useState<RemoteList[]>([])
@@ -448,6 +453,14 @@ function ListsView({
     if (!name) return
     const created = await create(name)
     if (created) setSelected(created.id)
+  }
+
+  function submitRename() {
+    if (!renaming) return
+    const name = renaming.draft.trim()
+    setRenaming(null)
+    // An empty name is a cancel, not a list called nothing.
+    if (name) void rename(renaming.listId, name)
   }
 
   return (
@@ -605,16 +618,42 @@ function ListsView({
       ) : (
         <>
           <div className={styles.listActions}>
-            <button
-              type="button"
-              className={styles.remove}
-              onClick={() => {
-                const name = window.prompt('Rename this list', selectedList.name)
-                if (name !== null) void rename(selectedList.id, name)
-              }}
-            >
-              Rename
-            </button>
+            {renaming?.listId === selectedList.id ? (
+              <form
+                className={styles.chipForm}
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  submitRename()
+                }}
+              >
+                {/* Leaving the field renames, as + New list's field creates,
+                    so a typed name is not lost to a stray click. Escape
+                    cancels; an empty name does nothing. */}
+                <input
+                  autoFocus
+                  className={styles.chipInput}
+                  value={renaming.draft}
+                  maxLength={80}
+                  placeholder="List name"
+                  aria-label={`New name for ${selectedList.name}`}
+                  onChange={(event) =>
+                    setRenaming({ listId: selectedList.id, draft: event.target.value })
+                  }
+                  onBlur={submitRename}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') setRenaming(null)
+                  }}
+                />
+              </form>
+            ) : (
+              <button
+                type="button"
+                className={styles.remove}
+                onClick={() => setRenaming({ listId: selectedList.id, draft: selectedList.name })}
+              >
+                Rename
+              </button>
+            )}
             <button
               type="button"
               className={styles.remove}

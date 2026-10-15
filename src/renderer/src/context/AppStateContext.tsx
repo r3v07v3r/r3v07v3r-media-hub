@@ -38,7 +38,7 @@ import type {
   ShowSyncRow,
   WatchStatusDiscrepancy
 } from '@shared/media-hub/types'
-import type { ChangedEpisode, TitleStatus } from '@shared/media-hub/types'
+import type { ChangedEpisode, ProviderShortfall, TitleStatus } from '@shared/media-hub/types'
 import {
   mediaItemToTrackablePayload,
   catalogItemToMediaItem,
@@ -335,6 +335,9 @@ interface AppStateValue {
   // are real or should fall back to its own mock data, since (unlike
   // `catalog` above) there's no mock blended in here.
   recommendations: Recommendation[]
+  /** The anime from the whole ranking, for the Anime library's shelf. Empty
+   *  from a backend that predates it. */
+  animeRecommendations: Recommendation[]
   /** The ranking shelved by reason — the For You page's rows. */
   recommendationRails: HomeRail[]
   featured: MediaItem[]
@@ -412,6 +415,9 @@ interface AppStateValue {
      *  holds only what the library already had (see catalog.ts's
      *  searchCatalog). */
     providerUnreachable: boolean
+    /** Set with providerUnreachable: 'slow' when the catalog was still
+     *  answering as the library's hits stopped waiting for it. */
+    providerReason?: ProviderShortfall
   }
   runCategorySearch: (kind: CategoryKind, query: string) => void
   clearCategorySearch: () => void
@@ -712,6 +718,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     error: boolean
     /** Set only by an answered search; absent reads as reachable. */
     providerUnreachable?: boolean
+    providerReason?: ProviderShortfall
   }>({
     kind: null,
     query: '',
@@ -778,7 +785,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       results: categorySearchRaw.items.map((item) => catalogItemToMediaItem(item, adapterContext)),
       loading: categorySearchRaw.loading,
       error: categorySearchRaw.error,
-      providerUnreachable: categorySearchRaw.providerUnreachable === true
+      providerUnreachable: categorySearchRaw.providerUnreachable === true,
+      providerReason: categorySearchRaw.providerReason
     }),
     [categorySearchRaw, adapterContext]
   )
@@ -897,6 +905,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           setPartyHostCode(next.inviteCode)
           setPartyWanAvailable(next.beyondLan ?? null)
           setPartyHostPort(next.port ?? null)
+        } else if (!next.inParty || next.role !== 'host') {
+          // Not hosting: a party left from the player rail ends without
+          // leaveParty below, so its code would otherwise still be offered
+          // as the Invite of whatever party this window shows next.
+          setPartyHostCode(null)
+          setPartyWanAvailable(null)
+          setPartyHostPort(null)
         }
       })
       .catch(() => {})
@@ -2090,9 +2105,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       } catch (error) {
         if (error instanceof PlaybackPreparationCancelledError)
           return { started: false, target: media }
+        // Keyed by title: the message names the reason, not the title, so
+        // two titles failing alike would otherwise share one Retry.
         pushNotification({
           tone: 'error',
           message: playbackPreparationErrorMessage(error),
+          key: `play-failed:${media.id}`,
           action: {
             label: 'Retry',
             run: () => {
@@ -3069,7 +3087,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }
     api.catalog
       .searchWithStatus(kind, q)
-      .then(({ items, providerUnreachable }) => {
+      .then(({ items, providerUnreachable, providerReason }) => {
         if (searchGeneration.current !== generation) return
         setCategorySearchRaw({
           kind,
@@ -3077,7 +3095,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           items,
           loading: false,
           error: false,
-          providerUnreachable
+          providerUnreachable,
+          providerReason
         })
       })
       .catch(() => {
@@ -3145,6 +3164,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       adaptCatalogItems,
       watchedIds: watchedIdsResult.watchedIds,
       recommendations: homeFeed.recommendations,
+      animeRecommendations: homeFeed.animeRecommendations,
       recommendationRails: homeFeed.rails,
       featured: homeFeed.featured,
       homeFeedLive: homeFeed.live,
@@ -3245,6 +3265,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       adaptCatalogItems,
       watchedIdsResult.watchedIds,
       homeFeed.recommendations,
+      homeFeed.animeRecommendations,
       homeFeed.rails,
       homeFeed.featured,
       homeFeed.live,

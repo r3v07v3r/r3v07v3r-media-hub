@@ -53,7 +53,10 @@ class MainActivity : Activity() {
         val player = player(this)
 
         if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
-            // chrome://inspect on the PC, over USB. Debug builds only.
+            // chrome://inspect on the PC, over USB. Builds signed with
+            // debug.p12 only: build.gradle.kts makes a release-signed APK
+            // non-debuggable, which is what closes inspection, since WebView
+            // turns it on by itself for any debuggable app.
             WebView.setWebContentsDebuggingEnabled(true)
         }
         // Bottom of the stack: the video. It punches through the window, so

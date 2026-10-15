@@ -91,8 +91,9 @@ export function useServiceCatchUp(): void {
 
   // switchProfile sets the id once main has switched, so the pass asked
   // here is the new profile's. The first change at launch (the stand-in
-  // profile to the real one) asks too; main answers that from the pass
-  // the mount just started.
+  // profile to the real one) asks too, once the pass the mount started has
+  // ended; main answers that from the pass it just ran (its two-minute
+  // floor), so it costs no Simkl request.
   useEffect(() => {
     if (profileRef.current === activeProfileId) return
     profileRef.current = activeProfileId

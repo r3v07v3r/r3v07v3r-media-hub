@@ -177,6 +177,37 @@
   color: var(--accent-magenta);
 }
 
+/* The name field for a new saved view sits where the Save view button was,
+   in the same box as the dropdowns beside it. */
+.nameForm {
+  display: contents;
+}
+
+.nameInput {
+  background: rgba(10, 15, 25, 0.55);
+  border: 1px solid var(--border-active);
+  border-radius: var(--radius-small);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  padding: 7px 12px;
+  width: 160px;
+}
+
+.nameInput:focus-visible {
+  box-shadow: 0 0 0 2px rgba(56, 193, 255, 0.18);
+  outline: none;
+}
+
+/* Shrinks with the dropdowns on a smaller window. Here rather than in the
+   block above, which comes first and would lose to the rule it overrides. */
+@media (max-width: 1439px) {
+  .nameInput {
+    font-size: 12px;
+    padding: 6px 10px;
+  }
+}
+
 .savedApply:focus-visible,
 .savedRemove:focus-visible {
   outline: 2px solid var(--accent-cyan);

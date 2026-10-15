@@ -197,7 +197,6 @@ export interface PlayerSessionSnapshot {
   settings: {
     /** 3 | 8 | 15 — see shared/media-hub/playbackBuffer.ts. */
     bufferSeconds: number
-    autoSubtitlesEnabled: boolean
     subtitleLanguage: string
     audioLanguage: string
     /** Whether reaching the end of an episode offers the next one. */

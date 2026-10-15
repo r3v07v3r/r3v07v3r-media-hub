@@ -72,6 +72,29 @@ function redactSecrets(value: string): string {
  *  caller without turning the log into a wall of Electron internals. */
 const STACK_FRAMES = 6
 
+/** How big the log may get before it is rolled over to `.1`. */
+export const LOG_MAX_BYTES = 5 * 1024 * 1024
+
+/**
+ * Renames `file` to `file.1`, replacing any older one, once it is past
+ * `maxBytes`, so the next line starts a fresh file. Nothing else ever
+ * trims the log, and a failure that repeats every sync pass (offline, an
+ * expired token) adds lines each time, so without this it grew for the
+ * life of the install, past what a bug report can attach. One old file is
+ * kept so the lines just before a roll are not lost. A stat per line,
+ * which is cheap next to the append it guards. Throws as fs does; logError
+ * catches.
+ */
+export function rollLogIfLarge(file: string, maxBytes = LOG_MAX_BYTES): void {
+  let size: number
+  try {
+    size = fs.statSync(file).size
+  } catch {
+    return // No log yet.
+  }
+  if (size > maxBytes) fs.renameSync(file, `${file}.1`)
+}
+
 /**
  * Best-effort append-only error log. Never throws — logging must not be able to
  * break the feature it's observing. Every line is redacted before it touches
@@ -102,8 +125,15 @@ export function logError(scope: string, error: unknown): void {
         .join('\n')
       if (frames) line += `${frames}\n`
     }
-    fs.mkdirSync(path.dirname(logPath()), { recursive: true })
-    fs.appendFileSync(logPath(), line)
+    const file = logPath()
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    try {
+      rollLogIfLarge(file)
+    } catch {
+      // A log that cannot be rolled (locked open elsewhere) still takes
+      // the line.
+    }
+    fs.appendFileSync(file, line)
   } catch {
     // Logging must never throw into the caller.
   }

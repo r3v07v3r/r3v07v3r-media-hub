@@ -400,14 +400,22 @@ async function providerChecks(): Promise<void> {
   await checkAsync('a provider that fails is unreachable, not an empty answer', async () => {
     const failed = Promise.reject(Object.assign(new Error('Request failed (429)'), { status: 429 }))
     const outcome = await settleProvider<CatalogItem>(failed)
-    assert.deepEqual(outcome, { items: [], unreachable: true })
+    assert.deepEqual(outcome, { items: [], unreachable: true, reason: 'failed' })
   })
 
-  await checkAsync('a provider still out when the grace ends is unreachable', async () => {
+  // A slow link answers, just not while the index's hits wait for it: the
+  // screens say it did not answer in time, not that it could not be reached.
+  await checkAsync('a provider still out when the grace ends is slow, not failed', async () => {
     const started = Date.now()
     const outcome = await settleProvider(never, 50)
-    assert.deepEqual(outcome, { items: [], unreachable: true })
+    assert.deepEqual(outcome, { items: [], unreachable: true, reason: 'slow' })
     assert.ok(Date.now() - started < 1_000, 'the grace bounds the wait')
+  })
+
+  await checkAsync('a provider that fails inside the grace is failed, not slow', async () => {
+    const failed = Promise.reject(new TypeError('fetch failed'))
+    const outcome = await settleProvider<CatalogItem>(failed, 1_000)
+    assert.deepEqual(outcome, { items: [], unreachable: true, reason: 'failed' })
   })
 
   await checkAsync('with no grace the provider is waited for until it settles', async () => {

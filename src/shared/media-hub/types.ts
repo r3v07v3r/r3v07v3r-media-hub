@@ -927,6 +927,14 @@ export interface HomePersonalizedResult {
   planned: TrackedItem[]
   recommendations: CatalogItem[]
   /**
+   * The Anime library's "Recommended for you" shelf: the anime from the
+   * whole stored ranking, best first, rather than the few among
+   * `recommendations` (recommendations.ts's animeShelf). Their reasons are
+   * in `recommendationReasons` with the row's. Absent from a backend that
+   * predates it; the page then takes the anime from `recommendations`.
+   */
+  animeRecommendations?: CatalogItem[]
+  /**
    * Why each suggestion is there, by title id — see RecommendationReason.
    *
    * A sidecar map rather than a field on the items, so every existing
@@ -960,6 +968,16 @@ export interface HomePersonalizedResult {
    * for the renderer to tell "finished" from "started".
    */
   completedIds: string[]
+  /**
+   * Set when there was no stored suggestion list and no catalog could be
+   * read, not even an expired copy. The suggestion fields are then empty,
+   * while Continue Watching and Plan to Watch, which come from the local
+   * database, are filled as always; the phone's Home says the catalog could
+   * not be reached rather than the backend. The call used to throw here, and
+   * the desktop's home feed (hooks.ts) does not read this field yet: it
+   * takes such an answer for a good feed with no suggestions in it.
+   */
+  catalogError?: string
 }
 
 /**
@@ -1309,11 +1327,6 @@ export interface MediaHubPublicSettings {
   /** Anime4K shader pack: whether it is on disk, whether it is in the
    *  pipeline, and which mode — see shared/media-hub/anime4k.ts. */
   anime4k: Anime4kSettings
-  /** On by default: fetches and applies an OpenSubtitles match (in
-   *  `subtitleLanguage` below) automatically as soon as a title starts,
-   *  same as picking the first OpenSubtitles search result manually would
-   *  — see PlaybackOverlay.tsx's own "Always have subtitles" effect. */
-  autoSubtitlesEnabled: boolean
   /** On by default: reaching the end of an episode offers the next one on a
    *  post-play card and starts it when the countdown runs out (see
    *  AUTOPLAY_NEXT_COUNTDOWN_SECONDS in shared/media-hub/player.ts). Movies
@@ -2122,7 +2135,16 @@ export interface CatalogSearchResult {
    *  failed or had not answered in time, so `items` holds only what was
    *  already on this device. A screen says so instead of "no matches". */
   providerUnreachable: boolean
+  /** Why, when `providerUnreachable`: it failed, or it was still running
+   *  when the index's hits stopped waiting for it (the search's grace). A
+   *  slow catalog was reached, so the screens say it did not answer in time
+   *  rather than that it could not be reached. Absent from a backend that
+   *  predates it, which reads as 'failed'. */
+  providerReason?: ProviderShortfall
 }
+
+/** How the online catalog fell short in one search — see CatalogSearchResult. */
+export type ProviderShortfall = 'failed' | 'slow'
 
 export interface DeepScanReport {
   kind: MediaKind

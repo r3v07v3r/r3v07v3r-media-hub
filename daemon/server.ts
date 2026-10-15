@@ -61,6 +61,36 @@ interface ServerDeps {
    *  routes answer plainly that this server has no index. */
   titles?: TitleStore
   titleCrawler?: TitleCrawler
+  /** Where the server writes the few things an administrator must be able
+   *  to find in the log. Optional so existing callers construct unchanged;
+   *  left out, it writes the same line format the daemon's own log uses. */
+  log?: (message: string) => void
+}
+
+function defaultLog(message: string): void {
+  console.log(`[r3-cache] ${new Date().toISOString()} ${message}`)
+}
+
+/**
+ * The line the daemon repeats while anybody may still claim it (main.ts
+ * says it at startup and every five minutes), or null once somebody has.
+ *
+ * Two states count as unclaimed, and they need different lines. A fresh
+ * install has no administrator. A server --claim-admin reopened still has
+ * one, and "no administrator yet" said about it is false and hides the
+ * part that matters: devices are let in without approval until a device
+ * other than that administrator claims it.
+ */
+export function unclaimedReminder(admin: Admin): string | null {
+  if (!admin.isUnclaimed()) return null
+  if (admin.adminDeviceId()) {
+    return (
+      'claiming is REOPENED (--claim-admin): any device on this network that asks to join ' +
+      'is approved without asking until a device other than the current administrator ' +
+      'claims this server.'
+    )
+  }
+  return 'UNCLAIMED — no administrator yet. Open the app on this network and claim it.'
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -174,6 +204,25 @@ async function serveFile(
 
 export function createDaemonServer(deps: ServerDeps): http.Server {
   const { storage, jobs, pairing, credentials, activity, serverName, version, admin } = deps
+  const log = deps.log ?? defaultLog
+
+  // --claim-admin reopened claiming, and the server is open until somebody
+  // claims it: any device on the network is let in without approval and
+  // may then take administration. That is the recovery path working as
+  // designed, but it is a window, and the administrator has to be able to
+  // see it is open — "UNCLAIMED" alone reads as a fresh install, not as a
+  // server that already has an administrator and is waiting to replace it.
+  // It names who can close it, because the current administrator cannot:
+  // admin.claim answers that device's own claim as a retry and leaves the
+  // reopening unspent.
+  if (reopenedForClaim()) {
+    log(
+      'claiming is REOPENED (--claim-admin): until a device other than the current ' +
+        'administrator claims this server, any device on this network that asks to ' +
+        'join is approved without asking, and the first such device to claim becomes ' +
+        'administrator.'
+    )
+  }
 
   return http.createServer((req, res) => {
     void handle(req, res).catch((error) => {
@@ -181,6 +230,12 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       else res.destroy()
     })
   })
+
+  /** Claimable although somebody already administers this server: the
+   *  state --claim-admin leaves behind, as opposed to a fresh install. */
+  function reopenedForClaim(): boolean {
+    return admin.isUnclaimed() && Boolean(admin.adminDeviceId())
+  }
 
   /** The default allocation as a byte figure on THIS disk, or null when no
    *  default is set — which is every install until an admin sets one. */
@@ -220,7 +275,28 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         json(res, 401, { error: 'Pair with this cache server first.' })
         return
       }
-      const claimed = await admin.claim(pairing.deviceIdFor(claimToken))
+      // Read before the claim, which spends the reopening.
+      const wasReopened = reopenedForClaim()
+      const claimerId = pairing.deviceIdFor(claimToken)
+      const claimed = await admin.claim(claimerId)
+      if (claimed && wasReopened && admin.isAdmin(claimerId) && !admin.isUnclaimed()) {
+        const claimer = pairing.findByToken(claimToken)
+        log(
+          `claiming closed: ${JSON.stringify(claimer?.deviceName ?? '')} is now administrator` +
+            (admin.openJoin() ? '' : '; joining needs approval again')
+        )
+      } else if (claimed && wasReopened && reopenedForClaim()) {
+        // The current administrator claiming back gets the same success as
+        // anyone, but admin.claim treats it as a retry and the reopening is
+        // not spent. Said here, or the one person reading the log would take
+        // their own success for the window closing while it is still open.
+        const claimer = pairing.findByToken(claimToken)
+        log(
+          `${JSON.stringify(claimer?.deviceName ?? '')} already administers this server, so ` +
+            'its claim leaves claiming reopened (--claim-admin): devices that ask to join ' +
+            'are still approved without asking until another device claims this server'
+        )
+      }
       if (!claimed) {
         // Already administered. Says so plainly rather than pretending to
         // succeed — and names the recovery path, because the console is the
@@ -267,7 +343,24 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       // being let in as a user. Making the first device wait for an approver
       // who cannot exist yet would deadlock every fresh install.
       const autoApprove = admin.openJoin() || admin.isUnclaimed()
+      // Read in the same moment as autoApprove, not after the await below:
+      // a claim that closes the window while this approval is being written
+      // would otherwise leave a device the window let in out of the log.
+      const inReopenedWindow = reopenedForClaim()
       if (autoApprove) await pairing.setStatus(deviceIdForToken(token), 'approved')
+      // Every device the reopened window lets in is named in the log, so an
+      // administrator recovering the box can see who joined while it was
+      // open. The name is the one pairing stored, which is what the device
+      // list shows and is capped, not the raw body, which can run to a
+      // megabyte; it is quoted because it is still whatever the device sent.
+      if (autoApprove && inReopenedWindow) {
+        const joined = pairing.findByToken(token)?.deviceName ?? deviceName.slice(0, 64)
+        log(
+          `approved ${JSON.stringify(joined)} without asking: claiming is reopened ` +
+            '(--claim-admin) until a device other than the current administrator claims ' +
+            'this server'
+        )
+      }
       json(res, 200, {
         token,
         serverName,

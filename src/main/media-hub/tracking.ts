@@ -69,6 +69,7 @@ import {
 import { toSimklAnimeEpisode, watchedLaterSeasons } from '../../shared/media-hub/serviceIds'
 import {
   abandonedIds,
+  animeShelf,
   liveExclusions,
   readStoredRecommendations,
   reasonsFor,
@@ -130,15 +131,19 @@ import {
   type TraktPushResult
 } from './traktClient'
 import {
+  FILM_WATCHED_KEY,
   historyRetryBatches,
   holdRemovalsOnTheWay,
+  oneRunAtATime,
   readHistoryPending,
   recordHistoryPush,
   removalsInFlight,
   removalsOwed,
   retryFailure,
   settleHistoryRetry,
+  splitHistoryRetryBatch,
   watchKeyOf,
+  watchedAtByTitle,
   writeHistoryPending,
   type HistoryRetryBatch,
   type HistoryService,
@@ -159,6 +164,7 @@ import { sendToRenderer, notifyLibraryChanged } from './rendererBridge'
 import { cachedRemoteLists, fetchRemoteLists } from './remoteLists'
 import type { RemoteList } from '../../shared/media-hub/types'
 import {
+  animeRowAwaitsGrouping,
   batchHistoryPayload,
   hasExpressibleSimklId,
   hasSimklContent,
@@ -167,6 +173,7 @@ import {
   seasonHistoryPayload,
   titleHistoryPayload,
   unmatchedCatalogIds,
+  withMovieWatchedAt,
   type PlaybackPosition,
   type SimklHistoryPayload,
   type SimklHistoryResponse,
@@ -386,9 +393,25 @@ function noteHistoryPush(service: HistoryService, at: HistoryPushAt, error?: str
   }
 }
 
+/** What an owed Simkl change waiting for the anime grouping says. */
+const AWAITING_ANIME_GROUPING = 'Waiting for the anime catalog to be organised.'
+
 function keptSimkl(at: HistoryPushAt, push: Promise<SimklSyncResult>): Promise<SimklSyncResult> {
+  // Asked as the push's body was built (its argument is evaluated first): a
+  // later anime season the body left out because the catalog is not grouped
+  // yet is owed, not unsendable, and is kept for the retry rather than lost
+  // with a push that sent nothing, or cleared by one that sent its other
+  // rows. Only a connected account's mark is written (noteHistoryPush).
+  const membersOf = animeSeasonMembersWhenGrouped()
+  const waiting = at.rows.filter((row) => animeRowAwaitsGrouping(at.item, row, membersOf))
+  const sent = waiting.length
+    ? { ...at, rows: at.rows.filter((row) => !waiting.includes(row)) }
+    : at
   return push.then((result) => {
-    if (result.simklSynced || result.simklError) noteHistoryPush('simkl', at, result.simklError)
+    if (waiting.length) noteHistoryPush('simkl', { ...at, rows: waiting }, AWAITING_ANIME_GROUPING)
+    if (sent.rows.length && (result.simklSynced || result.simklError)) {
+      noteHistoryPush('simkl', sent, result.simklError)
+    }
     return result
   })
 }
@@ -412,11 +435,19 @@ function keptMal(
 
 /** Sends one batch of owed changes. `error` undefined is success; a string
  *  is the failure, with the HTTP status when the service answered; null is
- *  a push that cannot be expressed to that service at all. */
+ *  a push that cannot be expressed to that service at all.
+ *
+ *  An add carries the time each episode was watched here (`watchedAt`,
+ *  `season:episode` to a time, FILM_WATCHED_KEY for a film), as the episode
+ *  comparison's sends do: a push that waited out an outage would otherwise
+ *  land dated the day it finally got through. An episode or film with no
+ *  time here goes undated, and so does a film at Trakt (pushTraktHistory
+ *  takes no date). */
 async function sendHistoryRetry(
   batch: HistoryRetryBatch,
   profile: string,
-  priority: TaskPriority
+  priority: TaskPriority,
+  watchedAt: ReadonlyMap<string, string> = new Map()
 ): Promise<{ error: string | null | undefined; status?: number }> {
   const item = { ...batch.item, year: batch.item.year ?? '' }
   const seasons = bySeason(
@@ -425,20 +456,25 @@ async function sendHistoryRetry(
       .map((row) => ({ season: row.season ?? 1, episode: row.episode as number }))
   )
   const film = item.type === 'movie'
+  const dates = batch.action === 'add' && watchedAt.size ? watchedAt : undefined
   switch (batch.service) {
     case 'simkl': {
       const path = batch.action === 'add' ? '/sync/history' : '/sync/history/remove'
       const body = film
-        ? historyPayload(item, {})
-        : titleHistoryPayload(item, seasons, animeSeasonMembersWhenGrouped())
-      const result = await syncSimklHistory(path, body, priority)
+        ? withMovieWatchedAt(historyPayload(item, {}), dates?.get(FILM_WATCHED_KEY))
+        : titleHistoryPayload(item, seasons, animeSeasonMembersWhenGrouped(), dates)
+      const result = await syncSimklHistory(
+        path,
+        dates && !film ? withWatchedAt(body, dates) : body,
+        priority
+      )
       if (result.simklSynced) return { error: undefined }
       return { error: result.simklError ?? null, status: result.simklStatus }
     }
     case 'trakt': {
       const result = film
         ? await pushTraktHistory(item, {}, batch.action)
-        : await pushTraktTitleHistory(item, seasons, batch.action)
+        : await pushTraktTitleHistory(item, seasons, batch.action, dates)
       if (result.sent) return { error: undefined }
       return { error: result.error ?? null, status: result.status }
     }
@@ -455,29 +491,22 @@ async function sendHistoryRetry(
   }
 }
 
-let historyRetryInFlight: Promise<void> | null = null
-
 /**
  * Sends the history pushes still owed for the active profile, one request
  * per service, title and direction, each on its title's own chain so it
  * stays in order with the pushes made since. Run at the start of every
- * watch-sync pass and every manual Sync. One at a time.
+ * watch-sync pass and every manual Sync. One at a time (oneRunAtATime): the
+ * Sync review flush asks with `rerun`, so a choice written while a run is
+ * out goes in the run after it, not the next half-hourly pass.
  *
  * A service that does not answer, or answers 429 or 5xx, gets no more of
  * this pass's batches (retryFailure): with a dozen titles owed to a service
  * that is down, sending each in turn would hold "Sync now" for the request
  * timeout a dozen times over before it reported anything.
  */
-function retryHistoryPushes(priority: TaskPriority): Promise<void> {
-  if (historyRetryInFlight) return historyRetryInFlight
-  const run = runHistoryRetry(priority)
-    .catch((error) => logError('history:retry', error))
-    .finally(() => {
-      historyRetryInFlight = null
-    })
-  historyRetryInFlight = run
-  return run
-}
+const retryHistoryPushes = oneRunAtATime((priority: TaskPriority) =>
+  runHistoryRetry(priority).catch((error) => logError('history:retry', error))
+)
 
 async function runHistoryRetry(priority: TaskPriority): Promise<void> {
   const db = getDatabase()
@@ -485,9 +514,12 @@ async function runHistoryRetry(priority: TaskPriority): Promise<void> {
   const marks = trackingAccountMarks()
   const pending = readHistoryPending(db, profile, marks)
   if (!Object.keys(pending).length) return
+  const history = db.history()
   const held = new Set(
-    db.history().map((row) => watchKeyOf(String(row.id), row.season ?? null, row.episode ?? null))
+    history.map((row) => watchKeyOf(String(row.id), row.season ?? null, row.episode ?? null))
   )
+  // When each episode held here was watched, for the adds (sendHistoryRetry).
+  const watchedAt = watchedAtByTitle(history)
   const { batches, dropped } = historyRetryBatches(pending, held)
   if (dropped.length) {
     const now = readHistoryPending(db, profile, marks)
@@ -495,14 +527,54 @@ async function runHistoryRetry(priority: TaskPriority): Promise<void> {
     writeHistoryPending(db, profile, now)
   }
   const stopped = new Set<HistoryService>()
-  for (const batch of batches) {
-    if (stopped.has(batch.service)) continue
-    await titlePushQueue.run(titlePushKey(batch.item), async () => {
+  /** Folds one batch's outcome into the record, and logs what was let go. */
+  const settle = (
+    batch: HistoryRetryBatch,
+    error: string | null | undefined,
+    counted: boolean
+  ): void => {
+    const settled = settleHistoryRetry(
+      readHistoryPending(db, profile, trackingAccountMarks()),
+      batch,
+      error,
+      { counted, now: Date.now() }
+    )
+    writeHistoryPending(db, profile, settled.pending)
+    for (const entry of settled.abandoned) {
+      logError(
+        'history:push-abandoned',
+        new Error(
+          `gave up ${entry.action === 'add' ? 'adding' : 'removing'} ${entry.item.id} ` +
+            `${entry.season ?? 'movie'}:${entry.episode ?? 'movie'} at ${entry.service}: ` +
+            `${entry.lastError ?? 'unknown'}`
+        )
+      )
+    }
+  }
+  for (const owed of batches) {
+    if (stopped.has(owed.service)) continue
+    await titlePushQueue.run(titlePushKey(owed.item), async () => {
       // Whose history and whose account this is about, checked again after
       // the wait for the chain: a switch in between leaves it for later.
       if (db.activeProfile() !== profile) return
-      if (trackingAccountMarks()[batch.service] !== marks[batch.service]) return
-      const { error, status } = await sendHistoryRetry(batch, profile, priority)
+      if (trackingAccountMarks()[owed.service] !== marks[owed.service]) return
+      // A later anime season while the catalog is not grouped would be left
+      // out of the body (or the whole body be empty, which reads as "cannot
+      // be expressed" and drops it). It stays queued, as a free try, until
+      // grouping is ready; the 30-day cap still applies.
+      const membersOf = owed.service === 'simkl' ? animeSeasonMembersWhenGrouped() : undefined
+      const { picked: waiting, rest: batch } =
+        owed.service === 'simkl'
+          ? splitHistoryRetryBatch(owed, (row) => animeRowAwaitsGrouping(owed.item, row, membersOf))
+          : { picked: null, rest: owed }
+      if (waiting) settle(waiting, AWAITING_ANIME_GROUPING, false)
+      if (!batch) return
+      const { error, status } = await sendHistoryRetry(
+        batch,
+        profile,
+        priority,
+        watchedAt.get(String(batch.item.id))
+      )
       const failure = retryFailure(status)
       if (typeof error === 'string' && failure.stopsService) stopped.add(batch.service)
       if (error === null) {
@@ -514,23 +586,7 @@ async function runHistoryRetry(priority: TaskPriority): Promise<void> {
           )
         )
       }
-      const settled = settleHistoryRetry(
-        readHistoryPending(db, profile, trackingAccountMarks()),
-        batch,
-        error,
-        { counted: failure.counts, now: Date.now() }
-      )
-      writeHistoryPending(db, profile, settled.pending)
-      for (const entry of settled.abandoned) {
-        logError(
-          'history:push-abandoned',
-          new Error(
-            `gave up ${entry.action === 'add' ? 'adding' : 'removing'} ${entry.item.id} ` +
-              `${entry.season ?? 'movie'}:${entry.episode ?? 'movie'} at ${entry.service}: ` +
-              `${entry.lastError ?? 'unknown'}`
-          )
-        )
-      }
+      settle(batch, error, failure.counts)
     })
   }
 }
@@ -1676,9 +1732,12 @@ function canonicalWriteId(item: { id: unknown; type?: unknown }): string {
  * such a card arrives named by that id. Kept that way it is a second copy
  * of the show's season under an id the show's page never reads, and the
  * count MyAnimeList is sent (read from the show's rows) leaves it out. So
- * it is kept under the show, at the season that id is there; see
- * animeHistoryCoordinates in serviceIds.ts for why the season it arrived
- * with is not carried over. Everything else comes back as it went in.
+ * it is kept under the show, at the season that id is there. The season it
+ * arrived with is not carried over: it is Kitsu's label inside that one
+ * entry (often the same number, not always), and the episode number is
+ * already the entry's own, the numbering the show's episode list gives that
+ * season and the one fromSimklAnimeEpisode files a Simkl entry by.
+ * Everything else comes back as it went in.
  */
 function underShow<T extends { id: string }>(
   item: T,
@@ -1858,8 +1917,9 @@ function canSendEpisode(service: EpisodeService, show: SyncShow, ep: Ep): boolea
  * Sends episodes held here to one service, as an add, on the title's own
  * chain, so a failure is kept and retried (keptSimkl, keptTrakt). Read again
  * when the push runs: an episode un-marked in the meantime is not sent. Each
- * episode carries the time it was watched here (withWatchedAt); a retry
- * after a failure goes without it, as every retried push does.
+ * episode carries the time it was watched here (withWatchedAt, and
+ * titleHistoryPayload for an anime's entries), and so does a retry after a
+ * failure (sendHistoryRetry).
  */
 function sendEpisodesTo(service: EpisodeService, show: SyncShow, eps: Ep[]): void {
   const item = { id: show.id, type: show.type, title: show.title, year: show.year ?? '' }
@@ -1889,7 +1949,7 @@ function sendEpisodesTo(service: EpisodeService, show: SyncShow, eps: Ep[]): voi
             syncSimklHistory(
               '/sync/history',
               withWatchedAt(
-                titleHistoryPayload(item, seasons, animeSeasonMembersWhenGrouped()),
+                titleHistoryPayload(item, seasons, animeSeasonMembersWhenGrouped(), dates),
                 dates
               ),
               'background'
@@ -2100,11 +2160,42 @@ function scheduleEpisodeFlush(): void {
   if (episodeFlushTimer) clearTimeout(episodeFlushTimer)
   episodeFlushTimer = setTimeout(() => {
     episodeFlushTimer = null
-    void retryHistoryPushes('interactive')
+    // A run already out read the record before this choice was written.
+    void retryHistoryPushes('interactive', { rerun: true })
   }, EPISODE_DECISION_FLUSH_MS)
 }
 
-/** Registers every `tracking:*`, `home:personalized`, and `simkl:*` IPC handler. Call once during main-process startup. */
+/**
+ * Home's Plan to Watch row: plannedList, except that a merged anime's later
+ * season is skipped for its show only while the show's own card is shown,
+ * in this row or in Continue Watching (`continueWatchingIds`). A finished
+ * show is on neither, and a planned season of it that has not aired yet
+ * would vanish from both rows, which on the phone is every list it has.
+ * Such a season is asked about again with its show out of the way, so the
+ * rest of plannedList's rule (a season in progress is not planned) holds.
+ */
+export function homePlannedRow(
+  input: Parameters<typeof plannedList>[0],
+  continueWatchingIds: ReadonlySet<string>
+): TrackedItem[] {
+  const rows = plannedList(input)
+  const shown = new Set([...rows.map((row) => String(row.id)), ...continueWatchingIds])
+  const trackedIds = new Set(input.tracked.map((item) => String(item.id)))
+  const showHidden = input.tracked.filter((item) => {
+    const showId = input.historyIdOf(item)
+    return showId !== String(item.id) && trackedIds.has(showId) && !shown.has(showId)
+  })
+  if (!showHidden.length) return rows
+  const more = plannedList({ ...input, tracked: showHidden })
+  if (!more.length) return rows
+  // In the list's own order, newest first, as plannedList gives it.
+  const byId = new Map([...rows, ...more].map((row) => [String(row.id), row]))
+  return input.tracked.flatMap((item) => {
+    const row = byId.get(String(item.id))
+    return row ? [row] : []
+  })
+}
+
 // The tracked rows Remove from plan (the toggle) took out, per profile and
 // id, so the toast's Undo can put back the row itself: the date it was
 // planned, the episode baseline its "new episodes" count runs from, and its
@@ -2132,6 +2223,7 @@ function takeRemovedPlan(profile: string, id: string, now = Date.now()): Tracked
   return held && now - held.at <= REMOVED_PLAN_HOLD_MS ? held.row : null
 }
 
+/** Registers every `tracking:*`, `home:personalized`, and `simkl:*` IPC handler. Call once during main-process startup. */
 export function registerTrackingIpc(): void {
   handle<undefined, TrackingListResult>(MEDIA_HUB_CHANNELS.trackingList, async () => {
     const db = getDatabase()
@@ -2241,13 +2333,19 @@ export function registerTrackingIpc(): void {
   handle<{ id: string }, TitleWatchState>(MEDIA_HUB_CHANNELS.trackingTitleState, (_e, payload) => {
     const db = getDatabase()
     const id = String(payload?.id ?? '')
-    return {
-      tracked: db.isTracked(id),
-      watched: db
-        .history()
-        .filter((entry) => String(entry.id) === id)
-        .map((entry) => ({ season: entry.season, episode: entry.episode }))
+    // The title's own rows on idx_history_content (watchedEpisodesOf), not
+    // the whole history parsed and filtered: the phone asks on every open of
+    // a title and every library refresh. Those are its viewings, a rewatch
+    // once per play, so each episode is kept once, newest first as before.
+    const seen = new Set<string>()
+    const watched: TitleWatchState['watched'] = []
+    for (const row of db.watchedEpisodesOf(id)) {
+      const key = watchKeyOf(id, row.season, row.episode)
+      if (seen.has(key)) continue
+      seen.add(key)
+      watched.push({ season: row.season, episode: row.episode })
     }
+    return { tracked: db.isTracked(id), watched }
   })
 
   /**
@@ -3180,12 +3278,17 @@ export function registerTrackingIpc(): void {
     // waiting for eighteen rows it could have read from disk.
     const stored = readStoredRecommendations(exclusions, history)
     let recommendations: CatalogItem[]
+    // The Anime library's own shelf, from the whole ranking: the anime among
+    // the row's 36 came to a handful once later seasons left it.
+    let animeRecommendations: CatalogItem[]
     let recommendationReasons: Record<string, RecommendationReason>
     let recommendationRails: RecommendationRail[]
     let preferredGenres: string[]
+    let catalogError: string | undefined
 
     if (stored) {
       recommendations = stored.items
+      animeRecommendations = stored.anime
       recommendationReasons = stored.reasons
       recommendationRails = stored.rails
       preferredGenres = stored.preferredGenres
@@ -3200,49 +3303,63 @@ export function registerTrackingIpc(): void {
         )
       )
       const all: CatalogItem[] = [...movies, ...series, ...anime]
-      if (!all.length) throw new Error('All catalog sources are currently unavailable.')
-
       preferredGenres = db.preferredGenres(4)
-      const dropped = abandonedIds()
-      const candidates = all.filter((item) => recommendable(item, exclusions))
-      // No credits or taste profile on this branch, deliberately.
-      // Assembling them means a cache read per candidate — a couple of
-      // thousand of them — and this is the launch path the stored list
-      // exists to keep clear. It only runs on a fresh install or a bumped
-      // store key, where there are no credits to read anyway, and the
-      // background rebuild replaces this list with a fully-ranked one
-      // within minutes. See recommendations.ts.
-      const ranked = rankPersonalizedRecommendationsScored(candidates, {
-        history,
-        preferredGenres,
-        abandonedIds: dropped
-      })
-      // An empty candidate set means everything in the catalog is already
-      // watched, saved or hidden — rank the unfiltered catalog rather than
-      // showing nothing, exactly as this handler always has.
-      const full = ranked.length
-        ? ranked
-        : rankPersonalizedRecommendationsScored(all, {
-            history,
-            preferredGenres,
-            abandonedIds: dropped
-          })
-      // announce: false — this handler returns the same list to the same
-      // renderer on the next line. See storeRecommendations.
-      // The profile this request is ABOUT. The cold path awaits catalog reads
-      // before reaching here, so the write must not resolve the profile for
-      // itself — see storeRecommendations.
-      storeRecommendations(full, preferredGenres, { announce: false, profile })
-      // Through the same cadence pass the stored path uses, so the row is
-      // ordered the same way whichever branch produced it.
-      recommendations = applyCadence(full, watchCadenceProfile(history), SERVED_COUNT)
-      // Thinner than the stored path's, and knowingly so. This branch ranks
-      // without credits or a taste profile (see the comment above), so the
-      // only reasons it can produce are the ones the catalog alone
-      // supports — a franchise continuation, a genre, a release year. The
-      // background rebuild fills in the rest within minutes.
-      recommendationReasons = reasonsFor(recommendations, full)
-      recommendationRails = groupRecommendationRails(full)
+      if (!all.length) {
+        // Every catalog read failed, expired copies included (a fresh install
+        // that never reached a source, or a month with no successful refresh).
+        // Only the suggestions need a catalog: Continue Watching and Plan to
+        // Watch are local, so they are still answered, with the reason the
+        // suggestion row is empty, rather than lost to one thrown error the
+        // phone could only read as "the backend is unreachable". Nothing is
+        // stored, so the next call tries the catalogs again.
+        catalogError = 'All catalog sources are currently unavailable.'
+        recommendations = []
+        animeRecommendations = []
+        recommendationReasons = {}
+        recommendationRails = []
+      } else {
+        const dropped = abandonedIds()
+        const candidates = all.filter((item) => recommendable(item, exclusions))
+        // No credits or taste profile on this branch, deliberately.
+        // Assembling them means a cache read per candidate — a couple of
+        // thousand of them — and this is the launch path the stored list
+        // exists to keep clear. It only runs on a fresh install or a bumped
+        // store key, where there are no credits to read anyway, and the
+        // background rebuild replaces this list with a fully-ranked one
+        // within minutes. See recommendations.ts.
+        const ranked = rankPersonalizedRecommendationsScored(candidates, {
+          history,
+          preferredGenres,
+          abandonedIds: dropped
+        })
+        // An empty candidate set means everything in the catalog is already
+        // watched, saved or hidden — rank the unfiltered catalog rather than
+        // showing nothing, exactly as this handler always has.
+        const full = ranked.length
+          ? ranked
+          : rankPersonalizedRecommendationsScored(all, {
+              history,
+              preferredGenres,
+              abandonedIds: dropped
+            })
+        // announce: false — this handler returns the same list to the same
+        // renderer on the next line. See storeRecommendations.
+        // The profile this request is ABOUT. The cold path awaits catalog reads
+        // before reaching here, so the write must not resolve the profile for
+        // itself — see storeRecommendations.
+        storeRecommendations(full, preferredGenres, { announce: false, profile })
+        // Through the same cadence pass the stored path uses, so the row is
+        // ordered the same way whichever branch produced it.
+        recommendations = applyCadence(full, watchCadenceProfile(history), SERVED_COUNT)
+        animeRecommendations = animeShelf(full)
+        // Thinner than the stored path's, and knowingly so. This branch ranks
+        // without credits or a taste profile (see the comment above), so the
+        // only reasons it can produce are the ones the catalog alone
+        // supports — a franchise continuation, a genre, a release year. The
+        // background rebuild fills in the rest within minutes.
+        recommendationReasons = reasonsFor([...recommendations, ...animeRecommendations], full)
+        recommendationRails = groupRecommendationRails(full)
+      }
     }
 
     // The id a tracked title's viewings are kept under. A merged anime's
@@ -3284,19 +3401,25 @@ export function registerTrackingIpc(): void {
       }
     }
 
+    const continueWatching = continueWatchingList(details, history)
+      .slice(0, 18)
+      // A show that is here only because a later season of it is on the
+      // list says which season that is — see ContinueWatchingEntry.trackedId.
+      .map((row) => {
+        const trackedId = onBehalfOf.get(String(row.id))
+        return trackedId ? { ...row, trackedId } : row
+      })
+
     return {
       tracked,
       updates: db.trackedUpdates(details),
-      continueWatching: continueWatchingList(details, history)
-        .slice(0, 18)
-        // A show that is here only because a later season of it is on the
-        // list says which season that is — see ContinueWatchingEntry.trackedId.
-        .map((row) => {
-          const trackedId = onBehalfOf.get(String(row.id))
-          return trackedId ? { ...row, trackedId } : row
-        }),
-      planned: plannedList({ tracked, startedIds, historyIdOf, watchedRegularCount, posters }),
+      continueWatching,
+      planned: homePlannedRow(
+        { tracked, startedIds, historyIdOf, watchedRegularCount, posters },
+        new Set(continueWatching.map((row) => String(row.id)))
+      ),
       recommendations,
+      animeRecommendations,
       recommendationReasons,
       recommendationRails,
       preferredGenres,
@@ -3311,9 +3434,11 @@ export function registerTrackingIpc(): void {
       completedIds: db.indexByIds([
         ...new Set([
           ...recommendations.map((item) => String(item.id)),
+          ...animeRecommendations.map((item) => String(item.id)),
           ...recommendationRails.flatMap((rail) => rail.items.map((item) => String(item.id)))
         ])
-      ]).completedIds
+      ]).completedIds,
+      ...(catalogError ? { catalogError } : {})
     }
   })
 
@@ -3441,6 +3566,21 @@ export function registerTrackingIpc(): void {
         // by title/year that syncSimklHistory makes above — and for an anime
         // episode with no entry of its own there (see scrobblePayload).
         const scrobble = scrobblePayload(subject, at, progress, animeSeasonMembersWhenGrouped())
+        if (
+          simklConnected &&
+          !scrobble &&
+          subject.type === 'anime' &&
+          at.episode == null &&
+          action !== 'pause'
+        ) {
+          // Played with no episode number (its metadata could not be read):
+          // the mark at 80% sends nothing for it, so neither does the
+          // scrobble. Said once at the start and once at the stop.
+          logError(
+            'simkl:scrobble',
+            new Error(`not scrobbled: ${subject.id} was played with no episode number`)
+          )
+        }
         if (simklConnected && scrobble) {
           try {
             await simklRequest(`/scrobble/${action}`, {

@@ -103,6 +103,29 @@ export const STORED_COUNT = 150
  *  because the row scrolls and eighteen ran out before the arrows did. */
 export const SERVED_COUNT = 36
 
+/** How many the Anime library's own "Recommended for you" shelf shows. */
+export const ANIME_SHELF_COUNT = 18
+
+/**
+ * The anime in a ranking, best first, for the Anime library's own shelf.
+ *
+ * From the whole list, not from the Home row. The row is every kind mixed
+ * and cut at SERVED_COUNT, and once a merged show's later seasons stopped
+ * being offered as titles of their own the anime among those 36 came to a
+ * handful of tiles. The list holds STORED_COUNT, and the anime in it fill
+ * the shelf. `ranked` is what survived the live exclusions, so the seasons
+ * stay out here as everywhere else (LiveExclusions.siblingIds).
+ */
+export function animeShelf(
+  ranked: readonly ScoredRecommendation[],
+  count = ANIME_SHELF_COUNT
+): CatalogItem[] {
+  return ranked
+    .filter((entry) => entry?.item?.type === 'anime')
+    .slice(0, count)
+    .map((entry) => entry.item)
+}
+
 /**
  * How long a stored list stays readable. Long, because the age that
  * matters is REBUILD_AFTER_MS below — this one only exists so a list from
@@ -354,6 +377,8 @@ export function readStoredRecommendations(
   now = new Date()
 ): {
   items: CatalogItem[]
+  /** The Anime library's shelf, from everything that survived — animeShelf. */
+  anime: CatalogItem[]
   reasons: Record<string, RecommendationReason>
   rails: RecommendationRail[]
   preferredGenres: string[]
@@ -399,10 +424,13 @@ export function readStoredRecommendations(
   // built. Cheap enough to redo per read precisely because there are only
   // STORED_COUNT of them by this point.
   const items = applyCadence(surviving, watchCadenceProfile(history, now), SERVED_COUNT)
+  const anime = animeShelf(surviving)
 
   return {
     items,
-    reasons: reasonsFor(items, surviving),
+    anime,
+    // The shelf's cards carry their reasons as the row's do.
+    reasons: reasonsFor([...items, ...anime], surviving),
     // Over everything that survived, not the served row: the shelves are
     // where the rest of the buffer becomes visible.
     rails: groupRecommendationRails(surviving),

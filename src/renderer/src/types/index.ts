@@ -185,6 +185,13 @@ export interface AppNotification {
    * the title it names may be too.
    */
   profileId?: string
+  /**
+   * What the toast is about, for one whose words do not say it: a failed
+   * Play's message names the reason, not the title. A later toast with the
+   * same key replaces it, and one with another key never does, however
+   * alike the words (notificationTtl.ts's addNotification).
+   */
+  key?: string
 }
 
 type MatchTier = 'excellent' | 'good' | 'fair' | 'low'

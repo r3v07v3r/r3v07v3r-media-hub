@@ -94,10 +94,9 @@ export default function Home() {
   const empty = !loading && !catchUp.inFlight && noPersonalRows && !rails.length
   const firstLoad = loading && !data
   // Set when every catalogue read failed: the local rows still arrive, and
-  // only the suggestions are missing. Read loosely so this screen works
-  // against a backend that predates the field.
-  const catalogError = (data as (HomePersonalizedResult & { catalogError?: string }) | null)
-    ?.catalogError
+  // only the suggestions are missing. Absent from a backend that predates the
+  // field, which then reads as before.
+  const catalogError = data?.catalogError
   // A report with no `at` is the backend declining to run (something was
   // playing) before any pass ever has; it knows nothing about what is
   // connected, so it must not be read as "nothing is".

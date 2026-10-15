@@ -65,6 +65,7 @@ const NO_ITEMS: MediaItem[] = []
 const EMPTY_HOME_FEED = {
   continueWatching: [] as ContinueWatchingItem[],
   recommendations: [] as Recommendation[],
+  animeRecommendations: [] as Recommendation[],
   rails: [] as HomeRail[],
   featured: [] as MediaItem[],
   preferredGenres: [] as string[],
@@ -829,6 +830,10 @@ export interface HomeFeedResult {
   // longer be defined as "whatever that one adapter happens to return".
   continueWatching: ContinueWatchingItem[]
   recommendations: Recommendation[]
+  /** The anime from the whole ranking, for the Anime library's shelf
+   *  (HomePersonalizedResult.animeRecommendations). Empty from a backend
+   *  that predates it, and not remembered across launches. */
+  animeRecommendations: Recommendation[]
   /** The same ranking shelved by reason, for the For You page. Not
    *  remembered across launches: it follows the live feed. */
   rails: HomeRail[]
@@ -911,17 +916,19 @@ export function useMediaHubHomeFeed(
         const completed = new Set(result.completedIds ?? [])
         const finished = (media: MediaItem): MediaItem =>
           completed.has(media.id) ? { ...media, watched: true, completed: true } : media
+        const toRecommendation = (item: CatalogItem): Recommendation => {
+          const rec = catalogItemToRecommendation(item, result.preferredGenres, {
+            trackedIds,
+            // Sparse by design — a title nothing picked out has no entry,
+            // and its card shows no chip. See RecommendationReason.
+            reason: result.recommendationReasons?.[String(item.id)]
+          })
+          return { ...rec, media: finished(rec.media) }
+        }
         const next = {
           continueWatching: result.continueWatching.map(continueWatchingEntryToItem),
-          recommendations: result.recommendations.map((item) => {
-            const rec = catalogItemToRecommendation(item, result.preferredGenres, {
-              trackedIds,
-              // Sparse by design — a title nothing picked out has no entry,
-              // and its card shows no chip. See RecommendationReason.
-              reason: result.recommendationReasons?.[String(item.id)]
-            })
-            return { ...rec, media: finished(rec.media) }
-          }),
+          recommendations: result.recommendations.map(toRecommendation),
+          animeRecommendations: (result.animeRecommendations ?? []).map(toRecommendation),
           rails: (result.recommendationRails ?? [])
             .map((rail) => ({
               id: rail.id,

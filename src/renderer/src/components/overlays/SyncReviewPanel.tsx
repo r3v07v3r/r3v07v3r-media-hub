@@ -107,7 +107,11 @@ function useSeenOnScreen(): [(node: HTMLElement | null) => void, boolean] {
           observer.disconnect()
         }
       },
-      { rootMargin: '300px' }
+      // The list the row sits in is the root, not the viewport: the list
+      // scrolls on its own and clips the rows below it, so a margin on the
+      // viewport never reached them and a row was asked for only once it
+      // was already showing.
+      { root: node.parentElement, rootMargin: '300px' }
     )
     observer.observe(node)
     observerRef.current = observer
@@ -150,7 +154,9 @@ function Bubble({ bubble, side }: { bubble: SeasonBubble; side: string }) {
 }
 
 /** A show the automatic step merged: a line per side with what that side
- *  held on its own, and Use beside each to make every other side match it. */
+ *  held on its own, and Use beside each to bring the other sides back to
+ *  that line as far as each service allows (a service keeps what it
+ *  recorded on its own). */
 function ShowRow({ row }: { row: ShowSyncRow }) {
   const { decideSyncShow } = useAppState()
   const [rowRef, onScreen] = useSeenOnScreen()

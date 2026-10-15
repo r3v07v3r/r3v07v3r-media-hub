@@ -8,7 +8,7 @@
 // copies of "what counts as a good match" would let the category page and
 // the assistant rank the same title differently for the same words.
 
-import type { CatalogItem } from './types'
+import type { CatalogItem, ProviderShortfall } from './types'
 import { fillMissing } from './catalogMerge'
 
 /**
@@ -136,6 +136,10 @@ export interface ProviderOutcome<T> {
    *  answered when it stopped being waited for. Either way the list the
    *  person sees holds only what the local index found. */
   unreachable: boolean
+  /** Which of the two, when it was unreachable: 'failed', or 'slow' for a
+   *  request still running when the grace ran out. Only the first is "could
+   *  not be reached"; a slow link answers, just not while anyone waits. */
+  reason?: ProviderShortfall
 }
 
 /**
@@ -155,7 +159,7 @@ export function settleProvider<T>(
     const timer =
       graceMs === undefined
         ? undefined
-        : setTimeout(() => resolve({ items: [], unreachable: true }), graceMs)
+        : setTimeout(() => resolve({ items: [], unreachable: true, reason: 'slow' }), graceMs)
     pending.then(
       (items) => {
         clearTimeout(timer)
@@ -163,7 +167,7 @@ export function settleProvider<T>(
       },
       () => {
         clearTimeout(timer)
-        resolve({ items: [], unreachable: true })
+        resolve({ items: [], unreachable: true, reason: 'failed' })
       }
     )
   })

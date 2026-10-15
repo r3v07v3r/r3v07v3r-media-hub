@@ -29,7 +29,7 @@
 import { getDatabase } from './dbState'
 import { logError } from './logger'
 import { notifyLibraryChanged } from './rendererBridge'
-import { kitsuIdForExternal } from './idBridge'
+import { kitsuIdLookup } from './idBridge'
 import { malRequest } from './malSync'
 import { simklRequest } from './simklClient'
 import {
@@ -51,7 +51,7 @@ import {
   startedTitles,
   type PlannedOrigin
 } from './watchlistRules'
-import { resolveAnimeGroupTarget } from './animeSeasons'
+import { placeAnimeEntry, resolveAnimeGroupTarget } from './animeSeasons'
 import { indexTrackedTitle } from './catalog'
 import type { MediaKind } from '../../shared/media-hub/types'
 import { isForegroundPriority, type TaskPriority } from './taskScheduler'
@@ -272,6 +272,64 @@ function historyIdOf(id: string): string {
 }
 
 /**
+ * Every id in `history`, and those of `candidates` that are a merged anime's
+ * later season with viewings at its season of the show. Such a season is
+ * planned at Simkl or MyAnimeList under its own Kitsu id, but its viewings
+ * are filed under the show (placeAnimeEntry, as the catch-up and the
+ * MyAnimeList import file them), so an exact id match never saw them and a
+ * watched later season was planned again. Asked season by season rather
+ * than by the show alone: a show started here does not make its next,
+ * unwatched season watched.
+ */
+function watchedIds(
+  history: readonly { id: string; season?: number | null }[],
+  candidates: readonly string[]
+): Set<string> {
+  const watched = new Set(history.map((entry) => String(entry.id)))
+  const seasons = new Set(history.map((entry) => `${entry.id}:${entry.season ?? 1}`))
+  for (const id of candidates) {
+    if (watched.has(id) || !id.startsWith('kitsu:')) continue
+    const place = placeAnimeEntry(id)
+    if (place && place.id !== id && seasons.has(`${place.id}:${place.season}`)) watched.add(id)
+  }
+  return watched
+}
+
+/**
+ * Anime un-planned here while Simkl's plan list still had them, by Kitsu id.
+ *
+ * Simkl is never sent an anime removal (watchlistPush.ts's simklPlan: its
+ * anime ids are not ones this app holds), so an anime that arrived from
+ * Simkl and was un-planned here stays on Simkl's list, and the next read
+ * would plan it again. A marker here holds it back until it leaves Simkl's
+ * list (cleared by the pull) or is planned here again (cleared by
+ * applyPlanChange). Stamped with the Simkl account, like everything else
+ * here (rule 7): another account's list says nothing about these.
+ */
+const UNPLANNED_CACHE_KEY = 'planned:unplanned-anime'
+const UNPLANNED_TTL_MS = 365 * 24 * 60 * 60 * 1000
+
+type UnplannedAnime = Record<string, { account: string; at: number }>
+
+/** The markers made under the Simkl account connected now. */
+function unplannedAnime(): UnplannedAnime {
+  const stored = getDatabase().getCache<UnplannedAnime>(UNPLANNED_CACHE_KEY, {
+    allowExpired: true
+  })
+  const account = trackingAccountMarks().simkl
+  const out: UnplannedAnime = {}
+  if (!stored || typeof stored !== 'object' || !account) return out
+  for (const [id, marker] of Object.entries(stored)) {
+    if (marker?.account === account) out[id] = marker
+  }
+  return out
+}
+
+function writeUnplannedAnime(markers: UnplannedAnime): void {
+  getDatabase().putCache(UNPLANNED_CACHE_KEY, markers, UNPLANNED_TTL_MS, { durable: true })
+}
+
+/**
  * Tries the queued removals again, before the pull that would otherwise
  * undo them.
  *
@@ -344,6 +402,42 @@ interface SimklPlannedPayload {
   anime?: { show?: { title?: string; year?: number; ids?: SimklIds } }[]
 }
 
+/** How every plan list is read: strict about the body. See fetchSimklPlanned. */
+const STRICT = { strictBody: true } as const
+
+/**
+ * What one service's plan list gave. `unmapped` counts anime entries the id
+ * bridge answered with no Kitsu id; `unanswered` the ones it could not be
+ * asked about at all (idBridge unreachable, refusing, no Client ID). Those
+ * may be titles already planned here, so a service with any is not an
+ * answer this pass (see pullPlanned) and nothing it held can be removed.
+ */
+interface PlannedFetch {
+  entries: PlannedEntry[]
+  unmapped: number
+  unanswered: number
+}
+
+/** The Kitsu id an anime entry belongs to, through its MAL id, else its
+ *  AniDB id, saying as well whether anyone could be asked (the catch-up's
+ *  kitsuIdFor, simklCatchUp.ts, reads Simkl's anime the same way). */
+async function animeKitsuIdOf(
+  ids: SimklIds | undefined,
+  priority: TaskPriority
+): Promise<{ kitsuId: number | null; answered: boolean }> {
+  let answered = true
+  for (const [service, value] of [
+    ['mal', ids?.mal],
+    ['anidb', ids?.anidb]
+  ] as const) {
+    if (value === undefined) continue
+    const found = await kitsuIdLookup(service, value, priority)
+    if (found.kitsuId) return found
+    if (!found.answered) answered = false
+  }
+  return { kitsuId: null, answered }
+}
+
 /**
  * Simkl's plan-to-watch, which it calls `plantowatch`.
  *
@@ -356,12 +450,8 @@ interface SimklPlannedPayload {
  * invented: a row that cannot be opened is worse than a row that is not
  * there, and now the count says how often that happens.
  */
-const STRICT = { strictBody: true } as const
-
-async function fetchSimklPlanned(
-  priority: TaskPriority
-): Promise<{ entries: PlannedEntry[]; unmapped: number }> {
-  if (!simklCredentials().accessToken) return { entries: [], unmapped: 0 }
+async function fetchSimklPlanned(priority: TaskPriority): Promise<PlannedFetch> {
+  if (!simklCredentials().accessToken) return { entries: [], unmapped: 0, unanswered: 0 }
   const [movies, shows, anime] = await Promise.all([
     // Strict about the body, all three. A list cut off part way would read
     // as an empty one, and an empty list from a service that answered is
@@ -375,6 +465,7 @@ async function fetchSimklPlanned(
     simklRequest<SimklPlannedPayload>('/sync/all-items/anime/plantowatch', {}, priority, STRICT)
   ])
   let unmapped = 0
+  let unanswered = 0
   const out: PlannedEntry[] = []
   for (const entry of movies.movies || []) {
     const imdb = entry.movie?.ids?.imdb
@@ -399,14 +490,12 @@ async function fetchSimklPlanned(
     })
   }
   for (const entry of anime.anime || []) {
-    const ids = entry.show?.ids
     // MAL first, AniDB second — both are supported by the bridge, and MAL
     // is the one Simkl fills in most reliably for anime.
-    const kitsuId =
-      (ids?.mal !== undefined ? await kitsuIdForExternal('mal', ids.mal, priority) : null) ??
-      (ids?.anidb !== undefined ? await kitsuIdForExternal('anidb', ids.anidb, priority) : null)
+    const { kitsuId, answered } = await animeKitsuIdOf(entry.show?.ids, priority)
     if (!kitsuId) {
-      unmapped += 1
+      if (answered) unmapped += 1
+      else unanswered += 1
       continue
     }
     out.push({
@@ -417,7 +506,7 @@ async function fetchSimklPlanned(
       source: 'simkl'
     })
   }
-  return { entries: out, unmapped }
+  return { entries: out, unmapped, unanswered }
 }
 
 interface TraktWatchlistRow {
@@ -425,17 +514,32 @@ interface TraktWatchlistRow {
   show?: { title?: string; year?: number; ids?: { imdb?: string } }
 }
 
-/** Trakt's watchlist, which is its plan-to-watch by another name. */
-async function fetchTraktPlanned(
-  priority: TaskPriority
-): Promise<{ entries: PlannedEntry[]; unmapped: number }> {
-  if (!traktCredentials().accessToken) return { entries: [], unmapped: 0 }
+/**
+ * A list read that has to be a list. Strict reads still give `{}` for an
+ * empty body, and Trakt answers an empty watchlist with `[]`, so anything
+ * that is not an array is not an answer about the list.
+ */
+function listOrThrow<T>(value: unknown, what: string): T[] {
+  if (!Array.isArray(value)) throw new Error(`${what} did not come back as a list.`)
+  return value as T[]
+}
+
+/** Trakt's watchlist, which is its plan-to-watch by another name. Strict
+ *  for the same reason as Simkl's (fetchSimklPlanned): a list cut off part
+ *  way is an error, never an empty watchlist that un-plans everything that
+ *  came only from Trakt. */
+async function fetchTraktPlanned(priority: TaskPriority): Promise<PlannedFetch> {
+  if (!traktCredentials().accessToken) return { entries: [], unmapped: 0, unanswered: 0 }
   const [movies, shows] = await Promise.all([
-    traktRequest<TraktWatchlistRow[]>('/sync/watchlist/movies', {}, priority),
-    traktRequest<TraktWatchlistRow[]>('/sync/watchlist/shows', {}, priority)
+    traktRequest<unknown>('/sync/watchlist/movies', {}, priority, STRICT).then((body) =>
+      listOrThrow<TraktWatchlistRow>(body, "Trakt's watchlist of films")
+    ),
+    traktRequest<unknown>('/sync/watchlist/shows', {}, priority, STRICT).then((body) =>
+      listOrThrow<TraktWatchlistRow>(body, "Trakt's watchlist of shows")
+    )
   ])
   const out: PlannedEntry[] = []
-  for (const row of Array.isArray(movies) ? movies : []) {
+  for (const row of movies) {
     const imdb = row.movie?.ids?.imdb
     if (!imdb) continue
     out.push({
@@ -446,7 +550,7 @@ async function fetchTraktPlanned(
       source: 'trakt'
     })
   }
-  for (const row of Array.isArray(shows) ? shows : []) {
+  for (const row of shows) {
     const imdb = row.show?.ids?.imdb
     if (!imdb) continue
     out.push({
@@ -457,7 +561,7 @@ async function fetchTraktPlanned(
       source: 'trakt'
     })
   }
-  return { entries: out, unmapped: 0 }
+  return { entries: out, unmapped: 0, unanswered: 0 }
 }
 
 interface MalListRow {
@@ -478,30 +582,39 @@ interface MalListResponse {
  * there is no mapping the entry is dropped rather than added under an id
  * nothing else in the app would ever match — a row that cannot be opened
  * is worse than a row that is not there.
+ *
+ * Strict, like Simkl's and Trakt's lists: a page cut off part way, a page
+ * with no list in it, or more pages than are read is an error, never a
+ * shorter list that un-plans what came only from MyAnimeList. A list longer
+ * than the ten pages read therefore adds nothing from MyAnimeList either:
+ * the safe side, for a plan of over ten thousand titles.
  */
-async function fetchMalPlanned(): Promise<{ entries: PlannedEntry[]; unmapped: number }> {
-  if (!malCredentials().accessToken) return { entries: [], unmapped: 0 }
+async function fetchMalPlanned(): Promise<PlannedFetch> {
+  if (!malCredentials().accessToken) return { entries: [], unmapped: 0, unanswered: 0 }
   const rows: MalListRow[] = []
   let pathname: string | null =
     '/users/@me/animelist?fields=list_status&limit=1000&status=plan_to_watch'
   for (let page = 0; page < 10 && pathname; page++) {
-    const result: MalListResponse = await malRequest<MalListResponse>(pathname)
-    rows.push(...(result.data || []))
+    const result: MalListResponse = await malRequest<MalListResponse>(pathname, {}, STRICT)
+    rows.push(...listOrThrow<MalListRow>(result?.data, "MyAnimeList's plan to watch"))
     pathname = result.paging?.next
       ? result.paging.next.replace('https://api.myanimelist.net/v2', '')
       : null
   }
+  if (pathname) throw new Error("MyAnimeList's plan to watch is longer than this app reads.")
   const out: PlannedEntry[] = []
   let unmapped = 0
+  let unanswered = 0
   for (const row of rows) {
     if (row.list_status?.status !== 'plan_to_watch') continue
     const malId = row.node?.id
     if (malId === undefined) continue
     // The same resolver malSync uses for its own pushes, so a title
     // lands under exactly the id the rest of the app files it by.
-    const kitsuId = await kitsuIdForExternal('mal', malId, 'background')
+    const { kitsuId, answered } = await kitsuIdLookup('mal', malId, 'background')
     if (!kitsuId) {
-      unmapped += 1
+      if (answered) unmapped += 1
+      else unanswered += 1
       continue
     }
     out.push({
@@ -512,7 +625,7 @@ async function fetchMalPlanned(): Promise<{ entries: PlannedEntry[]; unmapped: n
       source: 'mal'
     })
   }
-  return { entries: out, unmapped }
+  return { entries: out, unmapped, unanswered }
 }
 
 /**
@@ -605,7 +718,13 @@ export function syncPlannedFromServices(
 }
 
 /** What a fetch that was not made contributes: nothing. */
-const NOT_READ: { entries: PlannedEntry[]; unmapped: number } = { entries: [], unmapped: 0 }
+const NOT_READ: PlannedFetch = { entries: [], unmapped: 0, unanswered: 0 }
+
+const SERVICE_NAMES: Record<PlannedSource, string> = {
+  simkl: 'Simkl',
+  trakt: 'Trakt',
+  mal: 'MyAnimeList'
+}
 
 async function pullPlanned(
   priority: TaskPriority,
@@ -667,12 +786,24 @@ async function pullPlanned(
       return
     }
     if (result.status === 'fulfilled') {
+      const { unanswered } = result.value
       entries.push(...result.value.entries)
       services.push({
         service,
         connected: connected[service],
         pulled: result.value.entries.length,
-        unmapped: result.value.unmapped
+        unmapped: result.value.unmapped,
+        // An anime entry nobody could look up may be a title planned here,
+        // and the list without it is not this service's answer: reported as
+        // an error, it stays out of `answered` below, so nothing that came
+        // from it is removed this pass (rule 5). What did map is added when
+        // another service answered; on its own the pass adds nothing (see
+        // `answered` below), and the next pass asks again.
+        ...(unanswered
+          ? {
+              error: `${unanswered} anime ${unanswered === 1 ? 'entry' : 'entries'} on ${SERVICE_NAMES[service]} could not be looked up, so nothing was taken off the plan from there this time.`
+            }
+          : {})
       })
       return
     }
@@ -748,9 +879,20 @@ async function pullPlanned(
   // case: the title is on the local list already, and a pull that finds it
   // at a service that did take it must be free to record that source.
   const awaitingRemoval = idsAwaitingRemoval()
-  // Watched here outranks planned there — see remotePlanAdoptable.
+  // Watched here outranks planned there — see remotePlanAdoptable. Asked of
+  // every id this pass touches, a merged anime's later season included.
   const history = db.history()
-  const watched = new Set(history.map((entry) => String(entry.id)))
+  const watched = watchedIds(history, [
+    ...entries.map((entry) => entry.id),
+    ...Object.keys(sources)
+  ])
+  // Anime un-planned here that Simkl still lists: Simkl is never sent an
+  // anime removal (watchlistPush.ts's simklPlan), so without this its next
+  // read would plan them again. Held back while only Simkl lists them.
+  const unplanned = unplannedAnime()
+  const listedBeyondSimkl = new Set(
+    entries.filter((entry) => entry.source !== 'simkl').map((entry) => entry.id)
+  )
   let added = 0
   // One row per id, not per entry: a film on all three lists is one title
   // planned three times over, not three titles.
@@ -761,6 +903,7 @@ async function pullPlanned(
     if (!remotePlanAdoptable(entry.id, { tracked: alreadyTracked, awaitingRemoval, watched })) {
       continue
     }
+    if (unplanned[entry.id] && !listedBeyondSimkl.has(entry.id)) continue
     try {
       db.track({ id: entry.id, type: entry.type, title: entry.title, year: entry.year })
       // The grids, My Stuff and the Planned row read the index by id, so a
@@ -771,6 +914,19 @@ async function pullPlanned(
       added += 1
     } catch (error) {
       logError('watchlists:track', error)
+    }
+  }
+  // An un-planned anime that has left Simkl's list needs holding back no
+  // longer: if it comes back there later, that is somebody planning it again.
+  // Only on a Simkl that answered, since a list not read says nothing.
+  if (answered.has('simkl')) {
+    const onSimkl = new Set(
+      entries.filter((entry) => entry.source === 'simkl').map((entry) => entry.id)
+    )
+    const gone = Object.keys(unplanned).filter((id) => !onSimkl.has(id))
+    if (gone.length) {
+      for (const id of gone) delete unplanned[id]
+      writeUnplannedAnime(unplanned)
     }
   }
 
@@ -987,6 +1143,23 @@ async function applyPlanChange(
   if (queued[item.id]) {
     delete queued[item.id]
     writePendingRemovals(queued)
+  }
+  // An anime un-planned here stays on Simkl's list, since Simkl is sent no
+  // anime removal: marked so the next read does not plan it again. Planned
+  // here again, the mark goes. See unplannedAnime. Known by its Kitsu id as
+  // well as its type: a card that carried no type is un-planned as a film
+  // (tracking.ts's trackingToggle), and the marker must still be made.
+  if (item.type === 'anime' || String(item.id).startsWith('kitsu:')) {
+    const markers = unplannedAnime()
+    const onSimkl = (plannedSources()[item.id] ?? []).includes('simkl')
+    const account = trackingAccountMarks().simkl
+    if (planned && markers[item.id]) {
+      delete markers[item.id]
+      writeUnplannedAnime(markers)
+    } else if (!planned && onSimkl && account) {
+      markers[item.id] = { account, at: Date.now() }
+      writeUnplannedAnime(markers)
+    }
   }
   // A show with viewings recorded here never sends the unscoped removal,
   // evidence or not: at Simkl it is a bare show reference to the un-watch

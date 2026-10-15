@@ -92,6 +92,13 @@ function readOverrides(dataDir: string): Partial<DaemonConfig> {
   }
 }
 
+// Said once per loaded copy of this module: loadConfig runs both in the
+// launcher and in the built-in payload it boots, and one line is enough to
+// explain a daemon that never updates. A staged version is a separate
+// bundle with its own copy, so a box that staged a preview build before
+// switching to stable can say it twice.
+let warnedStableChannel = false
+
 /**
  * The resolved configuration the daemon actually runs with.
  *
@@ -104,6 +111,26 @@ function readOverrides(dataDir: string): Partial<DaemonConfig> {
 export function loadConfig(): DaemonConfig {
   const dataDir = defaultDataDir()
   const overrides = readOverrides(dataDir)
+
+  // 'stable' is still accepted, because it is the right setting the day
+  // stable releases carry the daemon. Today they carry no daemon bundle, so
+  // the updater on that channel never finds anything to install, and it
+  // would sit on its starting version forever without a word. This is that
+  // word. Not said when autoUpdate is off: then nothing updates on either
+  // channel, by the operator's own choice, and "set preview to receive
+  // updates" would be advice that does not work.
+  if (
+    overrides.updateChannel === 'stable' &&
+    overrides.autoUpdate !== false &&
+    !warnedStableChannel
+  ) {
+    warnedStableChannel = true
+    console.warn(
+      `[r3-cache] ${new Date().toISOString()} updateChannel is "stable", but stable ` +
+        'releases do not include the daemon yet, so this daemon will not update. Set ' +
+        'updateChannel to "preview" in r3-cache.json to receive updates.'
+    )
+  }
 
   let diskBudgetBytes = overrides.diskBudgetBytes ?? 0
   if (!diskBudgetBytes) {

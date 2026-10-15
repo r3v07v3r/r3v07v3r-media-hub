@@ -19,6 +19,7 @@ import {
   applyBundle,
   buildBundle,
   bundleContents,
+  channelChangeNote,
   newTicket,
   openBundle,
   parsePairingHost,
@@ -241,10 +242,14 @@ export async function redeemPairing(link: string): Promise<PairingRedeemResult> 
     if (!bundle) {
       return { ok: false, message: 'The computer answered, but not with this code. Scan it again.' }
     }
-    writeSettings(applyBundle(readSettings(), bundle, encrypt))
+    const before = readSettings()
+    writeSettings(applyBundle(before, bundle, encrypt))
+    // Taking the desktop's update channel is the one change linking makes
+    // that nobody picked, so it is said out loud when it moves this device.
+    const note = channelChangeNote(before, bundle)
     return {
       ok: true,
-      message: `Linked to ${bundle.from}.`,
+      message: note ? `Linked to ${bundle.from}. ${note}` : `Linked to ${bundle.from}.`,
       imported: bundleContents(bundle)
     }
   }

@@ -5,11 +5,23 @@
 // show in both rows reads as a bug, and a show in neither has vanished from
 // Home. What is pinned here is where that line falls — a film watched, a
 // show started, a show with only a special watched, a show whose episode
-// list never loaded — and that a merged anime franchise is one tile.
+// list never loaded — and that a merged anime franchise is one tile, as
+// long as that tile is on Home (homePlannedRow).
+//
+// The last part drives the real handlers (tracking.ts) through the headless
+// Electron stand-in, as tests/catalogSearch.test.ts does, with the network
+// down: home:personalized still answers with the local rows when no catalog
+// can be read, and tracking:title-state answers for one title from its own
+// rows.
 //
 // Run with: npx tsx tests/homeRows.test.ts
 
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import { registerHooks } from 'node:module'
+import os from 'node:os'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import {
   continueWatchingList,
@@ -20,7 +32,9 @@ import {
 import type {
   CatalogItem,
   HistoryEntry,
+  HomePersonalizedResult,
   MediaKind,
+  TitleWatchState,
   TrackedItem
 } from '../src/shared/media-hub/types'
 
@@ -428,4 +442,162 @@ check('a later season’s viewings under its show count even when its own detail
   assert.equal(underShow.get('kitsu:2'), 0)
 })
 
-console.log(`\n${pass} passed`)
+// ---------------------------------------------------------------------------
+// Through the handlers. tracking.ts imports 'electron', so the name is
+// pointed at the headless stand-in before it is loaded, and the settings it
+// reads go to a scratch folder.
+
+const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-home-rows-'))
+process.env.R3_USER_DATA = scratch
+process.env.R3_ELECTRON_SHIM = '1'
+const shim = pathToFileURL(
+  path.join(__dirname, '..', 'src', 'headless', 'electronShim', 'index.ts')
+)
+registerHooks({
+  resolve(specifier, context, next) {
+    if (specifier === 'electron') return { url: shim.href, shortCircuit: true }
+    return next(specifier, context)
+  }
+})
+// Offline: every catalog source, and every metadata request, fails.
+globalThis.fetch = (async () => {
+  throw new TypeError('fetch failed')
+}) as typeof fetch
+
+async function checkAsync(name: string, fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn()
+    pass++
+    console.log(`  ok  ${name}`)
+  } catch (error) {
+    console.log(`FAIL  ${name}\n      ${(error as Error).message}`)
+    process.exitCode = 1
+  }
+}
+
+async function handlers(): Promise<void> {
+  const { createDatabase } = await import('../src/main/media-hub/database')
+  const { setDatabase } = await import('../src/main/media-hub/dbState')
+  const { homePlannedRow, registerTrackingIpc } = await import('../src/main/media-hub/tracking')
+  const { BrowserWindow, ipcMain } = await import('../src/headless/electronShim')
+  const { MEDIA_HUB_CHANNELS } = await import('../src/shared/media-hub/ipc-channels')
+
+  console.log('\nhomePlannedRow')
+
+  // kitsu:2 is the second season of the show kitsu:1, both on the list.
+  const both = [item('kitsu:2', 'anime'), item('kitsu:1', 'anime')]
+  const row = (
+    over: Partial<Parameters<typeof plannedList>[0]>,
+    continueWatching: string[] = []
+  ): string[] =>
+    ids(
+      homePlannedRow(
+        {
+          tracked: both,
+          startedIds: new Set(['kitsu:1']),
+          historyIdOf: showOf,
+          // The show finished; nothing of its second season watched yet.
+          watchedRegularCount: new Map([
+            ['kitsu:1', 12],
+            ['kitsu:2', 0]
+          ]),
+          posters: new Map(),
+          ...over
+        },
+        new Set(continueWatching)
+      )
+    )
+
+  await checkAsync('a planned later season of a finished show is not lost from Home', async () => {
+    // The show is on neither row, so the season is the franchise's tile.
+    assert.deepEqual(row({}), ['kitsu:2'])
+  })
+
+  await checkAsync('it is skipped while its show’s card is on Home', async () => {
+    // In Continue Watching: that card is the franchise's tile.
+    assert.deepEqual(row({}, ['kitsu:1']), [])
+    // Planned itself: one tile, the show's, as plannedList has it.
+    assert.deepEqual(row({ startedIds: new Set(), watchedRegularCount: new Map() }), ['kitsu:1'])
+  })
+
+  await checkAsync('a later season already in progress is still not planned', async () => {
+    assert.deepEqual(
+      row({
+        watchedRegularCount: new Map([
+          ['kitsu:1', 12],
+          ['kitsu:2', 3]
+        ])
+      }),
+      []
+    )
+    // And with no count at all it is not knowably unstarted.
+    assert.deepEqual(row({ watchedRegularCount: new Map([['kitsu:1', 12]]) }), [])
+  })
+
+  console.log('\nthe handlers, offline')
+
+  const db = createDatabase(path.join(scratch, 'media-hub.sqlite'), 'profile-home-test')
+  setDatabase(db)
+  registerTrackingIpc()
+  const window = new BrowserWindow()
+  const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame }
+  const invoke = (channel: string, payload?: unknown): Promise<unknown> =>
+    ipcMain.dispatchInvoke(event, channel, [payload])
+
+  await checkAsync('no catalog to read: the local rows are still served', async () => {
+    // A fresh install that never reached a catalog source: nothing stored,
+    // no copy of any catalog, expired or not.
+    db.track({ id: 'tt5000001', type: 'movie', title: 'Planned Film' })
+    const home = (await invoke(MEDIA_HUB_CHANNELS.homePersonalized)) as HomePersonalizedResult
+    assert.deepEqual(ids(home.planned), ['tt5000001'])
+    assert.deepEqual(home.recommendations, [])
+    assert.deepEqual(home.recommendationRails, [])
+    assert.equal(home.catalogError, 'All catalog sources are currently unavailable.')
+  })
+
+  await checkAsync('one title’s watched episodes come from its own rows', async () => {
+    const show = { id: 'tt5000002', type: 'series' as const, title: 'Show' }
+    db.importWatched([
+      { ...show, season: 1, episode: 1, watchedAt: '2026-01-01T10:00:00.000Z' },
+      { ...show, season: 1, episode: 2, watchedAt: '2026-01-02T10:00:00.000Z' },
+      {
+        id: 'tt5000003',
+        type: 'series',
+        title: 'Other',
+        season: 1,
+        episode: 1,
+        watchedAt: '2026-01-03T10:00:00.000Z'
+      }
+    ])
+    // A rewatch of the first episode: a second viewing, one episode.
+    db.markWatched(show, { season: 1, episode: 1 })
+    // The same answer the whole history, filtered, used to give.
+    const fromWholeHistory = db
+      .history()
+      .filter((entry) => String(entry.id) === show.id)
+      .map((entry) => ({ season: entry.season, episode: entry.episode }))
+    // Without reading the whole history to get it.
+    const wholeHistory = db.history
+    db.history = () => {
+      throw new Error('read the whole history')
+    }
+    let state: TitleWatchState
+    try {
+      state = (await invoke(MEDIA_HUB_CHANNELS.trackingTitleState, {
+        id: show.id
+      })) as TitleWatchState
+    } finally {
+      db.history = wholeHistory
+    }
+    assert.deepEqual(state.watched, fromWholeHistory)
+    assert.deepEqual(state.watched, [
+      { season: 1, episode: 1 },
+      { season: 1, episode: 2 }
+    ])
+    assert.equal(state.tracked, false)
+  })
+
+  db.close()
+}
+
+void handlers().then(() => console.log(`\n${pass} passed`))

@@ -25,7 +25,8 @@
 //
 //  - A show with no TheTVDB mapping is numbered by its members. Season N is
 //    member N's episodes on the page and in every sync. Its rows follow
-//    their member to wherever it is now.
+//    their member to wherever it is now. So is every show on an install
+//    with no TMDB key, whose pages never ask TMDB (animeGroupRecordsOf).
 //  - A show with one is numbered by TMDB on the page. A member changing
 //    place does not change what season N shows, so its rows stay at their
 //    number; moving them by member would shift every watched mark on a page
@@ -56,6 +57,12 @@ export interface AnimeGroupRecord {
    * The TheTVDB series of the first member: '' when it has none, so the
    * show is numbered by its members; null when the lookup has never
    * answered, so nothing can be said.
+   *
+   * Also '' for every show when the rows were filed with no TMDB key set:
+   * every page is built from its members then, mapping or not. Kept in the
+   * ledger that way, it says how those rows were numbered, so a key added
+   * later reads as the show gaining a mapping, which is left rather than
+   * moved a second time.
    */
   series: string | null
 }
@@ -94,16 +101,26 @@ export interface AnimeRegroupPlan {
  * The groups in a grouped catalog, in the form the ledger keeps. Sorted, so
  * two passes that agree compare equal whatever order the crawl listed the
  * shows in.
+ *
+ * `tmdbPages` is whether a page can be numbered by TMDB at all, which takes
+ * a TMDB key (buildGroupedAnimeVideos asks the same). Without one, every
+ * show is recorded as numbered by its members (series ''): its page is
+ * built from them whatever its mapping, so its rows follow their member.
  */
 export function animeGroupRecordsOf(
   items: readonly Pick<CatalogItem, 'id' | 'groupedIds'>[],
-  seriesOf: (id: string) => string | null
+  seriesOf: (id: string) => string | null,
+  tmdbPages = true
 ): AnimeGroupRecord[] {
   const groups: AnimeGroupRecord[] = []
   for (const item of items) {
     if (!item.groupedIds?.length) continue
     const id = String(item.id)
-    groups.push({ id, members: [id, ...item.groupedIds.map(String)], series: seriesOf(id) })
+    groups.push({
+      id,
+      members: [id, ...item.groupedIds.map(String)],
+      series: tmdbPages ? seriesOf(id) : ''
+    })
   }
   return groups.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
 }

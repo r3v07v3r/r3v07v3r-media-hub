@@ -9,13 +9,14 @@
 // This is the record of what is still owed, on the same terms as the plan
 // changes a service refused (watchlists.ts's planned:pending-removals): a
 // durable catalog_cache entry, retried at the start of each half-hourly
-// watch-sync pass and of a manual Sync, given up on after ten failed tries,
-// and stamped with the account it was owed to so nothing is ever sent to a
-// different one. One entry per service, title and episode (per season for
-// MyAnimeList, which takes a count rather than episodes). A later push for
-// the same episode replaces the entry, whichever way it went: the newest
-// change is the one the service should end up with, and a push that got
-// through clears what an earlier one left owing.
+// watch-sync pass and of a manual Sync, given up on after ten refusals (an
+// unreachable, rate-limited or failing service costs no try; retryFailure)
+// or thirty days, and stamped with the account it was owed to so nothing is
+// ever sent to a different one. One entry per service, title and episode
+// (per season for MyAnimeList, which takes a count rather than episodes). A
+// later push for the same episode replaces the entry, whichever way it went:
+// the newest change is the one the service should end up with, and a push
+// that got through clears what an earlier one left owing.
 //
 // Kept apart from tracking.ts, and free of Electron, so the rules can be
 // tested against a real temporary database (tests/trackingPushes.test.ts).
@@ -187,6 +188,40 @@ export function recordHistoryPush(
   return next
 }
 
+/** Where watchedAtByTitle keeps a film's time: its row has no season or
+ *  episode, which watchKeyOf spells the same way. */
+export const FILM_WATCHED_KEY = 'movie:movie'
+
+/**
+ * When each viewing held here was watched, by title id (`season:episode` to
+ * the time on its history row, FILM_WATCHED_KEY for a film), for dating a
+ * retried add: it would otherwise land at the service dated the day the
+ * retry got through. Rows with no time, and rows with a season but no
+ * episode, are left out, and go undated.
+ */
+export function watchedAtByTitle(
+  history: readonly {
+    id: string | number
+    season?: number | null
+    episode?: number | null
+    watchedAt?: string | null
+  }[]
+): Map<string, Map<string, string>> {
+  const byTitle = new Map<string, Map<string, string>>()
+  for (const row of history) {
+    if (!row.watchedAt) continue
+    const film = row.season == null && row.episode == null
+    if (!film && (row.season == null || row.episode == null)) continue
+    const id = String(row.id)
+    const dates = byTitle.get(id) ?? new Map<string, string>()
+    const key = film ? FILM_WATCHED_KEY : `${row.season}:${row.episode}`
+    const held = dates.get(key)
+    if (!held || Date.parse(row.watchedAt) > Date.parse(held)) dates.set(key, row.watchedAt)
+    byTitle.set(id, dates)
+  }
+  return byTitle
+}
+
 /** One request's worth of owed changes: a service, a title and a direction. */
 export interface HistoryRetryBatch {
   service: HistoryService
@@ -247,14 +282,44 @@ export function historyRetryBatches(
 }
 
 /**
+ * Splits a batch by row: the rows `test` picks, and the rest, each with the
+ * entries it settles. Null for a side with no rows. A Simkl anime batch is
+ * split this way when some of its rows have to wait for the catalog to be
+ * grouped (simkl.ts's animeRowAwaitsGrouping): those stay queued, and the
+ * rest are sent.
+ */
+export function splitHistoryRetryBatch(
+  batch: HistoryRetryBatch,
+  test: (row: HistoryRetryBatch['rows'][number]) => boolean
+): { picked: HistoryRetryBatch | null; rest: HistoryRetryBatch | null } {
+  const picked: HistoryRetryBatch = { ...batch, rows: [], entries: [] }
+  const rest: HistoryRetryBatch = { ...batch, rows: [], entries: [] }
+  batch.rows.forEach((row, index) => {
+    // One entry per row, pushed together by historyRetryBatches.
+    const side = test(row) ? picked : rest
+    side.rows.push(row)
+    side.entries.push(batch.entries[index])
+  })
+  return {
+    picked: picked.rows.length ? picked : null,
+    rest: rest.rows.length ? rest : null
+  }
+}
+
+/**
  * What a failed retry means for the rest of the pass, from the HTTP status
  * it failed with (undefined when there was no answer at all: offline, a
  * timeout, a refused connection).
  *
- * `counts`: whether it costs the entries an attempt. A service that was
- * never reached has said nothing about the change, and a machine left
- * awake and offline for an afternoon would otherwise spend every owed
- * push's ten tries on its own outage.
+ * `counts`: whether it costs the entries an attempt. Only a definite
+ * refusal does: a 4xx other than 429. A service that was never reached has
+ * said nothing about the change, and a machine left awake and offline for
+ * an afternoon would otherwise spend every owed push's ten tries on its own
+ * outage. A 429 or a 5xx says the same about the service, not the change:
+ * a spent Simkl daily allowance, or a few hours of outage, used up the ten
+ * tries in about four and a half hours of passes, before the allowance
+ * reset. These free tries are still let go HISTORY_PENDING_TTL_MS after the
+ * entry was written (settleHistoryRetry).
  *
  * `stopsService`: whether the service's remaining batches wait for the next
  * pass. No answer, a 429 that outlasted its one delayed retry, or a 5xx
@@ -267,7 +332,7 @@ export function retryFailure(status: number | undefined): {
   stopsService: boolean
 } {
   return {
-    counts: status !== undefined,
+    counts: status !== undefined && status !== 429 && status < 500,
     stopsService: status === undefined || status === 429 || status >= 500
   }
 }
@@ -280,8 +345,9 @@ export function retryFailure(status: number | undefined): {
  * and an entry that reaches the cap is let go and returned as abandoned. A
  * failure that is not counted still lets go of an entry written longer ago
  * than HISTORY_PENDING_TTL_MS before `now`, so an outage that never ends
- * does not keep it for ever. Only entries still as the batch read them are
- * touched: a newer push for the same episode wins.
+ * does not keep it for ever, and otherwise moves it to the back of the
+ * record. Only entries still as the batch read them are touched: a newer
+ * push for the same episode wins.
  */
 export function settleHistoryRetry(
   pending: PendingHistoryPushes,
@@ -299,8 +365,13 @@ export function settleHistoryRetry(
       continue
     }
     if (!counted) {
+      // Rewritten at the back, not in place. Batches go out in record order
+      // and a failure like this stops its service for the pass, so an entry
+      // that always fails this way (a 5xx on that one body) would be sent
+      // first on every pass and, costing no try, hold up everything owed
+      // behind it to that service for the whole thirty days.
+      delete next[key]
       if (now - entry.at >= HISTORY_PENDING_TTL_MS) {
-        delete next[key]
         abandoned.push({ ...entry, lastError: error })
       } else {
         next[key] = { ...entry, lastError: error }
@@ -316,6 +387,41 @@ export function settleHistoryRetry(
     next[key] = { ...entry, attempts, lastError: error }
   }
   return { pending: next, abandoned }
+}
+
+/**
+ * Runs `run` one at a time. A call while a run is in flight gets that run,
+ * which is right for the half-hourly pass and Sync now: they only want the
+ * owed record worked through once. It is not right for a change written
+ * while the run is out, because the run read the record when it started and
+ * will not see it. A call with `rerun` therefore gets a run that starts once
+ * the current one has settled (or a run started in between, which read the
+ * record after the call), shared by every such call made while it waits.
+ */
+export function oneRunAtATime<A>(
+  run: (arg: A) => Promise<void>
+): (arg: A, options?: { rerun?: boolean }) => Promise<void> {
+  let current: Promise<void> | null = null
+  let following: Promise<void> | null = null
+  const start = (arg: A): Promise<void> => {
+    const started: Promise<void> = run(arg).finally(() => {
+      if (current === started) current = null
+    })
+    current = started
+    return started
+  }
+  return (arg, { rerun = false } = {}) => {
+    if (!current) return start(arg)
+    if (!rerun) return current
+    if (!following) {
+      const next = (): Promise<void> => {
+        following = null
+        return current ?? start(arg)
+      }
+      following = current.then(next, next)
+    }
+    return following
+  }
 }
 
 /**

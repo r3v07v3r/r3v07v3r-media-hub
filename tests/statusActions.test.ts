@@ -172,6 +172,36 @@ check('a repeated toast replaces the one it repeats', () => {
   assert.equal(addNotification([retry('e')], { ...retry('f'), profileId: 'p2' }).dropped.length, 0)
 })
 
+check('a failed Play is a repeat only of the same title, whatever the words', () => {
+  // The failed-Play message names the reason, never the title, so two titles
+  // failing alike say the same thing; the key is what tells them apart.
+  const failed = (id: string, title: string) => ({
+    id,
+    tone: 'error' as const,
+    message: 'Finding the best source timed out. Check the connection and try again.',
+    key: `play-failed:${title}`,
+    action: { label: 'Retry', run: () => {} }
+  })
+  const two = addNotification([failed('a', 'dune')], failed('b', 'alien'))
+  assert.deepEqual(
+    two.kept.map((x) => x.id),
+    ['a', 'b']
+  )
+  assert.equal(two.dropped.length, 0)
+  const again = addNotification(two.kept, failed('c', 'dune'))
+  assert.deepEqual(
+    again.kept.map((x) => x.id),
+    ['b', 'c']
+  )
+  assert.deepEqual(
+    again.dropped.map((x) => x.id),
+    ['a']
+  )
+  // A keyed toast and an unkeyed one in the same words are not a repeat.
+  const unkeyed = { ...failed('d', 'dune'), key: undefined }
+  assert.equal(addNotification(again.kept, unkeyed).dropped.length, 0)
+})
+
 check('the launch toast names only show rows added to since the last toast, per profile', () => {
   const store = new Map<string, string>()
   const g = globalThis as { window?: unknown }
@@ -751,6 +781,36 @@ check('a MyAnimeList Apply that partly fails says why and keeps only the failed 
   // The first reason follows the count.
   assert.match(apply, /const reason = result\.errors\[0\]\?\.error/)
   assert.match(apply, /\}\.\$\{reason \? ` \$\{reason\}` : ''\}`/)
+})
+
+check('Sync review asks for at most four shows at once, and only for rows on screen', () => {
+  // Read from the source: the panel needs the CSS-module build to render.
+  const panel = fs
+    .readFileSync(
+      path.resolve(__dirname, '../src/renderer/src/components/overlays/SyncReviewPanel.tsx'),
+      'utf8'
+    )
+    .replace(/\r\n/g, '\n')
+  assert.match(panel, /const LOOKUPS_AT_ONCE = 4\n/)
+  assert.match(panel, /while \(lookupsRunning < LOOKUPS_AT_ONCE && waitingLookups\.length > 0\)/)
+  // A slot is given back whether the lookup worked or not.
+  assert.match(panel, /lookup\(\)\.then\(done, done\)/)
+  const hook = panel.slice(
+    panel.indexOf('function useSeasonEpisodes('),
+    panel.indexOf('function useSeenOnScreen(')
+  )
+  // Nothing is asked before the row is seen, or again once it is cached.
+  assert.match(hook, /if \(!visible \|\| listedCache\.has\(row\.id\)\) return/)
+  // Every lookup goes through the queue, and a row that goes before its
+  // turn takes its lookup back out.
+  assert.match(hook, /const drop = queueLookup\(\(\) =>\s*api\s*\.meta\(row\.type, row\.id\)/)
+  assert.match(hook, /current = false\s*drop\(\)/)
+  assert.equal(hook.match(/\.meta\(/g)?.length, 1)
+  assert.match(panel, /const listed = useSeasonEpisodes\(row, onScreen\)/)
+  assert.match(panel, /<div ref=\{rowRef\} className=\{styles\.showRow\}>/)
+  // "On screen" is inside the scrolling list, with a margin there: the
+  // viewport's margin never reached rows the list clips.
+  assert.match(panel, /\{ root: node\.parentElement, rootMargin: '300px' \}/)
 })
 
 // --- the library side panel keeps its title ----------------------------------

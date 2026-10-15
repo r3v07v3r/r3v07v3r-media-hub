@@ -124,9 +124,13 @@ export function createJobStore(dataDir: string): JobStore {
           // may cancel it — so a housemate who named the same title took all
           // four, and could then cancel a download the first device was
           // about to make. The first owner keeps it now. The second device
-          // loses nothing: its feeder sees the title in flight and waits,
-          // and when it asks again after the file lands it is granted the
-          // copy that exists (the dedupe path in POST /api/jobs).
+          // waits instead: its feeder sees the title in flight, and when it
+          // asks again for the same release after the file lands it is
+          // granted the copy that exists (the dedupe path in POST /api/jobs).
+          // Dedupe matches the exact release, though. If that feeder has
+          // since picked a different one, it is answered with this ready
+          // record and granted nothing, and gets its own job (and a second
+          // download) only once the record ages out of this store.
           //
           // The one case where the job still changes hands is the one the
           // old rule was written for: a job stuck queued because its owner

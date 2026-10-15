@@ -48,16 +48,16 @@ override with `R3_CACHE_DIR`. An
 optional `r3-cache.json` in that directory overrides defaults; it is never
 required:
 
-| Key             | Default                                                         |
-| --------------- | --------------------------------------------------------------- |
-| `port`          | `8945`                                                          |
-| `diskBudgetGb`  | 80% of the free space each time the daemon starts, capped at 50 |
-| `idleTtlDays`   | `14`                                                            |
-| `hardMaxDays`   | `30`                                                            |
-| `tombstoneDays` | `60` (how long an evicted title is not re-queued)               |
-| `serverName`    | the machine's hostname                                          |
-| `updateChannel` | `"preview"` (or `"stable"`)                                     |
-| `autoUpdate`    | `true`                                                          |
+| Key             | Default                                                                   |
+| --------------- | ------------------------------------------------------------------------- |
+| `port`          | `8945`                                                                    |
+| `diskBudgetGb`  | 80% of the free space each time the daemon starts, capped at 50           |
+| `idleTtlDays`   | `14`                                                                      |
+| `hardMaxDays`   | `30`                                                                      |
+| `tombstoneDays` | `60` (how long an evicted title is not re-queued)                         |
+| `serverName`    | the machine's hostname                                                    |
+| `updateChannel` | `"preview"` (`"stable"` gets no daemon updates yet, and warns at startup) |
+| `autoUpdate`    | `true`                                                                    |
 
 Environment variables: `R3_CACHE_DIR` (the data directory), `R3_CACHE_NO_MDNS=1`
 (do not announce over mDNS), `R3_CACHE_UPDATE_FEED` (a different release feed,
@@ -128,9 +128,10 @@ The console window shows the same banner as above.
   daemon's data directory, keyed by device (file permissions, not an OS
   keychain). A fetch is always made with the account of whoever asked for
   that title; the daemon never bills one household member for another's
-  watchlist. A job whose owner has not shared a key waits; if anyone else
-  asks for the same title while it is still queued, the job becomes theirs
-  and is fetched with their key. Unpairing revokes
+  watchlist. A job whose owner has not shared a key waits; if somebody who
+  has shared one asks for the same title while it is still queued, the job
+  becomes theirs and is fetched with their key. Any other second request
+  leaves the job with the device that queued it. Unpairing revokes
   only your own key.
 
 The design is written up in [docs/CACHE-PERMISSIONS.md](../docs/CACHE-PERMISSIONS.md).

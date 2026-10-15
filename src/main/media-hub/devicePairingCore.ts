@@ -198,8 +198,32 @@ export function bundleContents(bundle: PairingBundle): string[] {
   if (bundle.omdbApiKey) names.push('OMDb')
   if (bundle.subdlApiKey) names.push('SubDL')
   if (bundle.openSubtitles) names.push('OpenSubtitles')
-  if (bundle.prefs && Object.keys(bundle.prefs).length > 0) names.push('Language preferences')
+  // The update channel rides along in every bundle (see buildBundle), so it
+  // is not counted: on its own it is not something to link a phone for, and
+  // it is not a language preference.
+  const prefs = Object.keys(bundle.prefs ?? {}).filter((key) => key !== 'updateChannel')
+  if (prefs.length > 0) names.push('Language preferences')
   return names
+}
+
+/**
+ * A sentence for the device that redeemed `bundle` when the bundle moved its
+ * update channel, or null. Every bundle carries the sender's channel, so a
+ * phone (on preview until it is linked) that links to a desktop on Stable
+ * moves to Stable, and bundleContents leaves the channel out, so nothing on
+ * screen would otherwise say so. `before` is this device's settings before
+ * applyBundle; anything but 'stable' in it reads as preview, the rule the
+ * phone's updater follows (android/.../Updater.kt).
+ */
+export function channelChangeNote(
+  before: MediaHubRawSettings,
+  bundle: PairingBundle
+): string | null {
+  const next = bundle.prefs?.updateChannel
+  const was = before.updateChannel === 'stable' ? 'stable' : 'preview'
+  if (!next || next === was) return null
+  const name = next === 'stable' ? 'Stable' : 'Preview'
+  return `Updates now come from the ${name} channel, as on that computer.`
 }
 
 /**
@@ -250,19 +274,21 @@ export function buildBundle(
   if (os.apiKey && os.username && os.password) bundle.openSubtitles = os
 
   const prefs: NonNullable<PairingBundle['prefs']> = {}
-  for (const key of [
-    'subtitleLanguage',
-    'audioLanguage',
-    'watchRegion',
-    'updateChannel'
-  ] as const) {
+  for (const key of ['subtitleLanguage', 'audioLanguage', 'watchRegion'] as const) {
     const value = settings[key]
     if (typeof value === 'string' && value) prefs[key] = value
   }
+  // The channel this desktop actually updates from, not only a saved one: a
+  // desktop that never picked one is on Stable, and a bundle that said
+  // nothing left the phone on whatever channel it already had. The same rule
+  // as normalizeUpdateChannel in preferences.ts, written out here because
+  // importing that module would pull settings and Electron into this file.
+  prefs.updateChannel = settings.updateChannel === 'preview' ? 'preview' : 'stable'
   if (typeof settings.partyDisplayName === 'string' && settings.partyDisplayName) {
     prefs.partyDisplayName = settings.partyDisplayName
   }
-  if (Object.keys(prefs).length > 0) bundle.prefs = prefs
+  // Never empty now: the channel is always in it.
+  bundle.prefs = prefs
   return bundle
 }
 

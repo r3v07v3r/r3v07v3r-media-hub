@@ -79,6 +79,12 @@ export interface MediaHubRawSettings {
   malAccessToken?: string
   malRefreshToken?: string
   malTokenExpiresAt?: number
+  /** The account marks a Trakt or MyAnimeList connection keeps through its
+   *  token refreshes — see carryAccountMarkThroughRefresh. Absent until the
+   *  connection's first token is refreshed, and cleared on every sign-in and
+   *  sign-out. */
+  traktAccountMark?: string
+  malAccountMark?: string
   tmdbApiKey?: string
   omdbApiKey?: string
   osApiKey?: string
@@ -540,21 +546,63 @@ export function malCredentials(): MalCredentials {
  * one orphans every stamp already on disk, which reads as "somebody
  * else's account" and quietly discards state — the safe direction, but
  * not a free one.
+ *
+ * Unlike Simkl's, these tokens are refreshed silently (MAL's about monthly,
+ * Trakt's within a week of expiry), and a refresh is the same account. So
+ * the mark is the hash of the token the connection was SIGNED IN with: a
+ * refresh stores that hash before it overwrites the token
+ * (carryAccountMarkThroughRefresh), and a sign-in or sign-out clears it.
+ * Before the first refresh nothing is stored and the hash of the current
+ * token is the mark, which is also what keeps every stamp written before
+ * this existed matching.
  */
 export function traktAccountMark(): string {
-  const { accessToken } = traktCredentials()
+  const settings = readSettings()
+  const accessToken = decrypt(settings.traktAccessToken)
   if (!accessToken) return ''
-  return crypto
-    .createHash('sha256')
-    .update(`trakt-account:${accessToken}`)
-    .digest('hex')
-    .slice(0, 16)
+  return settings.traktAccountMark || tokenMark('trakt-account', accessToken)
 }
 
 function malAccountMark(): string {
-  const { accessToken } = malCredentials()
+  const settings = readSettings()
+  const accessToken = decrypt(settings.malAccessToken)
   if (!accessToken) return ''
-  return crypto.createHash('sha256').update(`mal-account:${accessToken}`).digest('hex').slice(0, 16)
+  return settings.malAccountMark || tokenMark('mal-account', accessToken)
+}
+
+function tokenMark(salt: 'trakt-account' | 'mal-account', accessToken: string): string {
+  return crypto.createHash('sha256').update(`${salt}:${accessToken}`).digest('hex').slice(0, 16)
+}
+
+/**
+ * Called on the settings a token refresh is about to overwrite, before the
+ * new token goes in: pins the account's current mark so the refreshed token
+ * still reads as the same account. Without it every refresh looked like a
+ * new account, and everything stamped with the old mark went inert: owed
+ * pushes were dropped, the Trakt pull re-read the whole account, and Sync
+ * review lost its Trakt rows. A mark already pinned is kept, so a second
+ * refresh carries the first sign-in's mark on.
+ */
+export function carryAccountMarkThroughRefresh(
+  settings: MediaHubRawSettings,
+  service: 'trakt' | 'mal'
+): void {
+  if (service === 'trakt') {
+    if (settings.traktAccountMark) return
+    const accessToken = decrypt(settings.traktAccessToken)
+    if (accessToken) settings.traktAccountMark = tokenMark('trakt-account', accessToken)
+  } else {
+    if (settings.malAccountMark) return
+    const accessToken = decrypt(settings.malAccessToken)
+    if (accessToken) settings.malAccountMark = tokenMark('mal-account', accessToken)
+  }
+}
+
+/** Called on the settings a sign-in or sign-out writes: the next account,
+ *  which may be a different person, gets the mark of its own token. */
+export function forgetAccountMark(settings: MediaHubRawSettings, service: 'trakt' | 'mal'): void {
+  if (service === 'trakt') delete settings.traktAccountMark
+  else delete settings.malAccountMark
 }
 
 /** Every tracking service's mark at once, for the callers that stamp a

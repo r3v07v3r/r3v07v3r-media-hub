@@ -346,11 +346,10 @@ export function animeSeasonOf(
  * the show those viewings are kept under, and the season they are at there.
  *
  * A card can name a later season by its own id (a plan card a watchlist
- * pull added), and nothing is kept under that id — see
- * animeHistoryCoordinates below. This is what lets such a card find its
- * episodes: the rows of `id` at `season`. A season nobody has started is
- * left out, since with no rows to find its card reads as not started
- * either way.
+ * pull added), and nothing is kept under that id — see underShow in
+ * tracking.ts. This is what lets such a card find its episodes: the rows
+ * of `id` at `season`. A season nobody has started is left out, since with
+ * no rows to find its card reads as not started either way.
  *
  * `membersOf` is left out while the catalog has not been grouped, for the
  * reason toSimklAnimeEpisode gives; the answer is then empty.
@@ -374,24 +373,4 @@ export function watchedLaterSeasons(
     if (member) seasons[String(member)] = { id, season }
   }
   return seasons
-}
-
-/**
- * Where an episode named under `id` is KEPT here: for a later season named
- * by its own id, under its show at the season it is there; for anything
- * else, where it was named.
- *
- * The season such an id arrives with is not carried over. It is Kitsu's
- * label inside that one entry (often the same number, not always), and the
- * episode number is already the entry's own — the same numbering the show's
- * episode list gives that season, and the one fromSimklAnimeEpisode files a
- * Simkl entry by. A row with no episode is left alone: it is not an
- * episode of anything.
- */
-export function animeHistoryCoordinates<
-  T extends { id: string; season?: number | null; episode?: number | null }
->(local: T, targetOf: AnimeGroupTarget): T {
-  if (local.episode == null) return local
-  const show = animeSeasonOf(local.id, targetOf)
-  return show ? { ...local, id: show.id, season: show.season } : local
 }

@@ -87,6 +87,22 @@ export function servarrAddPayload(
   return body
 }
 
+/** One page of `/api/v3/queue`, as both apps return it. */
+interface ServarrQueuePage {
+  records?: ServarrQueueItem[]
+  totalRecords?: number
+}
+
+/** How many items are queued in all, out of one page of the queue. The page
+ *  holds at most pageSize records, so counting them stopped at 25; the
+ *  server's own total is the real number, and the page length is only a
+ *  fallback for a server that leaves it out. Exported for the test. */
+export function servarrQueueTotal(page: ServarrQueuePage | undefined): number {
+  const total = page?.totalRecords
+  if (typeof total === 'number' && Number.isFinite(total) && total >= 0) return total
+  return page?.records?.length ?? 0
+}
+
 function headers(config: ServiceConfig): Record<string, string> {
   return config.apiKey ? { 'X-Api-Key': config.apiKey } : {}
 }
@@ -109,16 +125,22 @@ function createServarrClient(kind: 'sonarr' | 'radarr') {
     return { ok: true, message: `Connected to ${label}${version}` }
   }
 
-  async function getQueue(config: ServiceConfig): Promise<ClientResult<ServarrQueueItem[]>> {
+  async function getQueue(
+    config: ServiceConfig
+  ): Promise<ClientResult<{ records: ServarrQueueItem[]; total: number }>> {
     if (!isConfigured(config)) return { ok: false, live: false, error: `${label} isn't configured` }
     const base = normalizeBaseUrl(config.baseUrl)
-    const res = await proxyFetch<{ records: ServarrQueueItem[] }>({
+    const res = await proxyFetch<ServarrQueuePage>({
       url: `${base}/api/v3/queue?pageSize=25`,
       method: 'GET',
       headers: headers(config)
     })
     if (!res.ok) return { ok: false, live: false, error: res.error ?? `Status ${res.status}` }
-    return { ok: true, live: true, data: res.data?.records ?? [] }
+    return {
+      ok: true,
+      live: true,
+      data: { records: res.data?.records ?? [], total: servarrQueueTotal(res.data) }
+    }
   }
 
   // ---- Requesting a title -------------------------------------------------

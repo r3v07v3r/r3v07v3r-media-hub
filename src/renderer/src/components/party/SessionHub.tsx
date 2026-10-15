@@ -8,6 +8,12 @@ import styles from './SessionHub.module.css'
 
 type PartyTab = 'chat' | 'queue' | 'people'
 
+/** The shared queue tab is kept but not drawn. Nothing in the app can put a
+ *  title in the queue any more (the title-page control its empty state
+ *  pointed at is gone), so the tab could only ever be empty. Turning this
+ *  back on is the one change needed once a way to suggest a title returns. */
+const QUEUE_TAB_ENABLED = false
+
 function formatTime(timestamp: number): string {
   const date = new Date(timestamp)
   return Number.isNaN(date.getTime())
@@ -32,7 +38,6 @@ export function SessionHub() {
     partyChat,
     partyHostCode,
     partyWanAvailable,
-    partyHostPort,
     partyPanelOpen,
     setPartyPanelOpen,
     mediaHubSettings,
@@ -189,7 +194,7 @@ export function SessionHub() {
             <p className={partyWanAvailable ? styles.reachabilityGood : styles.reachabilityWarning}>
               {partyWanAvailable
                 ? 'Invite works across the internet.'
-                : `Local network only. Forward TCP ${partyHostPort ?? 'the party port'} or connect R3 Party Sync in Settings.`}
+                : 'Local network only. Connect R3 Party Sync under Control centre → Community for guests outside it.'}
             </p>
           )}
 
@@ -200,18 +205,20 @@ export function SessionHub() {
                 ['queue', `Queue${partyQueue.length ? ` ${partyQueue.length}` : ''}`],
                 ['people', `People ${memberCount}`]
               ] as const
-            ).map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
-                className={tab === key ? styles.tabActive : styles.tab}
-                onClick={() => setTab(key)}
-                role="tab"
-                aria-selected={tab === key}
-              >
-                {label}
-              </button>
-            ))}
+            )
+              .filter(([key]) => key !== 'queue' || QUEUE_TAB_ENABLED)
+              .map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={tab === key ? styles.tabActive : styles.tab}
+                  onClick={() => setTab(key)}
+                  role="tab"
+                  aria-selected={tab === key}
+                >
+                  {label}
+                </button>
+              ))}
           </div>
 
           {tab === 'chat' && (
@@ -262,7 +269,7 @@ export function SessionHub() {
             </section>
           )}
 
-          {tab === 'queue' && (
+          {QUEUE_TAB_ENABLED && tab === 'queue' && (
             <section className={styles.queuePanel} aria-label="Shared queue">
               {partyQueue.length === 0 ? (
                 <p className={styles.emptyCopy}>

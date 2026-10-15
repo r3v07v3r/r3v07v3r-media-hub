@@ -343,5 +343,88 @@ db.exportBackup(backupFile, {
   assert.equal(recentAutoBackup(backups, 'trakt-pull', 60_000, Date.now()), false)
 }
 
+// ---------------------------------------------------------------------
+// The rotation keeps the newest of each reason: the backup before a rare
+// step is the only one holding the library as it was before it, and a few
+// days of routine Trakt-pull backups used to rotate it out.
+// ---------------------------------------------------------------------
+{
+  const backups = path.join(dir, 'backups-per-reason')
+  const start = Date.parse('2026-10-06T12:00:00.000Z')
+  const options = {
+    appVersion: '1.2.3',
+    profiles: [{ id: ALICE, name: 'Alice' }],
+    activeProfileId: ALICE
+  }
+  const regroup = writeRotatingBackup(db, backups, {
+    ...options,
+    reason: 'anime-regroup',
+    now: new Date(start)
+  })
+  const pulls: string[] = []
+  for (let i = 1; i <= AUTO_BACKUP_KEEP + 2; i++) {
+    pulls.push(
+      writeRotatingBackup(db, backups, {
+        ...options,
+        reason: 'trakt-pull',
+        now: new Date(start + i * 24 * 60 * 60_000)
+      })
+    )
+  }
+  assert.equal(fs.existsSync(regroup), true, 'the pre-regroup backup outlives the daily pulls')
+  assert.equal(autoBackupFiles(backups).length, AUTO_BACKUP_KEEP + 1)
+  assert.deepEqual(
+    autoBackupFiles(backups).slice(1),
+    pulls.slice(-AUTO_BACKUP_KEEP).map((file) => path.basename(file)),
+    'and the pulls are still only the newest few'
+  )
+  // A later regroup takes its place, so there is one per reason, not more.
+  const nextRegroup = writeRotatingBackup(db, backups, {
+    ...options,
+    reason: 'anime-regroup',
+    now: new Date(start + 30 * 24 * 60 * 60_000)
+  })
+  assert.equal(fs.existsSync(regroup), false, 'the older regroup backup is rotated out')
+  assert.equal(fs.existsSync(nextRegroup), true)
+  assert.equal(autoBackupFiles(backups).length, AUTO_BACKUP_KEEP)
+}
+
+// ---------------------------------------------------------------------
+// A backup that fails part way leaves no `.partial` behind, and the
+// rotation deletes an old one a write that never finished left.
+// ---------------------------------------------------------------------
+{
+  // A directory where the file should go: the temp file is written, the
+  // rename onto it fails.
+  const blocked = path.join(dir, 'blocked.json')
+  fs.mkdirSync(blocked)
+  fs.writeFileSync(path.join(blocked, 'inside'), 'x')
+  assert.throws(() =>
+    db.exportBackup(blocked, {
+      appVersion: '1.2.3',
+      profiles: [{ id: ALICE, name: 'Alice' }],
+      activeProfileId: ALICE
+    })
+  )
+  assert.equal(fs.existsSync(`${blocked}.partial`), false, 'the half-written file is removed')
+
+  const backups = path.join(dir, 'backups-partials')
+  fs.mkdirSync(backups)
+  const stale = path.join(backups, 'auto-2026-10-01T12-00-00-000Z-trakt-pull.json.partial')
+  const fresh = path.join(backups, 'auto-2026-10-06T12-00-00-000Z-trakt-pull.json.partial')
+  fs.writeFileSync(stale, '{"half')
+  fs.writeFileSync(fresh, '{"half')
+  const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60_000)
+  fs.utimesSync(stale, twoDaysAgo, twoDaysAgo)
+  writeRotatingBackup(db, backups, {
+    appVersion: '1.2.3',
+    profiles: [{ id: ALICE, name: 'Alice' }],
+    activeProfileId: ALICE,
+    reason: 'trakt-pull'
+  })
+  assert.equal(fs.existsSync(stale), false, 'a day-old .partial is deleted')
+  assert.equal(fs.existsSync(fresh), true, 'one that may still be being written is not')
+}
+
 db.close()
 console.log('backup tests passed')

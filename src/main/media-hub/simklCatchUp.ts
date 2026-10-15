@@ -163,6 +163,10 @@ export interface CatchUpMemory {
   kindBackoffOwner: string
   kindBackoffUntil: Record<SimklLibraryKind, number>
   kindFailures: Record<SimklLibraryKind, number>
+  /** Passes in a row that held anime back for the grouping, and until when
+   *  the next call is answered from memory instead — see deferredPauseMs. */
+  deferredPasses: number
+  deferredUntil: number
 }
 
 export function newCatchUpMemory(): CatchUpMemory {
@@ -181,7 +185,9 @@ export function newCatchUpMemory(): CatchUpMemory {
     signedOutAt: 0,
     kindBackoffOwner: '',
     kindBackoffUntil: { movie: 0, show: 0, anime: 0 },
-    kindFailures: { movie: 0, show: 0, anime: 0 }
+    kindFailures: { movie: 0, show: 0, anime: 0 },
+    deferredPasses: 0,
+    deferredUntil: 0
   }
 }
 
@@ -196,6 +202,23 @@ const FLOOR_MS = 2 * MINUTE
 const PULL_INTERVAL_MS = 10 * MINUTE
 const ACTIVITIES_BACKOFF = { base: 5 * MINUTE, cap: HOUR }
 const KIND_BACKOFF = { base: 30 * MINUTE, cap: 6 * HOUR }
+
+/**
+ * How long after its `n`th deferred pass in a row the catch-up answers from
+ * memory while the anime catalog is still not grouped.
+ *
+ * A deferred pass reads Simkl's activities and then holds anime back, and
+ * both interfaces ask again three minutes later on `deferred`. The grouping
+ * usually lands within minutes, so the first three passes go ahead as asked;
+ * one that keeps failing would otherwise cost every client some twenty
+ * Simkl requests an hour, for nothing. So the fourth waits a quarter of an
+ * hour and the ones after it half an hour. Never while the catalog is
+ * grouped: the pass after it is ready is the one that reads anime.
+ */
+export function deferredPauseMs(passes: number): number {
+  if (passes <= 2) return 0
+  return passes === 3 ? 15 * MINUTE : 30 * MINUTE
+}
 /** How long a kind that was fetched but could not be applied in full is
  *  left before it is fetched again. Its stamp has not advanced, so without
  *  a pause every resume would fetch it — and what held it up (an id lookup
@@ -268,6 +291,10 @@ export interface CatchUpOptions {
  * shares it, a call while something is playing or within two minutes of
  * the last pass is answered from memory. `force` skips the two-minute
  * floor (somebody has just linked this device) but never the other two.
+ * And while anime keeps being held back and the catalog is still not
+ * grouped, the last report stands until the pause deferredPauseMs sets is
+ * over; a forced pass, or the first since the accounts changed, skips that
+ * pause as it skips the floor.
  */
 export function runCatchUp(
   deps: CatchUpDeps,
@@ -297,6 +324,11 @@ export function runCatchUp(
   // name: the pauses that exist to space out idle passes do not apply.
   const fresh = Boolean(options.force) || accounts !== memory.lastAccounts
   if (!fresh && last && deps.now() - memory.lastAt < FLOOR_MS) return Promise.resolve(last)
+  // Anime held back pass after pass, and the catalog still not grouped: the
+  // last report stands until the pause is over. See deferredPauseMs.
+  if (!fresh && last?.deferred && deps.now() < memory.deferredUntil && !deps.animeReady()) {
+    return Promise.resolve(last)
+  }
   const run = catchUpPass(deps, memory, marks, fresh, options.leaveListsToJob === true)
     .catch((error) => {
       // Never thrown to the caller: the screen that asked would only turn
@@ -350,6 +382,10 @@ async function catchUpPass(
     memory.lastAt = report.at
     memory.lastAccounts = accountsKey(marks)
     memory.lastProfile = profile
+    // Counted while anime keeps being held back, and reset by the first
+    // pass that does not hold it back (anime read, or nothing to read).
+    memory.deferredPasses = report.deferred ? memory.deferredPasses + 1 : 0
+    memory.deferredUntil = report.deferred ? report.at + deferredPauseMs(memory.deferredPasses) : 0
     // The pull adds titles as a name and a year, and a follow adds one with
     // even less. Detached: nothing on screen should wait for artwork.
     if (report.connected) deps.artwork(profile)

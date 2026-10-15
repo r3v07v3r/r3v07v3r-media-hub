@@ -169,7 +169,8 @@ export function writeBackup(
     try {
       fs.rmSync(temp, { force: true })
     } catch {
-      // Left for the automatic backups' rotation, which deletes an old one.
+      // Left. An automatic backup's is deleted by the rotation once it is a
+      // day old (autoBackup.ts); a manual export's stays where it was written.
     }
     throw error
   }
@@ -301,6 +302,10 @@ export function restoreBackup(sql: DatabaseSync, backup: BackupFile): RestoreSum
   // (appIpc.ts) is the only caller, and it restores into that one. As for
   // every step that takes one, a backup that cannot be written is logged
   // and does not stop the restore.
+  //
+  // Here, with the file already read, and not in backup:import before
+  // importBackup reads it: the rotation after the new backup can delete
+  // the oldest automatic backup, and that may be the file being restored.
   backupBeforeRewrite('restore')
 
   sql.exec('BEGIN')

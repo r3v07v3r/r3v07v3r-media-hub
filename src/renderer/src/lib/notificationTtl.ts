@@ -16,8 +16,9 @@ const ERROR_TTL_MS = 10_000
  * to vanish on the same 4.2s timer as "Synced 3 titles", taking its only
  * Retry with it. Two seconds of that were spent looking at a spinner, so
  * what a person saw was a Play button that did nothing and no explanation
- * anywhere. Such a toast now stays until the action is taken or it is
- * dismissed with its own close control (NotificationLayer offers one).
+ * anywhere. Such a toast now stays until the action is taken, it is
+ * dismissed with its own close control (NotificationLayer offers one), or a
+ * repeat or the column's cap takes its place (addNotification below).
  */
 export function notificationTtlMs(
   notification: Pick<AppNotification, 'tone' | 'action' | 'durationMs'>
@@ -36,11 +37,20 @@ export function notificationTtlMs(
  *  would otherwise stack once per failed Play until each was closed by hand. */
 export const MAX_NOTIFICATIONS = 8
 
-type Placed = Pick<AppNotification, 'tone' | 'message' | 'action' | 'durationMs' | 'profileId'>
+type Placed = Pick<
+  AppNotification,
+  'tone' | 'message' | 'action' | 'durationMs' | 'profileId' | 'key'
+>
 
 /** Whether two toasts say the same thing: same tone, words, action and
- *  profile. A second one replaces the first rather than standing under it. */
+ *  profile. A second one replaces the first rather than standing under it.
+ *  A toast with a key is the same only as one with that key: two failed
+ *  Plays can fail for the same reason, in the same words, and each Retry
+ *  is for its own title. */
 function sameNotification(a: Placed, b: Placed): boolean {
+  if (a.key !== undefined || b.key !== undefined) {
+    return a.key === b.key && a.profileId === b.profileId
+  }
   return (
     a.tone === b.tone &&
     a.message === b.message &&

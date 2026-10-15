@@ -790,10 +790,9 @@ export interface MediaHubDatabase {
    * number under more than one season, specials aside. Those are not one
    * entry's episodes. The id once fronted the whole show, before the
    * grouping changed which member does, and its seasons were the group's in
-   * an order nothing
-   * records any more. Only its season 1 — the id's own entry — can be
-   * placed; the rest stay where they are rather than be guessed onto one
-   * season, where they would collide and be dropped.
+   * an order nothing records any more. Only its season 1 — the id's own
+   * entry — can be placed; the rest stay where they are rather than be
+   * guessed onto one season, where they would collide and be dropped.
    *
    * Deliberately not profile-scoped, unlike almost everything above: this
    * repairs rows written under an id nothing reads any more (see

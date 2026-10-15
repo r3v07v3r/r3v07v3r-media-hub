@@ -400,7 +400,6 @@ async function openPlayback(
     nextUp: null,
     settings: {
       bufferSeconds: getPlaybackBufferSeconds(settings.playbackBuffer),
-      autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
       subtitleLanguage: settings.subtitleLanguage || 'en',
       audioLanguage: settings.audioLanguage || 'en',
       autoplayNextEnabled: settings.autoplayNextEnabled !== false,

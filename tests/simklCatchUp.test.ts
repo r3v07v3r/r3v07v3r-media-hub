@@ -1406,6 +1406,45 @@ async function passes(): Promise<void> {
     assert.equal(h.state()?.stamps.anime, 'a1')
   })
 
+  await checkAsync('anime deferred pass after pass: the asking slows down', async () => {
+    // Both interfaces ask again three minutes after a deferred pass. While
+    // the grouping keeps failing, each of those used to read Simkl's
+    // activities: some twenty requests an hour per client, for nothing.
+    const h = harness()
+    h.ready = false
+    const asked = async (): Promise<boolean> => {
+      h.clock += 3 * MINUTE
+      return (await passOf(h)).calls.includes('activities')
+    }
+    h.clock -= 3 * MINUTE
+    assert.equal(await asked(), true, 'the first deferred pass')
+    assert.equal(await asked(), true)
+    assert.equal(await asked(), true, 'the third still asks, and then pauses')
+    const waits: boolean[] = []
+    for (let i = 0; i < 4; i += 1) waits.push(await asked())
+    // Fifteen minutes after the third: three-minute asks at 3, 6, 9 and 12
+    // minutes are answered from memory, the one at 15 goes ahead.
+    assert.deepEqual(waits, [false, false, false, false])
+    assert.equal(await asked(), true, 'after fifteen minutes')
+    const later: boolean[] = []
+    for (let i = 0; i < 10; i += 1) later.push(await asked())
+    assert.deepEqual(later, [false, false, false, false, false, false, false, false, false, true])
+    // Grouped: the next ask goes ahead at once, reads anime, and the count
+    // starts again.
+    h.ready = true
+    h.clock += 3 * MINUTE
+    const ready = await passOf(h)
+    assert.deepEqual(libraryCalls(ready.calls), ['library:anime'])
+    assert.equal(ready.report.deferred, false)
+    assert.equal(h.memory.deferredPasses, 0)
+    // A forced pass is never held back.
+    h.ready = false
+    h.memory.deferredPasses = 9
+    h.memory.deferredUntil = h.clock + 60 * MINUTE
+    h.memory.lastReport = { ...ready.report, deferred: true }
+    assert.ok((await passOf(h, { force: true })).calls.includes('activities'))
+  })
+
   await checkAsync('a profile switch mid-pass: nothing is written after it, anywhere', async () => {
     const h = harness()
     h.during.show = () => h.db.setActiveProfile('someone-else')

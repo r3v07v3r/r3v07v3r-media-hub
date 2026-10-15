@@ -850,6 +850,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
     refreshCatalog,
     continueWatching,
     recommendations,
+    animeRecommendations,
     categorySearch,
     clearCategorySearch,
     mediaHubSettings,
@@ -886,6 +887,11 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
   )
   const kindState = catalogKindStates[config.kind]
   const searchActive = categorySearch.kind === config.kind && categorySearch.query.trim().length > 0
+  // How the online catalog fell short of a search, in the notes below: still
+  // running when the library's own hits stopped waiting for it is not the
+  // same as out of reach.
+  const providerShortfall =
+    categorySearch.providerReason === 'slow' ? 'did not answer in time' : 'could not be reached'
   // The page's query: its filters, Hide toggles and search. A selection made
   // under another one is shown only while its title is still on the page
   // (librarySelection.ts), so a filter that hides it moves the panel on.
@@ -1104,15 +1110,21 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
   }, [browseItems, filteredLibrary])
   // Recommendations are sourced from the personalised home feed, then
   // narrowed to the active library. Each category keeps its own relevant
-  // rail: movies on Movies, series on Series, and anime on Anime.
+  // rail: movies on Movies, series on Series, and anime on Anime. Anime
+  // takes its own list, drawn from the whole ranking: the anime among the
+  // Home row came to a handful of tiles once a merged show's seasons left
+  // it. The Home row is the fallback, for a backend that sends no such list.
   const recommended = useMemo(
     () =>
       uniqueItems(
-        recommendations
+        (config.kind === 'anime' && animeRecommendations.length
+          ? animeRecommendations
+          : recommendations
+        )
           .map((recommendation) => recommendation.media)
           .filter((media) => matchesCategoryKind(media, config.kind))
       ).slice(0, 18),
-    [recommendations, config.kind]
+    [animeRecommendations, recommendations, config.kind]
   )
   // Seeds EverythingSection's reveal batch past wherever the previously-
   // focused tile falls, rounded up to a clean batch boundary, so a
@@ -1366,14 +1378,18 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
         {/* The online catalog failed or did not answer in time, so the
             results are only what the library already had. Said above a
             short list as well as in place of an empty one: either way the
-            missing title may simply not be in the library yet. */}
+            missing title may simply not be in the library yet. A slow
+            catalog was reached, and is not said to be out of reach. */}
         {searchActive &&
           !categorySearch.loading &&
           categorySearch.providerUnreachable &&
           searchResults.length > 0 && (
             <div className={`${styles.offlineBanner} ${styles.searchBanner}`} role="status">
-              <Icon name="wifi-off" size={15} />
-              {`The online ${config.pluralLabel} catalog could not be reached, so only titles already in the library are shown.`}
+              <Icon
+                name={categorySearch.providerReason === 'slow' ? 'clock' : 'wifi-off'}
+                size={15}
+              />
+              {`The online ${config.pluralLabel} catalog ${providerShortfall}, so only titles already in the library are shown.`}
             </div>
           )}
         {searchActive ? (
@@ -1390,7 +1406,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
                 : categorySearch.error
                   ? `The ${config.pluralLabel} search could not be reached. Try again.`
                   : categorySearch.providerUnreachable
-                    ? `The online ${config.pluralLabel} catalog could not be reached, and nothing already in the library matched.`
+                    ? `The online ${config.pluralLabel} catalog ${providerShortfall}, and nothing already in the library matched.`
                     : `No ${config.pluralLabel} matched that search.`
             }
           />

@@ -23,6 +23,7 @@ import path from 'node:path'
 import { createDatabase, type MediaHubDatabase } from '../src/main/media-hub/database'
 import { setDatabase } from '../src/main/media-hub/dbState'
 import {
+  ANIME_SHELF_COUNT,
   SERVED_COUNT,
   STORED_COUNT,
   storeKey,
@@ -159,6 +160,58 @@ check('a later season of a merged anime is never served, watched or not', () => 
   for (const rail of served.rails) {
     for (const x of rail.items) assert.ok(!siblingIds.has(x.id), `${x.id} is on a shelf`)
   }
+})
+
+// The Anime library's own shelf used to be the anime among the Home row's
+// 36, and with the later seasons gone from the list that came to a handful.
+check('the Anime shelf takes its anime from the whole list, seasons still left out', () => {
+  const db = freshDatabase()
+  // One title in ten is an anime: four in the first 36, fifteen in all.
+  const list = ranked(STORED_COUNT).map((entry, i) =>
+    i % 10 === 5
+      ? {
+          ...entry,
+          item: { ...entry.item, type: 'anime' as const },
+          reason: { kind: 'genre' as const, detail: 'Action' }
+        }
+      : entry
+  )
+  storeRecommendations(list, ['Action'])
+  // id-15 is a later season of a merged show, and id-25 was disliked.
+  db.dislike({ ...item('id-25'), type: 'anime' })
+
+  const served = readStoredRecommendations(
+    liveExclusions(db.history(), new Set(['id-15'])),
+    NO_HISTORY
+  )
+
+  assert.ok(served)
+  const inRow = served.items.filter((x) => x.type === 'anime').map((x) => x.id)
+  assert.deepEqual(inRow, ['id-5', 'id-35'], 'the row alone is a handful')
+  const shelf = served.anime.map((x) => x.id)
+  assert.deepEqual(
+    shelf,
+    [5, 35, 45, 55, 65, 75, 85, 95, 105, 115, 125, 135, 145].map((i) => `id-${i}`),
+    'every anime that survived, in the stored order'
+  )
+  assert.ok(served.anime.every((x) => x.type === 'anime'))
+  // Their cards carry their reasons as the row's do.
+  assert.deepEqual(served.reasons['id-145'], { kind: 'genre', detail: 'Action' })
+})
+
+check('the Anime shelf stops at its own count', () => {
+  freshDatabase()
+  storeRecommendations(
+    ranked(STORED_COUNT).map((entry) => ({ ...entry, item: { ...entry.item, type: 'anime' } })),
+    []
+  )
+  const served = readStoredRecommendations(
+    { watchedIds: new Set(), trackedIds: new Set(), dislikedIds: new Set() },
+    NO_HISTORY
+  )
+  assert.ok(served)
+  assert.equal(served.anime.length, ANIME_SHELF_COUNT)
+  assert.equal(served.anime[0].id, 'id-0')
 })
 
 check('a stored list that holds a later season asks to be ranked again', () => {

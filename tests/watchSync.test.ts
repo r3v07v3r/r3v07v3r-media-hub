@@ -14,8 +14,10 @@
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import { registerHooks } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import { createDatabase } from '../src/main/media-hub/database'
 import {
@@ -695,4 +697,79 @@ async function passes(): Promise<void> {
   })
 }
 
-void passes().then(() => console.log(`\n${pass} passed`))
+// The snapshot the review diff is made from (simklClient.ts's
+// simklWatchedSnapshot), read against Simkl faked at fetch. A films library
+// cut off part way used to read as `{}`: "Simkl has nothing watched",
+// cached and handed to the diff as complete, so every film watched here
+// showed as not watched at Simkl. simklClient reaches Electron, so it is
+// loaded with the headless stand-in, as tests/accountMarks.test.ts loads
+// settingsStore.
+async function snapshots(): Promise<void> {
+  console.log('\nthe review diff’s Simkl snapshot')
+  process.env.R3_USER_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-simkl-snapshot-'))
+  process.env.R3_ELECTRON_SHIM = '1'
+  const shim = pathToFileURL(
+    path.join(__dirname, '..', 'src', 'headless', 'electronShim', 'index.ts')
+  )
+  registerHooks({
+    resolve(specifier, context, next) {
+      if (specifier === 'electron') return { url: shim.href, shortCircuit: true }
+      return next(specifier, context)
+    }
+  })
+  const store = await import('../src/main/media-hub/settingsStore')
+  const { setDatabase } = await import('../src/main/media-hub/dbState')
+  const simkl = await import('../src/main/media-hub/simklClient')
+  const db = createDatabase(path.join(process.env.R3_USER_DATA, 'snapshot.sqlite'), PROFILE)
+  setDatabase(db)
+  const plain = (value: string): string => `plain:${Buffer.from(value, 'utf8').toString('base64')}`
+  store.writeSettings({ simklClientId: 'cid', simklAccessToken: plain('simkl-token') })
+
+  const film = {
+    movies: [
+      {
+        last_watched_at: '2026-01-01T00:00:00Z',
+        movie: { title: 'Dune', year: 2021, ids: { imdb: 'tt1160419' } }
+      }
+    ]
+  }
+  let cut = true
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = new URL(String(input instanceof Request ? input.url : input))
+    const body = url.pathname.includes('/movies/') ? JSON.stringify(film) : '{"shows":[]}'
+    if (!cut) return new Response(body, { status: 200 })
+    const bytes = new TextEncoder().encode(body.slice(0, 12))
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes)
+        controller.error(new Error('connection reset'))
+      }
+    })
+    return new Response(stream, { status: 200 })
+  }) as typeof fetch
+
+  await checkAsync('a films read cut off part way is no answer, not an empty one', async () => {
+    const films = await simkl.simklWatchedSnapshot('background', { moviesOnly: true })
+    assert.equal(films.complete, false)
+    assert.equal(films.fetched, false)
+    assert.deepEqual(films.entries, [])
+  })
+  await checkAsync('nor is a whole snapshot cut off part way', async () => {
+    const whole = await simkl.simklWatchedSnapshot('background')
+    assert.equal(whole.complete, false)
+  })
+  await checkAsync('read whole, the same requests answer as before', async () => {
+    cut = false
+    const films = await simkl.simklWatchedSnapshot('background', { moviesOnly: true })
+    assert.equal(films.complete, true)
+    assert.equal(films.fetched, true)
+    assert.deepEqual(
+      films.entries.map((entry) => entry.id),
+      ['tt1160419']
+    )
+  })
+}
+
+void passes()
+  .then(snapshots)
+  .then(() => console.log(`\n${pass} passed`))

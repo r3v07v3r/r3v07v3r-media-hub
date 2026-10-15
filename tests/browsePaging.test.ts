@@ -7,13 +7,21 @@
 // page and say "Nothing here yet" until it was opened again. The crawl, the
 // deep scan, the household sync and a search title being indexed all send
 // library:changed with the 'index' scope (catalogSearch.test.ts pins the
-// crawl's); the grid starts over on it.
+// crawl's); the grid starts over on it. While it waits it says it is still
+// loading, and "Nothing here yet" only once it has waited past the screen's
+// limit: the crawl lands as several writes, and the empty grid between them
+// used to read as a dead end. That limit is measured from the first wait of
+// the visit: any kind's index write starts the grid over, and measuring from
+// the last of them would keep a kind with nothing in it loading for as long
+// as other kinds' writes kept coming.
 // Run with: npx tsx tests/browsePaging.test.ts
 
 import assert from 'node:assert/strict'
 
 import {
+  browseEmptyNote,
   browsePagingDone,
+  browseWaitStart,
   browseWaitingForIndex,
   indexMayHaveGrown
 } from '../src/app-ui/lib/browsePaging'
@@ -61,6 +69,46 @@ check('an empty grid that stopped paging cleanly is waiting, not empty', () => {
     'a failure says so itself'
   )
   assert.equal(browseWaitingForIndex({ ...grid, count: 12 }), false, 'titles on screen')
+})
+
+check('an empty grid says it is still loading until it has waited too long', () => {
+  const waiting = { done: true, loading: false, error: null, count: 0 }
+  assert.equal(browseEmptyNote(waiting, false), 'loading', 'the first crawl has not landed')
+  assert.equal(
+    browseEmptyNote({ ...waiting, done: false }, false),
+    'loading',
+    'started over on an index write, about to fetch again'
+  )
+  assert.equal(browseEmptyNote({ ...waiting, loading: true }, false), 'loading', 'fetching')
+  assert.equal(browseEmptyNote(waiting, true), 'nothing', 'the crawl found nothing for it')
+  assert.equal(
+    browseEmptyNote({ ...waiting, done: false }, true),
+    'loading',
+    'started over by an index write after the wait, and fetching again'
+  )
+  assert.equal(
+    browseEmptyNote({ ...waiting, error: 'Not connected to a backend.' }, false),
+    null,
+    'a failure says so itself'
+  )
+  assert.equal(browseEmptyNote({ ...waiting, count: 12 }, true), null, 'titles on screen')
+})
+
+check('the wait on the index is measured from the first of the visit', () => {
+  const waiting = { done: true, loading: false, error: null, count: 0 }
+  const fetching = { ...waiting, done: false, loading: true }
+  assert.equal(browseWaitStart(null, fetching, 1_000), null, 'the first page is still out')
+  assert.equal(browseWaitStart(null, waiting, 5_000), 5_000, 'the first wait starts the clock')
+  // Another kind's index write starts the grid over, and it fetches again.
+  assert.equal(browseWaitStart(5_000, { ...waiting, done: false }, 60_000), 5_000, 'started over')
+  assert.equal(browseWaitStart(5_000, fetching, 61_000), 5_000, 'fetching again')
+  assert.equal(browseWaitStart(5_000, waiting, 62_000), 5_000, 'waiting again, on the same clock')
+  assert.equal(browseWaitStart(5_000, { ...waiting, count: 12 }, 63_000), null, 'titles arrived')
+  assert.equal(
+    browseWaitStart(5_000, { ...waiting, error: 'Not connected to a backend.' }, 63_000),
+    null,
+    'a failure says so itself'
+  )
 })
 
 console.log(`\n${pass} passed`)

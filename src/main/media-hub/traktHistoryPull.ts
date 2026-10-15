@@ -10,15 +10,15 @@
 // import does (traktClient.ts's fileTraktPlays: an anime series under its
 // merged show, at its season there).
 //
-// Two things it does that the import does not:
+// One rule it shares with the Import button, and one thing that is its own:
 //
 //  - A viewing already held here is skipped, not written again, and so is
 //    one whose removal Trakt has not taken yet (un-marked here, the push
-//    still on its way or failed and owed). Every
-//    episode played here is pushed to Trakt and comes back on the next pull
-//    stamped with Trakt's own time, which the import would record as a
-//    second play. The catch-up skips Simkl's echo the same way
-//    (simklCatchUpRules.ts).
+//    still on its way or failed and owed). The Import button leaves out the
+//    same viewings (heldViewings). Every episode played here is pushed to
+//    Trakt and comes back on the next pull stamped with Trakt's own time,
+//    which would otherwise be recorded as a second play. The catch-up skips
+//    Simkl's echo the same way (simklCatchUpRules.ts).
 //  - With nothing on record for this profile and account (no import has
 //    been run for it, and no pull), the first pass reads the account's
 //    whole past once, through the import button's own path and with its
@@ -27,7 +27,9 @@
 //    and the time, and history from then on arrives by itself. Somebody
 //    who connects Trakt gets their history without pressing Import. An
 //    import that finishes records its own start as where the pull carries
-//    on from, so a pass after one never reads the whole account again.
+//    on from, so a pass after one never reads the whole account again. A
+//    first pass that fails records nothing and is tried again later,
+//    further apart each time (TraktImportFailures).
 //
 // Each pull reaches back a few days before the last one (OVERLAP_MS), for
 // a viewing that reached Trakt late with an earlier date; a row already
@@ -46,7 +48,8 @@ const DAY = 24 * 60 * 60 * 1000
 /** How far before the last pull each pull reaches back. */
 export const OVERLAP_MS = 3 * DAY
 
-/** The record of where the pull is; losing it costs a fresh start from now. */
+/** The record of where the pull is. Losing it is not free: with no record
+ *  the next pass reads the account's whole past again (see the header). */
 const STATE_TTL_MS = 400 * DAY
 
 export interface TraktPullState {
@@ -101,9 +104,96 @@ export function markTraktHistoryPulled(
   writeState(db, profile, { account, stamps: null, since: new Date(atMs).toISOString() })
 }
 
+/**
+ * A first pass whose whole-account import failed, so the next ones wait.
+ *
+ * The import reads every page of the account's history and both ratings
+ * lists before it can find out it has to refuse (the anime catalog still
+ * being organised, Simkl unreachable for the anime lookups), and the pull
+ * runs every half hour and with every catch-up. Without this an account
+ * whose import keeps failing was read whole, up to 200 pages, on every one
+ * of them. Per profile and account, like the pull's own record; the Import
+ * button is not held back by it, and a pass that succeeds writes the pull's
+ * record, after which this is never read again.
+ */
+export interface TraktImportFailures {
+  account: string
+  /** Failed first passes in a row. */
+  failures: number
+  /** When the last one began. Not when it gave up: the import reads for
+   *  minutes before it fails, and the wait is counted from the pass. */
+  at: number
+}
+
+export function traktImportFailuresKey(profile: string): string {
+  return `trakt:history-pull-failures:v1:${profile}`
+}
+
+/** How long after its last failed pass began the first pass is tried again:
+ *  the next half-hourly pass after one failure, which is what the usual
+ *  cause (the anime catalog being organised for a few minutes) needs; six
+ *  hours after two; a day after three or more. Twenty-five minutes rather
+ *  than thirty for the first, because the job comes round thirty minutes
+ *  after its last run began, give or take its timer, and landing a moment
+ *  short of the wait would put the retry off by another half hour. */
+export function traktImportRetryAfterMs(failures: number): number {
+  if (failures <= 1) return 25 * 60 * 1000
+  if (failures === 2) return 6 * 60 * 60 * 1000
+  return DAY
+}
+
+function importFailuresFor(stored: unknown, account: string): TraktImportFailures | null {
+  const value = stored as TraktImportFailures | null
+  if (!value || typeof value !== 'object' || value.account !== account) return null
+  if (typeof value.failures !== 'number' || typeof value.at !== 'number') return null
+  return value
+}
+
+/**
+ * Whether Trakt's series rows can be filed now, from how their anime lookups
+ * went (traktClient.ts's imdbToAnimeTargets): null when they can, otherwise
+ * the reason, which the import and the pull throw so nothing is written or
+ * recorded and the next pass tries again.
+ *
+ * Two things hold them back. Something resolved to anime while the anime
+ * catalog is still being organised, so there is nothing to file it against.
+ * Or a lookup nobody answered while a Simkl Client ID is set (Simkl down, or
+ * refusing): that series may be anime, and filed now it would sit as a plain
+ * series under its IMDb id for good, since only new history is read after.
+ * With no Client ID there is nobody to wait for, so the rows are filed as
+ * they come, as before.
+ */
+export function traktFilingHeldBack(lookups: {
+  /** Series resolved to an anime. */
+  resolved: number
+  /** Series whose lookup nobody answered. */
+  unanswered: number
+  groupingReady: boolean
+  /** Whether a Simkl Client ID is set, so a lookup can be answered at all. */
+  resolverConfigured: boolean
+}): string | null {
+  if (lookups.resolved && !lookups.groupingReady) {
+    return 'Your anime library is still being organised in the background — run the import again once it has finished.'
+  }
+  if (lookups.unanswered && lookups.resolverConfigured) {
+    return 'Simkl could not be reached to tell which of your shows are anime, so nothing was imported. Try again shortly.'
+  }
+  return null
+}
+
 /** The key a viewing is held under here, as db.history() rows give it. */
 function playKey(row: { id: string; season?: number | null; episode?: number | null }): string {
   return `${row.id}:${row.season ?? 'movie'}:${row.episode ?? 'movie'}`
+}
+
+/** What is held here, in playKey form: every viewing in `history`, and
+ *  every one in `owed` (its removal not yet taken by Trakt). What the pull's
+ *  first pass and the Import button leave out of an import. */
+export function heldViewings(
+  history: readonly { id: string; season?: number | null; episode?: number | null }[],
+  owed: Iterable<string>
+): Set<string> {
+  return new Set([...history.map(playKey), ...owed])
 }
 
 /** The rows of `rows` whose viewing is not in `held` (playKey form). */
@@ -190,9 +280,26 @@ export async function pullTraktHistory(deps: TraktPullDeps): Promise<TraktPullRe
     if (!state) {
       // Nothing on record: the account's past, once, by the import's path.
       // A failure (the anime catalog still being organised, a profile
-      // switch) throws to the catch below and records nothing, so the next
-      // pass tries again. See the header.
-      const imported = await deps.fullImport(held)
+      // switch) throws to the catch below and records no position, so a
+      // later pass tries again: the next one after a first failure, then
+      // further apart (TraktImportFailures).
+      const failuresKey = traktImportFailuresKey(profile)
+      const failed = importFailuresFor(db.getCache(failuresKey), account)
+      if (failed && deps.now() < failed.at + traktImportRetryAfterMs(failed.failures)) {
+        return { plays: 0, read: false }
+      }
+      let imported: { plays: number; ratings: number }
+      try {
+        imported = await deps.fullImport(held)
+      } catch (error) {
+        const record: TraktImportFailures = {
+          account,
+          failures: (failed?.failures ?? 0) + 1,
+          at: startedAt
+        }
+        db.putCache(failuresKey, record, 7 * DAY, { durable: true })
+        throw error
+      }
       if (moved()) return { plays: 0, read: true }
       writeState(db, profile, { account, stamps, since: new Date(startedAt).toISOString() })
       const scopes: LibraryChangeScope[] = []

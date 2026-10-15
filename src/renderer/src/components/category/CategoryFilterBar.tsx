@@ -11,6 +11,7 @@
 // vocabularies from categoryFilters.ts; the STATE and its URL
 // round-tripping are untouched.
 
+import { useState } from 'react'
 import { Icon } from '@renderer/components/icons/Icon'
 import { CategoryConfig } from '@renderer/lib/mediaHub/categoryConfig'
 import type { CatalogFacets } from '@shared/media-hub/types'
@@ -52,6 +53,17 @@ export function CategoryFilterBar({
 }: CategoryFilterBarProps) {
   const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
   const mine = (mediaHubSettings?.savedFilters ?? []).filter((saved) => saved.kind === config.kind)
+  // The name being typed for a new saved view, or null while no name is being
+  // asked for. An inline field rather than window.prompt, which Electron's
+  // renderer does not implement: it threw there, and Save view saved nothing.
+  const [viewName, setViewName] = useState<string | null>(null)
+
+  function submitViewName(): void {
+    const name = viewName?.trim()
+    setViewName(null)
+    // An empty name is a cancel, not a view called nothing.
+    if (name) void saveCurrentFilter(name)
+  }
 
   async function saveCurrentFilter(name: string): Promise<void> {
     const api = window.api?.mediaHub
@@ -84,6 +96,10 @@ export function CategoryFilterBar({
     filters.episodeLengthBucket ||
     filters.episodesBucket ||
     filters.status
+  // The name field goes when the filters it would save do. Going Back to an
+  // unfiltered view removes it without needing a blur, and a draft left open
+  // would reappear, focused, over the next filter somebody picks.
+  if (!hasActiveFilter && viewName !== null) setViewName(null)
 
   function set<K extends keyof CategoryFilterState>(key: K, value: CategoryFilterState[K]) {
     onChange({ ...filters, [key]: value })
@@ -305,18 +321,37 @@ export function CategoryFilterBar({
       {/* Offered only when there is something worth keeping. A "save this
           view" button over an unfiltered page would be inviting people to
           bookmark the default. */}
-      {hasActiveFilter && (
-        <button
-          type="button"
-          className={styles.clear}
-          onClick={() => {
-            const name = window.prompt('Name this view')
-            if (name?.trim()) void saveCurrentFilter(name.trim())
-          }}
-        >
-          Save view
-        </button>
-      )}
+      {hasActiveFilter &&
+        (viewName !== null ? (
+          <form
+            className={styles.nameForm}
+            onSubmit={(event) => {
+              event.preventDefault()
+              submitViewName()
+            }}
+          >
+            {/* Leaving the field saves, as the + New list field on My Stuff
+                does, so a typed name is not lost to a stray click. Escape
+                cancels; an empty name saves nothing. */}
+            <input
+              autoFocus
+              className={styles.nameInput}
+              value={viewName}
+              maxLength={60}
+              placeholder="Name this view"
+              aria-label="Name for the saved view"
+              onChange={(event) => setViewName(event.target.value)}
+              onBlur={submitViewName}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') setViewName(null)
+              }}
+            />
+          </form>
+        ) : (
+          <button type="button" className={styles.clearButton} onClick={() => setViewName('')}>
+            Save view
+          </button>
+        ))}
 
       <span className={styles.sortWrap}>
         <Icon name="sort" className={styles.sortIcon} />

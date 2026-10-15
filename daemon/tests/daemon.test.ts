@@ -10,12 +10,13 @@ import path from 'node:path'
 
 import { createActivityTracker } from '../activity'
 import { createAdmin } from '../admin'
+import { loadConfig } from '../config'
 import { createCredentials } from '../credentials'
 import { createJobStore } from '../jobs'
 import type { JobRecord } from '../jobs'
 import { createFetcher, shouldRetryAfterFailure } from '../fetcher'
 import { createPairing, deviceIdForToken, isApproved, type Pairing } from '../pairing'
-import { createDaemonServer } from '../server'
+import { createDaemonServer, unclaimedReminder } from '../server'
 import { createItemStore, isEntitled, planEvictions, type StoredItem } from '../storage'
 
 const DAY = 24 * 60 * 60 * 1000
@@ -1058,6 +1059,235 @@ async function claimRouteTest(): Promise<void> {
     await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   }
   console.log('ok  claim route')
+}
+
+// ---------------------------------------------------------------------
+// The window --claim-admin opens, as the log shows it.
+//
+// The rule is unchanged: a reopened server lets any device join without
+// approval and lets the first claimer take it. What this pins is that the
+// administrator can see the window in the log — at startup, in the line
+// repeated while it lasts, for every device let in while it lasts (a claim
+// landing mid-approval included), and when a claim closes it — that the
+// current administrator claiming back is not reported as closing it,
+// because it does not, and that a fresh install or a closed server says
+// none of it.
+// ---------------------------------------------------------------------
+
+async function reopenedClaimLogTest(): Promise<void> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-reopened-'))
+  const pairing = createPairing(root)
+  await pairing.load()
+  const admin = createAdmin(root)
+  await admin.load()
+  const lines: string[] = []
+  const build = (pairingDep: Pairing = pairing): ReturnType<typeof createDaemonServer> =>
+    createDaemonServer({
+      storage: createItemStore(root, {
+        idleTtlMs: 60_000,
+        hardMaxMs: 600_000,
+        budgetBytes: 10 ** 9,
+        tombstoneMs: 60_000
+      }),
+      jobs: createJobStore(root),
+      pairing: pairingDep,
+      admin,
+      credentials: createCredentials(root),
+      activity: createActivityTracker(root),
+      updaterStatus: () => ({
+        channel: 'preview',
+        enabled: true,
+        checkedAt: 0,
+        latestSeen: '',
+        staged: '',
+        stagedAt: 0,
+        lastError: ''
+      }),
+      serverName: 'test',
+      version: '0.0.0',
+      diskBudgetBytes: 10 ** 9,
+      log: (message) => lines.push(message)
+    })
+
+  build()
+  assert.equal(lines.length, 0, 'a fresh install is not reported as reopened')
+  // The line main.ts repeats every five minutes while anyone may claim.
+  assert.match(
+    unclaimedReminder(admin) ?? '',
+    /UNCLAIMED — no administrator yet/,
+    'a fresh install is reminded that it has no administrator'
+  )
+
+  const ownerToken = await joinApproved(pairing, 'old admin')
+  await admin.claim(deviceIdForToken(ownerToken))
+  build()
+  assert.equal(lines.length, 0, 'nor is a claimed server')
+  assert.equal(unclaimedReminder(admin), null, 'and a claimed server repeats nothing')
+
+  // What --claim-admin does at the console, then the next start.
+  await admin.reopen()
+  const server = build()
+  assert.equal(lines.length, 1, 'the reopened state is logged at startup')
+  assert.match(lines[0], /REOPENED/)
+  assert.match(lines[0], /--claim-admin/)
+  assert.match(lines[0], /without asking/)
+  assert.match(lines[0], /other than the current administrator/, 'and says who can close it')
+  // The repeated line says the same for as long as the window lasts, and
+  // does not call a server with an administrator a fresh install.
+  const reminder = unclaimedReminder(admin) ?? ''
+  assert.match(reminder, /REOPENED \(--claim-admin\)/)
+  assert.match(reminder, /without asking/)
+  assert.match(reminder, /other than the current administrator/)
+  assert.ok(!reminder.includes('no administrator'), 'the reopened window has an administrator')
+
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+  const pairAt = async (
+    at: string,
+    deviceName: string
+  ): Promise<{ token: string; status: string }> =>
+    (await (
+      await fetch(`${at}/api/pair`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ deviceName })
+      })
+    ).json()) as { token: string; status: string }
+  const pair = (deviceName: string): Promise<{ token: string; status: string }> =>
+    pairAt(base, deviceName)
+
+  try {
+    // The administrator claiming back from the app: a success, as before,
+    // but one that does not spend the reopening, and the log says so.
+    lines.length = 0
+    const reclaimed = await fetch(`${base}/api/admin/claim`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${ownerToken}` }
+    })
+    assert.equal(reclaimed.status, 200, 'the rule is unchanged: claiming back succeeds')
+    assert.equal(lines.length, 1, 'and is logged')
+    assert.match(lines[0], /"old admin" already administers this server/)
+    assert.match(lines[0], /leaves claiming reopened/)
+    assert.ok(!lines[0].includes('claiming closed'), 'it is not reported as closing the window')
+
+    lines.length = 0
+    const stranger = await pair('stranger\nlaptop')
+    assert.equal(stranger.status, 'approved', 'the rule is unchanged: the window lets devices in')
+    assert.equal(lines.length, 1, 'and each one it lets in is logged')
+    assert.match(lines[0], /approved "stranger\\nlaptop" without asking/)
+    assert.ok(!lines[0].includes('\n'), 'a name cannot break the log line')
+
+    lines.length = 0
+    await pair('x'.repeat(5000))
+    assert.equal(lines.length, 1)
+    assert.ok(
+      lines[0].includes(`"${'x'.repeat(64)}"`),
+      'the log names the device as pairing stored it, capped like the device list'
+    )
+    assert.ok(lines[0].length < 300, 'not the five thousand characters the request sent')
+
+    lines.length = 0
+    const claimed = await fetch(`${base}/api/admin/claim`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${stranger.token}` }
+    })
+    assert.equal(claimed.status, 200)
+    assert.equal(lines.length, 1, 'the claim that closes the window is logged')
+    assert.match(lines[0], /claiming closed: "stranger\\nlaptop" is now administrator/)
+    assert.equal(unclaimedReminder(admin), null, 'and the repeated line stops')
+
+    lines.length = 0
+    const later = await pair('after the window')
+    assert.equal(later.status, 'pending', 'once claimed, joining waits for approval again')
+    assert.equal(lines.length, 0, 'and nothing more is logged about the window')
+
+    // A claim that closes the window while a join is being approved. The
+    // device was let in because the window was open, so it is still named,
+    // even though the window has shut by the time the approval is written.
+    await admin.reopen()
+    const closerToken = await joinApproved(pairing, 'closer')
+    const racing = build({
+      ...pairing,
+      setStatus: async (deviceId, status) => {
+        await admin.claim(deviceIdForToken(closerToken))
+        return pairing.setStatus(deviceId, status)
+      }
+    })
+    await new Promise<void>((resolve) => racing.listen(0, '127.0.0.1', resolve))
+    try {
+      lines.length = 0
+      const raced = await pairAt(
+        `http://127.0.0.1:${(racing.address() as { port: number }).port}`,
+        'raced device'
+      )
+      assert.equal(raced.status, 'approved', 'the window was open when it asked')
+      assert.equal(admin.isUnclaimed(), false, 'and shut while it was being approved')
+      assert.equal(lines.length, 1, 'it is logged all the same')
+      assert.match(lines[0], /approved "raced device" without asking/)
+    } finally {
+      await new Promise<void>((resolve) => racing.close(() => resolve()))
+    }
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  }
+  console.log('ok  a reopened claim window is visible in the log')
+}
+
+// ---------------------------------------------------------------------
+// updateChannel "stable": accepted, and said out loud.
+//
+// Stable releases carry no daemon bundle yet, so a daemon on that channel
+// never updates. The value stays valid (it is the right one the day they
+// do); startup says why nothing will arrive.
+// ---------------------------------------------------------------------
+
+async function stableChannelWarningTest(): Promise<void> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-channel-'))
+  const previousDir = process.env.R3_CACHE_DIR
+  const originalWarn = console.warn
+  const warnings: string[] = []
+  console.warn = (...args: unknown[]): void => {
+    warnings.push(args.map(String).join(' '))
+  }
+  try {
+    process.env.R3_CACHE_DIR = root
+    await fsp.writeFile(
+      path.join(root, 'r3-cache.json'),
+      JSON.stringify({ updateChannel: 'preview' })
+    )
+    assert.equal(loadConfig().updateChannel, 'preview')
+    assert.equal(warnings.length, 0, 'preview is the working channel and says nothing')
+
+    // Before the warning below, which is said once per process: with
+    // updates switched off, no channel would update, so there is nothing
+    // to explain and switching to preview would not help.
+    await fsp.writeFile(
+      path.join(root, 'r3-cache.json'),
+      JSON.stringify({ updateChannel: 'stable', autoUpdate: false })
+    )
+    assert.equal(loadConfig().updateChannel, 'stable')
+    assert.equal(warnings.length, 0, 'stable with autoUpdate off says nothing')
+
+    await fsp.writeFile(
+      path.join(root, 'r3-cache.json'),
+      JSON.stringify({ updateChannel: 'stable' })
+    )
+    assert.equal(loadConfig().updateChannel, 'stable', '"stable" is still accepted')
+    assert.equal(warnings.length, 1, 'and warned about')
+    assert.match(warnings[0], /stable/)
+    assert.match(warnings[0], /will not update/)
+    assert.match(warnings[0], /"preview"/)
+
+    loadConfig()
+    assert.equal(warnings.length, 1, 'once per process, not once per loadConfig call')
+  } finally {
+    console.warn = originalWarn
+    if (previousDir === undefined) delete process.env.R3_CACHE_DIR
+    else process.env.R3_CACHE_DIR = previousDir
+    await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  }
+  console.log('ok  updateChannel "stable" warns that the daemon will not update')
 }
 
 // ---------------------------------------------------------------------
@@ -2803,6 +3033,8 @@ void main()
   .then(indistinguishabilityTest)
   .then(claimTests)
   .then(claimRouteTest)
+  .then(reopenedClaimLogTest)
+  .then(stableChannelWarningTest)
   .then(approvalTests)
   .then(deviceRouteTests)
   .then(quotaStoreTest)

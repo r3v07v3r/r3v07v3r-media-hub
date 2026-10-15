@@ -244,8 +244,6 @@ export function createApi(transport: ApiTransport) {
           transport.invoke(MEDIA_HUB_CHANNELS.settingsSetAnime4kEnabled, enabled),
         setAnime4kMode: (mode: string): Promise<{ anime4k: Anime4kSettings }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.settingsSetAnime4kMode, mode),
-        setAutoSubtitles: (enabled: boolean): Promise<{ autoSubtitlesEnabled: boolean }> =>
-          transport.invoke(MEDIA_HUB_CHANNELS.settingsSetAutoSubtitles, enabled),
         setAutoplayNext: (enabled: boolean): Promise<{ autoplayNextEnabled: boolean }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.settingsSetAutoplayNext, enabled),
         setWatchRegion: (region: string): Promise<{ watchRegion: string }> =>

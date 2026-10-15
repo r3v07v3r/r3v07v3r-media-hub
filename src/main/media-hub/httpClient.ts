@@ -222,9 +222,11 @@ async function readJsonBody(
   // A body of `null` parses, and request() reads fields off whatever comes
   // back, so passed on it threw a TypeError: on a failed status that came
   // before the status was set, and a 429 lost its retry. Lenient, it is the
-  // `{}` an empty body is. Strict, it is refused: the body is the answer
-  // there, an empty one is spelled `{}`, and taking `null` for an empty
-  // list would remove every title that came from it.
+  // `{}` an empty body is. Strict, it is refused: no service here is known
+  // to answer an empty list with `null` (an empty one is `{}`), and read as
+  // empty, a `null` meant as anything else would remove every title that
+  // came from it. If one is found to, that service's read should take it as
+  // `{}`.
   if (parsed === null) {
     if (strict) throw new Error('The service answered with null.')
     return {}

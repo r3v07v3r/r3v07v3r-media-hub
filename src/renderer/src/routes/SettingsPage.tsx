@@ -705,7 +705,7 @@ function MoreOptionsSection({
       <ToggleRow
         icon="thumbs-down"
         title="Hide disliked by default"
-        description="Anything marked “Not interested” (see a title's context menu) is hidden by default on library pages and in recommendations. It still shows, marked, in My Stuff's Planned and Lists, the Similar row and search answers, and on Home until you leave the page."
+        description="Anything marked “Not interested” (see a title's context menu) is hidden by default from Movies/Series/Anime browsing and Mood Browser. It still shows, marked, in My Stuff's Planned and Lists, a title page's Similar and Rest of the series rows, and the assistant's search answers, and on Home and For You until you leave the page."
         checked={mediaHubSettings?.hideDislikedDefault ?? true}
         onChange={handleToggleHideDisliked}
       />
@@ -891,12 +891,6 @@ export default function SettingsPage({
     const api = window.api?.mediaHub
     if (api)
       await saveSetting('settings.playback-buffer', () => api.settings.setPlaybackBuffer(preset))
-  }
-
-  async function handleSetAutoSubtitles(enabled: boolean) {
-    const api = window.api?.mediaHub
-    if (api)
-      await saveSetting('settings.auto-subtitles', () => api.settings.setAutoSubtitles(enabled))
   }
 
   async function handleExportBackup() {
@@ -1220,17 +1214,13 @@ export default function SettingsPage({
                 checked={mediaHubSettings?.autoplayNextEnabled ?? true}
                 onChange={handleSetAutoplayNext}
               />
-              <ToggleRow
-                icon="eye"
-                title="Show subtitles automatically"
-                description="Fetch and apply a matching subtitle as soon as a title starts playing."
-                checked={mediaHubSettings?.autoSubtitlesEnabled ?? true}
-                onChange={handleSetAutoSubtitles}
-              />
+              {/* No "Show subtitles automatically" switch: nothing fetches an
+                  online subtitle by itself any more (it spent OpenSubtitles'
+                  few downloads a day), so the switch did nothing. */}
               <SegmentedRow
                 icon="planet"
                 title="Subtitle language"
-                description="Language to search for, both automatically and in the Subtitles menu."
+                description="Language to search for in the Subtitles menu. A release's own subtitle track in this language is turned on when a title starts."
                 value={mediaHubSettings?.subtitleLanguage ?? 'en'}
                 options={SUBTITLE_LANGUAGE_OPTIONS}
                 onChange={handleSetSubtitleLanguage}
@@ -1356,7 +1346,7 @@ export default function SettingsPage({
                     <ToggleRow
                       icon="play"
                       title="Use Anime4K while watching"
-                      description="On from install. Anime starts with the shaders on; films and series start with them off. The player's Anime4K button (or the A key) switches them for the title you are watching, and that choice is kept for the rest of that title."
+                      description="Install turns this on. Anime starts with the shaders on; films and series start with them off. The player's Anime4K button (or the A key) switches them for the title you are watching, and that choice is kept for the rest of that title."
                       checked={mediaHubSettings.anime4k.enabled}
                       onChange={handleSetAnime4kEnabled}
                     />
@@ -1487,17 +1477,10 @@ export default function SettingsPage({
                 <h2 id="settings-subtitles" className={styles.sectionTitle}>
                   Subtitles
                 </h2>
-                <ToggleRow
-                  icon="eye"
-                  title="Show subtitles automatically"
-                  description="Fetch and apply a matching subtitle as soon as a title starts playing."
-                  checked={mediaHubSettings?.autoSubtitlesEnabled ?? true}
-                  onChange={handleSetAutoSubtitles}
-                />
                 <SegmentedRow
                   icon="planet"
                   title="Subtitle language"
-                  description="Language to search for, both automatically and in the Subtitles menu."
+                  description="Language to search for in the Subtitles menu. A release's own subtitle track in this language is turned on when a title starts."
                   value={mediaHubSettings?.subtitleLanguage ?? 'en'}
                   options={SUBTITLE_LANGUAGE_OPTIONS}
                   onChange={handleSetSubtitleLanguage}

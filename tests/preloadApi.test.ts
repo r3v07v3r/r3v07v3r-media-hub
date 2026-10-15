@@ -239,6 +239,15 @@ check('the party status reaches the renderer with the host invite as main answer
     })
 })
 
+check('there is no "Show subtitles automatically" switch to set', () => {
+  // Nothing fetches an online subtitle by itself any more, so the switch
+  // did nothing; its method and channel went with it.
+  const { transport } = recordingTransport()
+  const settings = createApi(transport).mediaHub.settings as Record<string, unknown>
+  assert.equal('setAutoSubtitles' in settings, false)
+  assert.equal('settingsSetAutoSubtitles' in MEDIA_HUB_CHANNELS, false)
+})
+
 check('the telemetry feed asks to start, and asks to stop before it stops listening', () => {
   const { transport, calls } = recordingTransport()
   const stop = createApi(transport).system.subscribe(() => {})
