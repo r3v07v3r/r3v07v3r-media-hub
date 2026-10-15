@@ -250,6 +250,51 @@ export function batchHistoryPayload(
   return payload
 }
 
+/** One film in a POST /sync/add-to-list body: a bare ref plus the list it goes to. */
+interface SimklListRef extends SimklMediaRef {
+  to: 'completed'
+  /** When it was watched — Simkl takes this for "completed" only. */
+  watched_at?: string
+}
+
+/** Body for POST /sync/add-to-list. Films only: that is all the review's
+ *  queue ever holds (see tracking.ts's pushPendingToServices). */
+export interface SimklListPayload {
+  movies?: SimklListRef[]
+}
+
+/**
+ * The request that moves films onto the account's Completed list, sent
+ * right after the history add for the same films.
+ *
+ * A history add alone does not get a film there in every case: one the
+ * account has on its Dropped list stays dropped, with the add answered
+ * 200 and not a word in `not_found` — three films seen live, pushed and
+ * "confirmed" on every launch for five weeks, never once watched at Simkl.
+ * add-to-list with "completed" is Simkl's own way of moving a title
+ * between its lists, whatever list it is on now, and it is sent for every
+ * film in the add group rather than only those known to be dropped — the
+ * app cannot tell which those are, and for one already completed it is a
+ * no-op. `watchedAt` is passed through so the move carries the day it was
+ * watched here rather than the day the review was clicked.
+ *
+ * Empty for items with no expressible id, as historyPayload is, and for
+ * the same reason: an empty `ids` would be matched by title.
+ */
+export function completedListPayload(
+  items: readonly SimklPushItem[],
+  watchedAt: (id: string) => string | undefined = () => undefined
+): SimklListPayload {
+  const movies: SimklListRef[] = []
+  for (const item of items) {
+    const id = String(item?.id ?? '')
+    if (item.type !== 'movie' || !hasExpressibleSimklId(id)) continue
+    const at = watchedAt(id)
+    movies.push({ ...mediaRef(item), to: 'completed', ...(at ? { watched_at: at } : {}) })
+  }
+  return movies.length ? { movies } : {}
+}
+
 /**
  * What Simkl answers a /sync/history (or /sync/history/remove) POST with.
  * Only `not_found` is read here, and it is the whole reason this type

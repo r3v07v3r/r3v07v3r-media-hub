@@ -25,7 +25,8 @@ import {
 import {
   isFutureInstant,
   isFutureRelease,
-  isUpcomingEpisode
+  isUpcomingEpisode,
+  titleUnreleased
 } from '../src/renderer/src/lib/mediaHub/releaseDate'
 import type { Episode } from '../src/shared/media-hub/types'
 
@@ -755,6 +756,25 @@ assert.equal(isUpcomingEpisode(ep(1, 1, { released: '2026-09-17' }), LOCAL_NOON)
     LOCAL_NOON
   )
   assert.equal(kept[0].released, '2026-09-16', "today's date is consistent with aired: kept")
+}
+
+// --- a title on a card or the hero: when to say "when" instead of Play ----
+
+{
+  const now = new Date(2026, 9, 13, 12).getTime() // 13 Oct 2026, local noon
+  // The full date decides when there is one.
+  assert.equal(titleUnreleased({ releaseDate: '2027-03-12' }, now), 'Releases 12 Mar 2027')
+  assert.equal(titleUnreleased({ releaseDate: '2026-10-13' }, now), null, 'out today is out')
+  assert.equal(titleUnreleased({ releaseDate: '2024-01-01', releaseYear: 2027 }, now), null,
+    'a real past date outranks a year that says otherwise')
+  // Without one, a year ahead of this one.
+  assert.equal(titleUnreleased({ releaseYear: 2027 }, now), 'Coming 2027')
+  assert.equal(titleUnreleased({ releaseYear: 2026 }, now), null, 'this year reads as out')
+  // Last resort: the source's own word.
+  assert.equal(titleUnreleased({ status: 'unreleased' }, now), 'Coming soon')
+  assert.equal(titleUnreleased({ status: 'Upcoming', releaseYear: 2026 }, now), 'Coming soon')
+  assert.equal(titleUnreleased({ status: 'ended' }, now), null)
+  assert.equal(titleUnreleased({}, now), null)
 }
 
 console.log('upcomingEpisodes: ok')

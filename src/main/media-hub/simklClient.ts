@@ -157,7 +157,16 @@ const WATCHED_HISTORY_CACHE_KEY = 'simkl:watched:v2'
  * which needs the shows too, never takes a films-only read for a whole one.
  */
 const WATCHED_MOVIES_CACHE_KEY = 'simkl:watched-movies:v1'
-/** How long either snapshot is reused. */
+/**
+ * The IMDb ids of the anime the account has completed — read for the films
+ * diff only, and only when it has a film to disprove. Simkl files some
+ * films as anime (the Demon Slayer films, say), and a film this app holds
+ * as a movie under its IMDb id is then never in Simkl's movies list
+ * however many times it is watched; without this read, the diff reported
+ * two such films as unwatched at Simkl on every launch for five weeks.
+ */
+const COMPLETED_ANIME_CACHE_KEY = 'simkl:anime-completed:v1'
+/** How long any of the snapshots is reused. */
 const WATCHED_CACHE_TTL_MS = 20 * 60 * 1000
 
 /** The cache payload: the history, and the account it belongs to. */
@@ -338,6 +347,63 @@ async function simklWatchedMovies(
   }
 }
 
+/** What this module keeps of an anime/completed read: the ids, and whose they are. */
+interface CachedCompletedAnime {
+  account: string
+  imdbIds: string[]
+}
+
+/** The fields read from a `/sync/all-items/anime/completed` response. */
+interface SimklAnimePayload {
+  anime?: Array<{ show?: { ids?: { imdb?: string } } }>
+}
+
+/**
+ * The IMDb ids of every anime the account has completed, for the films
+ * diff to check a film Simkl's movies list lacks against (see
+ * COMPLETED_ANIME_CACHE_KEY). Null when it could not be read and nothing
+ * cached stands in: the diff then goes by the movies list alone, as it
+ * always did, rather than treating "could not ask" as "not there".
+ *
+ * Same account checks as the snapshots above, and the same stale fallback
+ * — a day-old answer to "has this account completed that anime" is still
+ * an answer.
+ */
+export async function simklCompletedAnimeImdbIds(
+  priority: TaskPriority = 'background'
+): Promise<Set<string> | null> {
+  const account = simklAccountMark()
+  if (!account) return new Set()
+  const cached = (allowExpired: boolean): Set<string> | null => {
+    const row = getDatabase().getCache<CachedCompletedAnime>(COMPLETED_ANIME_CACHE_KEY, {
+      allowExpired
+    })
+    return row?.account === account && Array.isArray(row.imdbIds) ? new Set(row.imdbIds) : null
+  }
+  const fresh = cached(false)
+  if (fresh) return fresh
+  try {
+    const payload = await simklRequest<SimklAnimePayload>(
+      '/sync/all-items/anime/completed',
+      {},
+      priority
+    )
+    if (simklAccountMark() !== account) return null
+    const imdbIds = (payload.anime || [])
+      .map((entry) => String(entry.show?.ids?.imdb || ''))
+      .filter(Boolean)
+    getDatabase().putCache(
+      COMPLETED_ANIME_CACHE_KEY,
+      { account, imdbIds } satisfies CachedCompletedAnime,
+      WATCHED_CACHE_TTL_MS
+    )
+    return new Set(imdbIds)
+  } catch (error) {
+    logError('simkl:completed-anime', error)
+    return cached(true)
+  }
+}
+
 /**
  * Forces the next simklWatchedSnapshot() call to refetch instead of reusing
  * its 20-minute cache. Needed after a "keep local" reconcile resolution
@@ -351,8 +417,13 @@ async function simklWatchedMovies(
  */
 export function invalidateSimklWatchedCache(): void {
   const db = getDatabase()
-  // Both snapshots: the films-only one is what the review panel's diff reads.
-  for (const key of [WATCHED_HISTORY_CACHE_KEY, WATCHED_MOVIES_CACHE_KEY]) {
+  // Every snapshot: the films-only one is what the review panel's diff
+  // reads, and the completed anime is what it checks a missing film against.
+  for (const key of [
+    WATCHED_HISTORY_CACHE_KEY,
+    WATCHED_MOVIES_CACHE_KEY,
+    COMPLETED_ANIME_CACHE_KEY
+  ]) {
     const existing = db.getCache<CachedWatchedHistory>(key, { allowExpired: true })
     // Nothing cached means there is nothing to keep readable. Writing an
     // empty payload here — which is what `existing ?? []` used to do —
@@ -391,4 +462,5 @@ export function invalidateSimklWatchedCache(): void {
 export function forgetSimklWatchedCache(): void {
   getDatabase().deleteCache(WATCHED_HISTORY_CACHE_KEY)
   getDatabase().deleteCache(WATCHED_MOVIES_CACHE_KEY)
+  getDatabase().deleteCache(COMPLETED_ANIME_CACHE_KEY)
 }
