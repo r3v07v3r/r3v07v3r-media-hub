@@ -40,7 +40,8 @@ export function MediaCard({
   reason,
   showKind = false,
   showProvenance = false,
-  originLabel
+  originLabel,
+  displayTitle
 }: {
   media: MediaItem
   reason?: string
@@ -54,11 +55,17 @@ export function MediaCard({
    *  say — a collection page is /collections/:id, which openDetail has no
    *  label for and would call Browse. */
   originLabel?: string
+  /** The name to show, when it should differ from the catalogue's. Display
+   *  only: media.title is what playback searches for streams by, so the
+   *  item itself is never renamed. Collections uses this to tell apart
+   *  works Cinemeta gives one bare name (three "Star Trek"s). */
+  displayTitle?: string
 }) {
   const { plannedSources, myList, dislikedIds } = useAppState()
   const { openDetail, startPartyPlayback, openContextMenu, continueWatching, resolvingMedia } =
     useAppState()
   const artwork = resolveArtwork(media)
+  const title = displayTitle || media.title
   const isResolving = resolvingMedia?.id === media.id
 
   // One label for however many services agree, because three chips in a
@@ -126,14 +133,14 @@ export function MediaCard({
           if (e.key === 'Enter') openDetail(media, originLabel)
         }}
         onContextMenu={handleContextMenu}
-        aria-label={`${media.title}, ${media.matchPercentage ?? 0} percent match${
+        aria-label={`${title}, ${media.matchPercentage ?? 0} percent match${
           disliked ? ', not interested' : ''
         }`}
       >
         <ArtworkImage
           src={artwork.backdropUrl ?? artwork.posterUrl}
           alt=""
-          fallbackTitle={media.title}
+          fallbackTitle={title}
           artTint={media.artTint}
           sizes="240px"
           className={styles.cardArtImage}
@@ -189,7 +196,7 @@ export function MediaCard({
               {reason}
             </span>
           )}
-          <span className={styles.cardTitle}>{media.title}</span>
+          <span className={styles.cardTitle}>{title}</span>
           {/* What it is, and where it came from, on one row: the kind for a
               list that holds all three, and — on the Planned tab only — the
               service whose watchlist it arrived from, since a list pulled in

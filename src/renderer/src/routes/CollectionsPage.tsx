@@ -181,7 +181,7 @@ export function CollectionPage() {
             onClick={() => openDetail(nextItem, universe.name)}
           >
             <Icon name="play" size={12} />
-            {done > 0 ? 'Next' : 'Start with'}: {nextItem.title}
+            {done > 0 ? 'Next' : 'Start with'}: {next?.title ?? nextItem.title}
           </button>
         )}
       </div>
@@ -225,6 +225,9 @@ export function CollectionPage() {
               reason={`${index + 1} · ${when}`}
               showKind
               originLabel={universe.name}
+              // The list's name, not the index's: the list tells apart works the
+              // catalogue names alike (both Star Trek series are "Star Trek").
+              displayTitle={entry.title}
             />
           )
         })}
