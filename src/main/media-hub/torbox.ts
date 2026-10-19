@@ -441,13 +441,20 @@ function releaseGroupMemoKey(type: string, id: string): string {
   return `groupmemo:v1:${type}:${showKey(type, id)}`
 }
 
-/** Remembers the release that actually played, under both the episode and
- *  the show. */
+/** Remembers the release that actually played, for this episode. */
 function rememberPlayedStream(type: string, resolveId: string, stream: StreamCandidate): void {
-  const db = getDatabase()
-  db.putCache(lastStreamKey(type, resolveId), stream, LAST_STREAM_TTL_MS)
+  getDatabase().putCache(lastStreamKey(type, resolveId), stream, LAST_STREAM_TTL_MS)
+}
+
+/** Remembers the release's group for the show, so the next episode prefers
+ *  it. Only for a copy play:stream settled on WITH the wanted audio: a copy
+ *  merely opened along the way, or one that lacks the audio, must not
+ *  steer the next episode toward its group. */
+function rememberReleaseGroup(type: string, resolveId: string, stream: StreamCandidate): void {
   const group = releaseGroup(streamReleaseText(stream))
-  if (group) db.putCache(releaseGroupMemoKey(type, resolveId), group, LAST_STREAM_TTL_MS)
+  if (group) {
+    getDatabase().putCache(releaseGroupMemoKey(type, resolveId), group, LAST_STREAM_TTL_MS)
+  }
 }
 
 /** The release as the Info panel shows it — see PlaybackRelease. */
@@ -1062,6 +1069,9 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
     }
   }
 
+  if (current.fit.audio && payload.type && payload.resolveId) {
+    rememberReleaseGroup(payload.type, payload.resolveId, current.stream)
+  }
   if (!payload.provisional) await settleLanguageShortfall(current.result.tracks, current.fit)
   return { ...current.result, languageFit: current.fit }
 }
