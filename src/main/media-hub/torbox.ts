@@ -423,14 +423,10 @@ function languageFindingsKey(type: string, id: string): string {
   return `langfit:v2:${type}:${id}:${normalizeLanguage(audio)}:${normalizeLanguage(subtitles)}`
 }
 
-/** Whether every copy of this episode opened so far lacked the wanted
- *  audio. Such an episode skips the shortcut tiers in stream:resolve, which
- *  would only hand the same wrong copy back. */
-function episodeLacksLanguage(type: string, id: string): boolean {
-  const findings = Object.values(
-    getDatabase().getCache<LanguageFindings>(languageFindingsKey(type, id)) ?? {}
-  )
-  return findings.length > 0 && findings.every((fit) => !fit.audio)
+/** What each copy of this episode was found to hold, for the current
+ *  languages. */
+function languageFindings(type: string, id: string): LanguageFindings {
+  return getDatabase().getCache<LanguageFindings>(languageFindingsKey(type, id)) ?? {}
 }
 
 /** Which release group last played an episode of this show — read back by
@@ -543,9 +539,13 @@ export function registerTorBoxIpc(): void {
       // see SAME_RELEASE_GROUP_BONUS in core.ts.
       const preferredGroup = getDatabase().getCache<string>(releaseGroupMemoKey(type, id)) ?? null
       // Every shortcut below hands back ONE copy, chosen before anyone knew
-      // what was in it. When that copy, or every copy opened so far, lacked
-      // the wanted audio, only a real search has others to try.
-      const fresh = payload.fresh === true || episodeLacksLanguage(type, id)
+      // what was in it. When THAT copy is known to lack the wanted audio, it
+      // must not end the search: only a real search has others to try.
+      // Judged per copy, not per episode — an English copy opened once says
+      // nothing about the Japanese one a shortcut hands back now.
+      const findings = languageFindings(type, id)
+      const knownToLack = (stream: StreamCandidate | null | undefined): boolean =>
+        Boolean(stream && findings[sourceKey(stream)]?.audio === false)
 
       // The group memo is not part of the key, on purpose: it changes
       // whenever another episode of the show plays from a different group,
@@ -609,6 +609,7 @@ export function registerTorBoxIpc(): void {
       // A fresh search still keeps what the shortcuts found. With no source
       // to search, or a search that finds nothing or fails, that copy is
       // still the answer — an episode on this disk must replay offline.
+      const fresh = payload.fresh === true || knownToLack(answer?.result.best)
       if (answer && (!fresh || (!auth && !mediaServer))) {
         if (answer.remember) db.putCache(key, answer.result, 60 * 60 * 1000)
         return answer.result
@@ -670,6 +671,7 @@ export function registerTorBoxIpc(): void {
               // A fresh search is for finding OTHER copies; the server's one
               // competes with them below instead of ending the search.
               (!fresh &&
+                !knownToLack(acceptable[0]) &&
                 mediaServerCopyEndsSearch(
                   sourcePreference,
                   streamResolution(acceptable[0]),
@@ -694,6 +696,7 @@ export function registerTorBoxIpc(): void {
         const remembered = db.getCache<StreamCandidate>(lastStreamKey(type, id))
         const rememberedUsable =
           !fresh &&
+          !knownToLack(remembered) &&
           remembered &&
           rankSafeStreams([remembered], audioLanguage, limits, sourcePreference).length > 0 &&
           // A remembered stream from a source that is no longer configured
@@ -1012,8 +1015,18 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
   const target = current.fit.audio ? current.stream : (pickFallback(tried) ?? current.stream)
   if (target !== open) {
     reportPreparation('link', 'Going back to the closest copy')
-    const result = await playCandidate({ ...payload, stream: target })
-    current = { stream: target, result, fit: languageFit(result.tracks, audio, subtitles) }
+    try {
+      const result = await playCandidate({ ...payload, stream: target })
+      current = { stream: target, result, fit: languageFit(result.tracks, audio, subtitles) }
+    } catch (error) {
+      // The target may be one remembered from an earlier play and not
+      // opened this time — its source can have gone since. The copy that
+      // did open is still good. A failed open may have torn down whatever
+      // was playing, so open it again rather than trust it is still there.
+      logError('torbox:play:fallback', error)
+      const result = await playCandidate({ ...payload, stream: current.stream })
+      current = { ...current, result }
+    }
   }
 
   if (!payload.provisional) await settleLanguageShortfall(current.result.tracks, current.fit)
