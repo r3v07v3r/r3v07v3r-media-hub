@@ -38,7 +38,7 @@ import type {
   SubtitlesApplyResult
 } from '../../shared/media-hub/types'
 import { handle } from './ipcGuard'
-import { languageName, type LanguageFit } from '../../shared/media-hub/language'
+import { languageFit, languageName, type LanguageFit } from '../../shared/media-hub/language'
 import { sendToRenderer } from './rendererBridge'
 import { getPlaybackBufferSeconds } from '../../shared/media-hub/playbackBuffer'
 import { normalizeVideoScaling } from '../../shared/media-hub/videoScaling'
@@ -52,6 +52,7 @@ import {
   addSubtitleFileToPlayer,
   applyStoredNightMode,
   applyStoredSubtitleStyle,
+  ensureSubtitleLanguage,
   getSessionSnapshot,
   pushSessionSnapshot,
   nightModeEnabled,
@@ -242,6 +243,25 @@ export function notifyLanguageShortfall(tracks: MediaTracks, fit: LanguageFit): 
       ? `No copy with ${languageName(audio)} audio — playing ${playing} with ${languageName(subtitles)} subtitles.`
       : `No ${languageName(audio)} audio in this release — playing ${playing}.`
   })
+}
+
+/**
+ * What follows settling on a copy without the wanted audio: its subtitles
+ * in the wanted language switched on if it has them, one toast saying what
+ * is playing, and subtitles fetched from a provider if it has none. Run by
+ * play:stream, or — for a provisional copy the renderer may still replace —
+ * by playback:language-settle once the renderer knows it will not.
+ */
+export async function settleLanguageShortfall(
+  tracks: MediaTracks,
+  fit: LanguageFit
+): Promise<void> {
+  if (fit.audio) return
+  if (fit.subtitles) await ensureSubtitleLanguage(tracks, playbackLanguages().subtitles)
+  notifyLanguageShortfall(tracks, fit)
+  // Neither the audio nor subtitles anyone here can read: fetch some.
+  // Not awaited — playback has started, and the search can take seconds.
+  if (!fit.subtitles) void fetchSubtitlesForShortfall()
 }
 
 /**
@@ -580,6 +600,17 @@ export function registerPlaybackIpc(): void {
       return { ok: true, ordinal }
     }
   )
+
+  handle<undefined, { ok: true }>(MEDIA_HUB_CHANNELS.playbackLanguageSettle, async () => {
+    if (activeCacheUrl) {
+      const { audio, subtitles } = playbackLanguages()
+      await settleLanguageShortfall(
+        activeMediaTracks,
+        languageFit(activeMediaTracks, audio, subtitles)
+      )
+    }
+    return { ok: true }
+  })
 
   handle<{ watched?: boolean } | undefined, { ok: true }>(
     MEDIA_HUB_CHANNELS.playbackStop,

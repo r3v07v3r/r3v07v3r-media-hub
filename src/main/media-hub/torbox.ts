@@ -67,13 +67,7 @@ import {
   lanCacheFingerprint,
   lanCacheStreamUrl
 } from './lanCache'
-import {
-  fetchSubtitlesForShortfall,
-  notifyLanguageShortfall,
-  playbackLanguages,
-  preparePlayback
-} from './playbackSession'
-import { ensureSubtitleLanguage } from './playerBridge'
+import { playbackLanguages, preparePlayback, settleLanguageShortfall } from './playbackSession'
 import {
   languageTryOrder,
   pickFallback,
@@ -373,6 +367,11 @@ interface PlayStreamPayload {
    *  playWithLanguageFallback. Optional: a manual pick or an older caller
    *  sends none, and plays exactly what it asked for. */
   alternates?: StreamCandidate[]
+  /** The renderer will search again if this copy lacks the wanted audio,
+   *  and calls playback:language-settle itself if it does not. So the
+   *  subtitle switch, toast and provider download wait — a download for a
+   *  copy about to be replaced spends a limited daily quota on nothing. */
+  provisional?: boolean
 }
 
 /** How long play:stream's "last stream that actually worked for this
@@ -1017,13 +1016,7 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
     current = { stream: target, result, fit: languageFit(result.tracks, audio, subtitles) }
   }
 
-  if (!current.fit.audio) {
-    if (current.fit.subtitles) await ensureSubtitleLanguage(current.result.tracks, subtitles)
-    notifyLanguageShortfall(current.result.tracks, current.fit)
-    // Neither the audio nor subtitles anyone here can read: fetch some.
-    // Not awaited — playback has started, and the search can take seconds.
-    if (!current.fit.subtitles) void fetchSubtitlesForShortfall()
-  }
+  if (!payload.provisional) await settleLanguageShortfall(current.result.tracks, current.fit)
   return { ...current.result, languageFit: current.fit }
 }
 

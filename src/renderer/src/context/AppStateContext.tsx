@@ -2005,7 +2005,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         // Japanese-only release does not just play in Japanese.
         const playResolved = (
           from: StreamResolveResult,
-          best: StreamCandidate
+          best: StreamCandidate,
+          provisional = false
         ): { task: Promise<PlaybackResult>; deadline: number } => {
           const alternates = from.streams
             .filter((stream) => stream !== best)
@@ -2024,7 +2025,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
               episodeNumber: media.episodeNumber,
               episodeTitle: media.episodeTitle
             },
-            alternates
+            alternates,
+            { provisional }
           )
           // If cancellation/timeout wins the race, a late successful IPC result
           // must not leave its newly-created backend playback session running.
@@ -2039,7 +2041,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // Each extra copy is another link, cache fill and open.
           return { task, deadline: 90_000 + alternates.length * 45_000 }
         }
-        const first = playResolved(resolved, resolved.best)
+        // A lone shortcut copy may be replaced below; main holds its
+        // subtitle download until that is settled.
+        const shortcutOnly = resolved.streams.length < 2
+        const first = playResolved(resolved, resolved.best, shortcutOnly)
         // This one IPC call (play:stream) covers the whole real critical
         // path for starting a title, not just the player opening: TorBox's
         // own requestdl round trip, torbox.ts's retry-once wrapper around
@@ -2068,7 +2073,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         // copy, with nothing to fall back to. When it lacks the wanted
         // audio, search properly once and let main try the others; copies it
         // already knows lack the audio are not opened again.
-        if (played.languageFit?.audio === false && resolved.streams.length < 2) {
+        if (played.languageFit?.audio === false && shortcutOnly) {
           const wider = await runPlaybackPreparationStage(
             api.stream.resolve(
               kind,
@@ -2098,6 +2103,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
               controller.signal
             )
             if (!isCurrent()) return { started: false, target: media }
+          } else {
+            // Nothing else to try: the provisional copy stays.
+            void api.playback.settleLanguage().catch(() => {})
           }
         }
         setResolvingMedia({ id: media.id, title: media.title, stage: 'starting' })

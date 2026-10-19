@@ -1080,8 +1080,12 @@ export async function ensureSubtitleLanguage(
     languageMatches(String(track.language ?? ''), language)
   )
   if (ordinal < 0) return false
+  // Left alone only when what is showing is already in that language. With
+  // no subtitle language set, mpv may have turned on a default or forced
+  // track in another one, and that is not what the toast will promise.
   const sid = await player.get('sid').catch(() => undefined)
-  if (sid !== undefined && sid !== false && sid !== 'no') return false
+  const showing = tracks.subtitle[ordinalForMpvTrackId(sid)]
+  if (showing && languageMatches(String(showing.language ?? ''), language)) return false
   await player.set('sid', mpvTrackIdForOrdinal(ordinal)).catch(() => {})
   return true
 }

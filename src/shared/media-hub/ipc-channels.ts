@@ -219,6 +219,7 @@ export const MEDIA_HUB_CHANNELS = {
   streamResolve: 'mediahub:stream:resolve',
   playStream: 'mediahub:play:stream',
   playbackStop: 'mediahub:playback:stop',
+  playbackLanguageSettle: 'mediahub:playback:language-settle',
   playbackPrepareProgress: 'mediahub:playback:prepare-progress', // push event
   playbackThumbnail: 'mediahub:playback:thumbnail',
   playbackSkipTimes: 'mediahub:playback:skip-times',

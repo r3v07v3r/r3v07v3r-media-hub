@@ -778,11 +778,15 @@ export function createApi(transport: ApiTransport) {
           meta?: CacheSessionMeta,
           /** The copies ranked after `stream`, tried in turn when it lacks
            *  the wanted audio — see torbox.ts's playWithLanguageFallback. */
-          alternates?: StreamCandidate[]
+          alternates?: StreamCandidate[],
+          /** A copy the renderer may still replace — see torbox.ts's
+           *  PlayStreamPayload.provisional. */
+          options?: { provisional?: boolean }
         ): Promise<PlaybackResult> =>
           transport.invoke(MEDIA_HUB_CHANNELS.playStream, {
             stream,
             alternates,
+            provisional: options?.provisional,
             mediaId,
             type,
             resolveId,
@@ -820,6 +824,10 @@ export function createApi(transport: ApiTransport) {
         // touches the stream itself anymore.
         stop: (options?: { watched?: boolean }): Promise<{ ok: true }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.playbackStop, options),
+        /** For a provisional copy that stays: switch on its subtitles, say
+         *  what is playing, fetch subtitles if it has none. */
+        settleLanguage: (): Promise<{ ok: true }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.playbackLanguageSettle),
         thumbnail: (seconds: number): Promise<string | null> =>
           transport.invoke(MEDIA_HUB_CHANNELS.playbackThumbnail, seconds),
         skipTimes: (
