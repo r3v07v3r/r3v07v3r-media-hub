@@ -217,15 +217,18 @@ export async function preparePlayback(
 }
 
 /**
- * The person's audio and subtitle languages, as playback reads them. The
- * subtitle language falls back to the audio one: someone who wants English
- * audio and never set a subtitle language still wants English subtitles
- * when the audio is not English.
+ * The person's audio and subtitle languages, as playback reads them. Each
+ * defaults to English on its own, the same default Settings shows and the
+ * subtitle search uses — an unset subtitle language does not follow the
+ * audio one, so someone who chose Japanese audio still gets English
+ * subtitles.
  */
 export function playbackLanguages(): { audio: string; subtitles: string } {
   const settings = readSettings()
-  const audio = settings.audioLanguage || 'en'
-  return { audio, subtitles: settings.subtitleLanguage || audio }
+  return {
+    audio: settings.audioLanguage || 'en',
+    subtitles: settings.subtitleLanguage || 'en'
+  }
 }
 
 /**
