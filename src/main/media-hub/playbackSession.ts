@@ -54,6 +54,8 @@ import {
   applyStoredSubtitleStyle,
   ensureSubtitleLanguage,
   getSessionSnapshot,
+  noteSubtitleChoice,
+  subtitleChoiceCount,
   pushSessionSnapshot,
   nightModeEnabled,
   startPlayerSession,
@@ -539,6 +541,9 @@ export async function fetchSubtitlesForShortfall(): Promise<void> {
   // has no remote link at all, and is as likely to need subtitles as any.
   const playing = activeCacheUrl
   if (!media || !playing) return
+  // Any subtitle chosen after this point — by hand, from the menu — wins;
+  // this fetch then lands nothing.
+  const since = subtitleChoiceCount()
   const { subtitles } = playbackLanguages()
   try {
     const results = await searchSubtitles(
@@ -547,8 +552,8 @@ export async function fetchSubtitlesForShortfall(): Promise<void> {
     )
     const pick = results.find((result) => result.hashMatch) ?? results[0]
     // The title may have changed while the search ran.
-    if (!pick || activeCacheUrl !== playing) return
-    await applySubtitleSelection(pick)
+    if (!pick || activeCacheUrl !== playing || subtitleChoiceCount() !== since) return
+    await applySubtitleSelection(pick, since)
     sendToRenderer(MEDIA_HUB_CHANNELS.playerUiEvent, {
       type: 'notify',
       tone: 'info',
@@ -562,8 +567,18 @@ export async function fetchSubtitlesForShortfall(): Promise<void> {
 }
 
 /** Downloads one provider row, writes it as an .srt and loads it into the
- *  player, selected. Returns the subtitle ordinal it landed on. */
-async function applySubtitleSelection(payload: SubtitlesApplyPayload | undefined): Promise<number> {
+ *  player, selected. Returns the subtitle ordinal it landed on. `since`,
+ *  for an automatic fetch, is the choice count it started from: any choice
+ *  made after it cancels this one. A newer apply always cancels an older
+ *  one still downloading, so the last thing chosen is what shows. */
+async function applySubtitleSelection(
+  payload: SubtitlesApplyPayload | undefined,
+  since?: number
+): Promise<number> {
+  if (since !== undefined && subtitleChoiceCount() !== since) {
+    throw new Error('A subtitle was chosen meanwhile.')
+  }
+  const mine = noteSubtitleChoice()
   // activeCacheUrl is set for every session, a local one included. The
   // remote link this used to check is empty for a copy played from this
   // disk, which refused subtitles for every one.
@@ -575,6 +590,7 @@ async function applySubtitleSelection(payload: SubtitlesApplyPayload | undefined
   if (activeCacheUrl !== playing) {
     throw new Error('The title changed before the subtitles arrived.')
   }
+  if (subtitleChoiceCount() !== mine) throw new Error('A subtitle was chosen meanwhile.')
   clearActiveSubtitle()
   const dir = subtitleCacheDir()
   fs.mkdirSync(dir, { recursive: true })

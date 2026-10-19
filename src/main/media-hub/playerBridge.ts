@@ -1065,6 +1065,22 @@ export async function addSubtitleFileToPlayer(filePath: string): Promise<number>
 }
 
 /**
+ * Counts subtitle choices — every apply of a downloaded file, and every
+ * track picked from the menu — so a slow automatic fetch can tell that
+ * someone chose something after it started, and keep out of the way. See
+ * playbackSession.ts's fetchSubtitlesForShortfall.
+ */
+let subtitleChoices = 0
+
+export function noteSubtitleChoice(): number {
+  return ++subtitleChoices
+}
+
+export function subtitleChoiceCount(): number {
+  return subtitleChoices
+}
+
+/**
  * Turns on the first subtitle track in `language`, if the file has one and
  * none is showing. For a copy played in the wrong audio language: mpv's own
  * `slang` choice only applies when a subtitle language is set, and someone
@@ -1203,6 +1219,7 @@ async function runCommand(command: PlayerCommand): Promise<PlayerCommandOutcome>
       await player.set('aid', mpvTrackIdForOrdinal(Number(command.ordinal)))
       return
     case 'set-subtitle-track':
+      noteSubtitleChoice()
       await player.set('sid', mpvTrackIdForOrdinal(Number(command.ordinal)))
       return
     case 'set-volume': {
