@@ -2087,7 +2087,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             controller.signal
           ).catch(() => null)
           if (!isCurrent()) return { started: false, target: media }
-          if (wider?.best && wider.streams.length > 1) {
+          // Even a single result: it may be the one copy with the audio.
+          // Main does not reopen a copy it already knows lacks it.
+          if (wider?.best) {
             const retry = playResolved(wider, wider.best)
             await runPlaybackPreparationStage(
               retry.task,

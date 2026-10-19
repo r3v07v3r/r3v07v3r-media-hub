@@ -971,6 +971,13 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
   // `current`.
   let open: StreamCandidate | null = null
   for (const [index, stream] of order.entries()) {
+    // A copy already known to lack the audio is only the last resort: once
+    // something has opened, it is weighed from what is known, not reopened.
+    const knownFit = known[sourceKey(stream)]
+    if (current && knownFit?.audio === false) {
+      tried.push({ stream, fit: knownFit })
+      continue
+    }
     if (index > 0) {
       reportPreparation(
         'link',

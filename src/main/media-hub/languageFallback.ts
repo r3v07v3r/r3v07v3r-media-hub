@@ -45,9 +45,10 @@ export function sourceKey(stream: StreamCandidate): string {
  * The copies to open, in order: the ranked pick, then the alternates the
  * ranking put after it, skipping any already known to lack the wanted
  * audio — there is nothing to learn from opening those again. Capped at the
- * pick plus LANGUAGE_RETRY_LIMIT. A pick that is itself known to lack the
- * audio is moved behind the unknown ones rather than dropped, so an episode
- * whose every copy has been seen still has something to open.
+ * pick plus LANGUAGE_RETRY_LIMIT. The closest of the copies known to lack
+ * the audio goes last, so that when every unknown copy fails to open there
+ * is still one known to play; play:stream only opens it when nothing before
+ * it did.
  */
 export function languageTryOrder(
   first: StreamCandidate,
@@ -67,11 +68,16 @@ export function languageTryOrder(
     ...unique.filter((stream) => known[sourceKey(stream)]?.audio === true),
     ...unique.filter((stream) => known[sourceKey(stream)] === undefined)
   ]
-  if (untried.length) return untried.slice(0, 1 + LANGUAGE_RETRY_LIMIT)
-  // Every copy has been seen and none has the audio: open the one that came
-  // closest, once, rather than cycling through them all again.
-  const fallback = pickFallback(unique.map((stream) => ({ stream, fit: known[sourceKey(stream)] })))
-  return fallback ? [fallback] : [first]
+  // Of the copies known to lack it, the one that came closest — opened
+  // once, rather than cycling through them all again.
+  const fallback = pickFallback(
+    unique
+      .filter((stream) => known[sourceKey(stream)]?.audio === false)
+      .map((stream) => ({ stream, fit: known[sourceKey(stream)] }))
+  )
+  const order = untried.slice(0, 1 + LANGUAGE_RETRY_LIMIT)
+  if (fallback) order.push(fallback)
+  return order.length ? order : [first]
 }
 
 /**

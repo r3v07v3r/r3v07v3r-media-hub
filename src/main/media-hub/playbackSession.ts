@@ -548,7 +548,13 @@ async function applySubtitleSelection(payload: SubtitlesApplyPayload | undefined
   // remote link this used to check is empty for a copy played from this
   // disk, which refused subtitles for every one.
   if (!activeCacheUrl) throw new Error('No active media is available for subtitles.')
+  const playing = activeCacheUrl
   const srtText = await downloadSubtitleText(parseSubtitleSelection(payload))
+  // The download takes a while; another title may have started meanwhile,
+  // and this file must not land in it.
+  if (activeCacheUrl !== playing) {
+    throw new Error('The title changed before the subtitles arrived.')
+  }
   clearActiveSubtitle()
   const dir = subtitleCacheDir()
   fs.mkdirSync(dir, { recursive: true })

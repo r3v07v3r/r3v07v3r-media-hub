@@ -58,11 +58,17 @@ console.log('\nlanguageTryOrder')
 check('nothing known: the pick, then the ranked alternates', () =>
   assert.deepEqual(languageTryOrder(a, [b, c], {}), [a, b, c])
 )
-check('capped at the pick plus the retry limit', () =>
+check('capped at the pick plus the retry limit (no known copies)', () =>
   assert.equal(languageTryOrder(a, [b, c, d, e, f], {}).length, 1 + LANGUAGE_RETRY_LIMIT)
 )
-check('copies known to lack the audio are not opened again', () =>
-  assert.deepEqual(languageTryOrder(a, [b, c], { [sourceKey(a)]: jaNoSubs }), [b, c])
+check('a copy known to lack the audio goes behind the unknown ones', () =>
+  assert.deepEqual(languageTryOrder(a, [b, c], { [sourceKey(a)]: jaNoSubs }), [b, c, a])
+)
+check('only the closest known copy is kept as the last resort', () =>
+  assert.deepEqual(
+    languageTryOrder(a, [b, c], { [sourceKey(a)]: jaNoSubs, [sourceKey(b)]: jaEnSubs }),
+    [c, b]
+  )
 )
 check('a copy known to have the audio goes first', () =>
   assert.deepEqual(languageTryOrder(a, [b, c], { [sourceKey(c)]: english }), [c, a, b])
