@@ -109,10 +109,9 @@ const streamCache = createStreamCache()
 let thumbnailRequest = 0
 let thumbnailInFlight: Promise<void> = Promise.resolve()
 
-let activeMediaUrl = ''
 // StreamCache's local server URL for the current title — what mpv actually
-// opens. Distinct from activeMediaUrl (the real, remote debrid link), which
-// only streamCache.start() ever touches directly. Thumbnail capture reads from
+// opens. Distinct from the real, remote debrid link, which only
+// streamCache.start() ever touches directly. Thumbnail capture reads from
 // this one too, so it never costs a second connection to the remote link.
 let activeCacheUrl = ''
 let activeMediaTracks: MediaTracks = { video: [], audio: [], subtitle: [], probed: false }
@@ -307,7 +306,6 @@ async function openPlayback(
   cacheMeta?: CacheSessionMeta,
   localToken?: string
 ): Promise<PlaybackResult> {
-  activeMediaUrl = url
   // StreamCache is the sole owner of the upstream connection to `url`. It is
   // started before the player opens anything, and mpv then reads only from its
   // local server — never the remote link. That constraint has not changed with
@@ -463,7 +461,6 @@ export async function stopPlayback(deleteCache = false): Promise<void> {
   // app quitting. A missed release would leave background work suspended
   // for the rest of the session with nothing playing to explain it.
   setPressure('playback', 'idle')
-  activeMediaUrl = ''
   activeCacheUrl = ''
   activeMediaTracks = { video: [], audio: [], subtitle: [], probed: false }
   clearActiveSubtitle()
@@ -518,7 +515,9 @@ function parseSubtitleSelection(payload: SubtitlesApplyPayload | undefined): Sub
 export async function fetchSubtitlesForShortfall(): Promise<void> {
   if (readSettings().autoSubtitlesEnabled === false) return
   const media = getSessionSnapshot()?.media
-  const playing = activeMediaUrl
+  // The cache URL, which every session has — a copy played from this disk
+  // has no remote link at all, and is as likely to need subtitles as any.
+  const playing = activeCacheUrl
   if (!media || !playing) return
   const { subtitles } = playbackLanguages()
   try {
@@ -528,7 +527,7 @@ export async function fetchSubtitlesForShortfall(): Promise<void> {
     )
     const pick = results.find((result) => result.hashMatch) ?? results[0]
     // The title may have changed while the search ran.
-    if (!pick || activeMediaUrl !== playing) return
+    if (!pick || activeCacheUrl !== playing) return
     await applySubtitleSelection(pick)
     sendToRenderer(MEDIA_HUB_CHANNELS.playerUiEvent, {
       type: 'notify',
@@ -545,7 +544,10 @@ export async function fetchSubtitlesForShortfall(): Promise<void> {
 /** Downloads one provider row, writes it as an .srt and loads it into the
  *  player, selected. Returns the subtitle ordinal it landed on. */
 async function applySubtitleSelection(payload: SubtitlesApplyPayload | undefined): Promise<number> {
-  if (!activeMediaUrl) throw new Error('No active media is available for subtitles.')
+  // activeCacheUrl is set for every session, a local one included. The
+  // remote link this used to check is empty for a copy played from this
+  // disk, which refused subtitles for every one.
+  if (!activeCacheUrl) throw new Error('No active media is available for subtitles.')
   const srtText = await downloadSubtitleText(parseSubtitleSelection(payload))
   clearActiveSubtitle()
   const dir = subtitleCacheDir()
