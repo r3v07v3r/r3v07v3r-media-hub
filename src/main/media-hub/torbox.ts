@@ -67,7 +67,12 @@ import {
   lanCacheFingerprint,
   lanCacheStreamUrl
 } from './lanCache'
-import { playbackLanguages, preparePlayback, settleLanguageShortfall } from './playbackSession'
+import {
+  activeStreamUrl,
+  playbackLanguages,
+  preparePlayback,
+  settleLanguageShortfall
+} from './playbackSession'
 import {
   languageTryOrder,
   pickFallback,
@@ -956,6 +961,18 @@ export function registerTorBoxIpc(): void {
  * long as there is another to try; the error only surfaces when nothing
  * opened at all.
  */
+/** The copy play:stream last opened, and what opening it returned — see
+ *  playWithLanguageFallback's retry check. */
+let lastOpened: { key: string; result: PlaybackResult } | null = null
+
+/** playCandidate, noting what it opened. */
+async function openCandidate(payload: PlayStreamPayload): Promise<PlaybackResult> {
+  lastOpened = null
+  const result = await playCandidate(payload)
+  lastOpened = { key: sourceKey(payload.stream), result }
+  return result
+}
+
 async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<PlaybackResult> {
   const { audio, subtitles } = playbackLanguages()
   const alternates = Array.isArray(payload.alternates) ? payload.alternates : []
@@ -964,6 +981,22 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
   const db = getDatabase()
   const known: LanguageFindings = (memoKey && db.getCache<LanguageFindings>(memoKey)) || {}
   const order = languageTryOrder(payload.stream, alternates, known)
+
+  // A retry whose search found nothing new: the only copy left is the one
+  // already in the player, known to lack the audio. Settle on it rather
+  // than reopen it — a reopen re-buffers, and can fail a play that was
+  // working.
+  const only = order.length === 1 ? sourceKey(order[0]) : ''
+  const inPlayer = lastOpened
+  if (
+    only &&
+    inPlayer?.key === only &&
+    known[only]?.audio === false &&
+    activeStreamUrl() === inPlayer.result.url
+  ) {
+    await settleLanguageShortfall(inPlayer.result.tracks, known[only])
+    return { ...inPlayer.result, languageFit: known[only] }
+  }
 
   const tried: { stream: StreamCandidate; fit: LanguageFit }[] = []
   let current: { stream: StreamCandidate; result: PlaybackResult; fit: LanguageFit } | null = null
@@ -990,7 +1023,7 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
     }
     let result: PlaybackResult
     try {
-      result = await playCandidate({ ...payload, stream })
+      result = await openCandidate({ ...payload, stream })
     } catch (error) {
       if (order.length === 1) throw error
       open = null
@@ -1016,7 +1049,7 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
   if (target !== open) {
     reportPreparation('link', 'Going back to the closest copy')
     try {
-      const result = await playCandidate({ ...payload, stream: target })
+      const result = await openCandidate({ ...payload, stream: target })
       current = { stream: target, result, fit: languageFit(result.tracks, audio, subtitles) }
     } catch (error) {
       // The target may be one remembered from an earlier play and not
@@ -1024,7 +1057,7 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
       // did open is still good. A failed open may have torn down whatever
       // was playing, so open it again rather than trust it is still there.
       logError('torbox:play:fallback', error)
-      const result = await playCandidate({ ...payload, stream: current.stream })
+      const result = await openCandidate({ ...payload, stream: current.stream })
       current = { ...current, result }
     }
   }
