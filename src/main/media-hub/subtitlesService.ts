@@ -354,13 +354,15 @@ export async function searchSubtitles(
   rawItem: OpenSubtitlesSearchItem,
   playback: OpenSubtitlesSearchPlayback & { language: string }
 ): Promise<SubtitleResult[]> {
-  const item = await searchableItem(rawItem)
-
   const subdlOn = subdlConnected()
   const osOn = osConnected()
   if (!subdlOn && !osOn) {
     throw new Error('Connect SubDL or OpenSubtitles in Settings to search for subtitles.')
   }
+
+  // After the connection check: the id lookup can be two network round
+  // trips, and nobody should wait on them to learn nothing is connected.
+  const item = await searchableItem(rawItem)
 
   // Fired off now, awaited only inside the OpenSubtitles branch below —
   // not before either provider starts. SubDL's search must not wait on
