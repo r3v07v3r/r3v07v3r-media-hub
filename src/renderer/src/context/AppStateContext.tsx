@@ -534,6 +534,10 @@ const PARTY_PREPARING_TIMEOUT_MS = 3 * 60 * 1000
  *  since main drops the ones it already knows about before it caps. */
 const LANGUAGE_EXTRA_OPENS = 5
 
+/** How long the second, fresh search for other copies may take — see its
+ *  call in runPlayback. */
+const FRESH_RESOLVE_DEADLINE_MS = 75_000
+
 /** Structural equality for the small, flat IPC payloads this file holds in
  *  state (party status, party queue). Deliberately not a deep-equality
  *  library: these are plain JSON round-tripped across the process
@@ -2089,7 +2093,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
               { fresh: true }
             ),
             'buffering',
-            30_000,
+            // The whole search, not one request: the add-ons (each up to
+            // httpClient's 30s timeout, waited on together), then TorBox's
+            // checkcached (another 30s at worst), with margin. The copy is
+            // already playing meanwhile, so waiting costs nothing on screen.
+            FRESH_RESOLVE_DEADLINE_MS,
             controller.signal
           ).catch(() => null)
           if (!isCurrent()) return { started: false, target: media }
