@@ -2044,7 +2044,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         }
         // A lone shortcut copy may be replaced below; main holds its
         // subtitle download until that is settled.
-        const shortcutOnly = resolved.streams.length < 2
+        const shortcutOnly = resolved.shortcut === true && resolved.streams.length < 2
         const first = playResolved(resolved, resolved.best, shortcutOnly)
         // This one IPC call (play:stream) covers the whole real critical
         // path for starting a title, not just the player opening: TorBox's

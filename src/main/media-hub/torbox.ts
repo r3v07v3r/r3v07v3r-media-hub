@@ -69,7 +69,9 @@ import {
 } from './lanCache'
 import {
   activeStreamUrl,
+  holdLanguageSettle,
   playbackLanguages,
+  takeHeldLanguageSettle,
   preparePlayback,
   settleLanguageShortfall
 } from './playbackSession'
@@ -624,7 +626,7 @@ export function registerTorBoxIpc(): void {
       const fresh = payload.fresh === true || knownToLack(answer?.result.best)
       if (answer && (!fresh || (!auth && !mediaServer))) {
         if (answer.remember) db.putCache(key, answer.result, 60 * 60 * 1000)
-        return answer.result
+        return { ...answer.result, shortcut: true }
       }
       const shortcut = answer?.result.streams ?? []
 
@@ -692,7 +694,7 @@ export function registerTorBoxIpc(): void {
             ) {
               const result: StreamResolveResult = { streams: acceptable, best: acceptable[0] }
               db.putCache(key, result, 60 * 60 * 1000)
-              return result
+              return { ...result, shortcut: true }
             }
             deferredLocal = acceptable
           }
@@ -766,7 +768,7 @@ export function registerTorBoxIpc(): void {
                   : [remembered]
               const result: StreamResolveResult = { streams, best: streams[0] }
               db.putCache(key, result, 60 * 60 * 1000)
-              return result
+              return { ...result, shortcut: true }
             }
           } catch {
             // Best-effort — falls through to the full search below exactly
@@ -927,9 +929,11 @@ export function registerTorBoxIpc(): void {
           // playable when TorBox or the add-ons fail, and it is what Balanced
           // would have answered outright before. Not cached: the next resolve
           // should search again.
-          if (deferredLocal.length) return { streams: deferredLocal, best: deferredLocal[0] }
+          if (deferredLocal.length) {
+            return { streams: deferredLocal, best: deferredLocal[0], shortcut: true }
+          }
           const stale = db.getCache<StreamResolveResult>(key, { allowExpired: true })
-          if (stale) return withGroupMemo(stale)
+          if (stale) return { ...withGroupMemo(stale), shortcut: true }
           throw error
         }
       }
@@ -939,7 +943,7 @@ export function registerTorBoxIpc(): void {
       try {
         found = await search()
       } catch {
-        return { streams: shortcut, best: shortcut[0] }
+        return { streams: shortcut, best: shortcut[0], shortcut: true }
       }
       // Behind everything the search found: play:stream opens it last, and
       // not at all once it is known to lack the audio.
@@ -988,6 +992,9 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
   const db = getDatabase()
   const known: LanguageFindings = (memoKey && db.getCache<LanguageFindings>(memoKey)) || {}
   const order = languageTryOrder(payload.stream, alternates, known)
+  // Set when the copy in the player is a provisional one this call may end
+  // up keeping — see holdLanguageSettle.
+  const heldSince = takeHeldLanguageSettle()
 
   // A retry whose search found nothing new: the only copy left is the one
   // already in the player, known to lack the audio. Settle on it rather
@@ -1001,7 +1008,7 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
     known[only]?.audio === false &&
     activeStreamUrl() === inPlayer.result.url
   ) {
-    await settleLanguageShortfall(inPlayer.result.tracks, known[only])
+    await settleLanguageShortfall(inPlayer.result.tracks, known[only], heldSince)
     return { ...inPlayer.result, languageFit: known[only] }
   }
 
@@ -1072,7 +1079,8 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
   if (current.fit.audio && payload.type && payload.resolveId) {
     rememberReleaseGroup(payload.type, payload.resolveId, current.stream)
   }
-  if (!payload.provisional) await settleLanguageShortfall(current.result.tracks, current.fit)
+  if (payload.provisional) holdLanguageSettle()
+  else await settleLanguageShortfall(current.result.tracks, current.fit)
   return { ...current.result, languageFit: current.fit }
 }
 

@@ -250,23 +250,49 @@ export function notifyLanguageShortfall(tracks: MediaTracks, fit: LanguageFit): 
   })
 }
 
+/** The subtitle choice count when a provisional copy started playing — see
+ *  holdLanguageSettle. Null when no provisional copy is waiting. */
+let provisionalSince: number | null = null
+
+/** Called by play:stream when it leaves a provisional copy unsettled. A
+ *  subtitle picked while the renderer searches again is the person's
+ *  choice, and the settle that may follow must not undo it. */
+export function holdLanguageSettle(): void {
+  provisionalSince = subtitleChoiceCount()
+}
+
+/** The held count, once: whoever settles the provisional copy takes it. */
+export function takeHeldLanguageSettle(): number | undefined {
+  const since = provisionalSince ?? undefined
+  provisionalSince = null
+  return since
+}
+
 /**
  * What follows settling on a copy without the wanted audio: its subtitles
  * in the wanted language switched on if it has them, one toast saying what
  * is playing, and subtitles fetched from a provider if it has none. Run by
  * play:stream, or — for a provisional copy the renderer may still replace —
  * by playback:language-settle once the renderer knows it will not.
+ *
+ * `since` is the subtitle choice count the copy started from. If anything
+ * has been chosen since, the toast still says what is playing, but nothing
+ * is switched or fetched over that choice.
  */
 export async function settleLanguageShortfall(
   tracks: MediaTracks,
-  fit: LanguageFit
+  fit: LanguageFit,
+  since = subtitleChoiceCount()
 ): Promise<void> {
   if (fit.audio) return
-  if (fit.subtitles) await ensureSubtitleLanguage(tracks, playbackLanguages().subtitles)
+  const untouched = subtitleChoiceCount() === since
+  if (fit.subtitles && untouched) {
+    await ensureSubtitleLanguage(tracks, playbackLanguages().subtitles)
+  }
   notifyLanguageShortfall(tracks, fit)
   // Neither the audio nor subtitles anyone here can read: fetch some.
   // Not awaited — playback has started, and the search can take seconds.
-  if (!fit.subtitles) void fetchSubtitlesForShortfall()
+  if (!fit.subtitles && untouched) void fetchSubtitlesForShortfall(since)
 }
 
 /**
@@ -537,16 +563,18 @@ function parseSubtitleSelection(payload: SubtitlesApplyPayload | undefined): Sub
  * said why. Prefers a row whose hash matched the file playing, since that
  * one is timed to this exact release.
  */
-export async function fetchSubtitlesForShortfall(): Promise<void> {
+export async function fetchSubtitlesForShortfall(
+  /** The subtitle choice count to measure "chosen since" from. */
+  since = subtitleChoiceCount()
+): Promise<void> {
   if (readSettings().autoSubtitlesEnabled === false) return
   const media = getSessionSnapshot()?.media
   // The cache URL, which every session has — a copy played from this disk
   // has no remote link at all, and is as likely to need subtitles as any.
   const playing = activeCacheUrl
   if (!media || !playing) return
-  // Any subtitle chosen after this point — by hand, from the menu — wins;
+  // Any subtitle chosen after `since` — by hand, from the menu — wins;
   // this fetch then lands nothing.
-  const since = subtitleChoiceCount()
   const { subtitles } = playbackLanguages()
   try {
     const results = await searchSubtitles(
@@ -621,11 +649,13 @@ export function registerPlaybackIpc(): void {
   )
 
   handle<undefined, { ok: true }>(MEDIA_HUB_CHANNELS.playbackLanguageSettle, async () => {
+    const since = takeHeldLanguageSettle()
     if (activeCacheUrl) {
       const { audio, subtitles } = playbackLanguages()
       await settleLanguageShortfall(
         activeMediaTracks,
-        languageFit(activeMediaTracks, audio, subtitles)
+        languageFit(activeMediaTracks, audio, subtitles),
+        since
       )
     }
     return { ok: true }

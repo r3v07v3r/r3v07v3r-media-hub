@@ -348,6 +348,12 @@ export interface StreamResolveResult {
    *  apart from a genuine "nothing exists for this title anywhere" dead
    *  end, since only one of those is worth "try again in a few minutes." */
   queued?: boolean
+  /** True when the answer came from a shortcut (this disk, the hour-cached
+   *  answer, the cache daemon, the media server's copy ending the search,
+   *  the copy that played last, or a fallback after the search failed)
+   *  rather than a completed search — so a fresh search may find copies
+   *  this one never looked for. */
+  shortcut?: boolean
 }
 
 export interface MediaTrack {
