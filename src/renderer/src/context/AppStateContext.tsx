@@ -527,10 +527,12 @@ interface AppStateValue {
 // like the party had started without them.
 const PARTY_PREPARING_TIMEOUT_MS = 3 * 60 * 1000
 
-/** How many copies ranked after the pick go with it to play:stream, to be
- *  tried when the pick lacks the wanted audio. Matches main's
- *  LANGUAGE_RETRY_LIMIT, which is what actually caps the tries. */
-const LANGUAGE_ALTERNATES = 3
+/** The most extra opens play:stream can make past the pick when it lacks
+ *  the wanted audio: main's LANGUAGE_RETRY_LIMIT (3) untried copies, the
+ *  closest known copy as a last resort, and one reopen of the copy it
+ *  settles on. Sizes the buffering deadline only — every alternate is sent,
+ *  since main drops the ones it already knows about before it caps. */
+const LANGUAGE_EXTRA_OPENS = 5
 
 /** Structural equality for the small, flat IPC payloads this file holds in
  *  state (party status, party queue). Deliberately not a deep-equality
@@ -2008,9 +2010,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           best: StreamCandidate,
           provisional = false
         ): { task: Promise<PlaybackResult>; deadline: number } => {
-          const alternates = from.streams
-            .filter((stream) => stream !== best)
-            .slice(0, LANGUAGE_ALTERNATES)
+          const alternates = from.streams.filter((stream) => stream !== best)
           const task = api.stream.play(
             best,
             mediaId,
@@ -2039,7 +2039,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             }
           )
           // Each extra copy is another link, cache fill and open.
-          return { task, deadline: 90_000 + alternates.length * 45_000 }
+          const extraOpens = Math.min(alternates.length, LANGUAGE_EXTRA_OPENS)
+          return { task, deadline: 90_000 + extraOpens * 45_000 }
         }
         // A lone shortcut copy may be replaced below; main holds its
         // subtitle download until that is settled.
