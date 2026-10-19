@@ -478,7 +478,7 @@ export const UNIVERSE_DATA: UniverseDefinition[] = [
         type: 'series',
         title: 'VisionQuest',
         year: '2026',
-        released: '2026-10-14'
+        released: '2026-10-13'
       },
       {
         id: 'tt21357150',
@@ -631,14 +631,14 @@ export const UNIVERSE_DATA: UniverseDefinition[] = [
       {
         id: 'tt0076759',
         type: 'movie',
-        title: 'Star Wars',
+        title: 'Star Wars: Episode IV - A New Hope',
         year: '1977',
         released: '1977-05-25'
       },
       {
         id: 'tt0080684',
         type: 'movie',
-        title: 'The Empire Strikes Back',
+        title: 'Star Wars: Episode V - The Empire Strikes Back',
         year: '1980',
         released: '1980-05-17'
       },
@@ -666,7 +666,7 @@ export const UNIVERSE_DATA: UniverseDefinition[] = [
       {
         id: 'tt0086190',
         type: 'movie',
-        title: 'Return of the Jedi',
+        title: 'Star Wars: Episode VI - Return of the Jedi',
         year: '1983',
         released: '1983-05-25'
       },
@@ -1140,14 +1140,14 @@ export const UNIVERSE_DATA: UniverseDefinition[] = [
       {
         id: 'tt0060028',
         type: 'series',
-        title: 'Star Trek',
+        title: 'Star Trek: The Original Series',
         year: '1966',
         released: '1966-09-08'
       },
       {
         id: 'tt0069637',
         type: 'series',
-        title: 'Star Trek',
+        title: 'Star Trek: The Animated Series',
         year: '1973',
         released: '1973-09-08'
       },

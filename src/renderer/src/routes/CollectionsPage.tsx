@@ -224,6 +224,7 @@ export function CollectionPage() {
               // was picked: it is the reason this card is where it is.
               reason={`${index + 1} · ${when}`}
               showKind
+              originLabel={universe.name}
             />
           )
         })}

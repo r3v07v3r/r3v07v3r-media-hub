@@ -17,7 +17,9 @@
 //
 //   node scripts/build-universes.mjs
 //
-// Each entry is [imdb id, 'm' film | 's' series, the title expected]. A
+// Each entry is [imdb id, 'm' film | 's' series, Cinemeta's exact title, and
+// optionally the title to show instead]. The last is for a title Cinemeta
+// gives too bare to tell apart: three different works are all "Star Trek". A
 // universe with `story: true` is written in story order; one without is in
 // whatever order, and the page offers release order only.
 
@@ -43,7 +45,7 @@ const UNIVERSES = [
     story: true,
     entries: [
       ['tt0458339', 'm', 'Captain America: The First Avenger'],
-      ['tt3475734', 's', 'Agent Carter'],
+      ['tt3475734', 's', "Marvel's Agent Carter"],
       ['tt4154664', 'm', 'Captain Marvel'],
       ['tt0371746', 'm', 'Iron Man'],
       ['tt1228705', 'm', 'Iron Man 2'],
@@ -52,28 +54,28 @@ const UNIVERSES = [
       ['tt0848228', 'm', 'The Avengers'],
       ['tt1981115', 'm', 'Thor: The Dark World'],
       ['tt1300854', 'm', 'Iron Man 3'],
-      ['tt2364582', 's', 'Agents of S.H.I.E.L.D.'],
+      ['tt2364582', 's', "Marvel's Agents of S.H.I.E.L.D."],
       ['tt1843866', 'm', 'Captain America: The Winter Soldier'],
       ['tt2015381', 'm', 'Guardians of the Galaxy'],
       ['tt3896198', 'm', 'Guardians of the Galaxy Vol. 2'],
       ['tt13623148', 's', 'I Am Groot'],
-      ['tt3322312', 's', 'Daredevil'],
-      ['tt2357547', 's', 'Jessica Jones'],
+      ['tt3322312', 's', "Marvel's Daredevil"],
+      ['tt2357547', 's', "Marvel's Jessica Jones"],
       ['tt2395427', 'm', 'Avengers: Age of Ultron'],
       ['tt0478970', 'm', 'Ant-Man'],
-      ['tt3322314', 's', 'Luke Cage'],
-      ['tt3322310', 's', 'Iron Fist'],
-      ['tt4230076', 's', 'The Defenders'],
+      ['tt3322314', 's', "Marvel's Luke Cage"],
+      ['tt3322310', 's', "Marvel's Iron Fist"],
+      ['tt4230076', 's', "Marvel's The Defenders"],
       ['tt3498820', 'm', 'Captain America: Civil War'],
       ['tt3480822', 'm', 'Black Widow'],
       ['tt1825683', 'm', 'Black Panther'],
       ['tt2250912', 'm', 'Spider-Man: Homecoming'],
-      ['tt5675620', 's', 'The Punisher'],
+      ['tt5675620', 's', "Marvel's The Punisher"],
       ['tt1211837', 'm', 'Doctor Strange'],
       ['tt3501632', 'm', 'Thor: Ragnarok'],
-      ['tt4154858', 's', 'Inhumans'],
-      ['tt1236246', 's', 'Runaways'],
-      ['tt5614844', 's', 'Cloak & Dagger'],
+      ['tt4154858', 's', "Marvel's Inhumans"],
+      ['tt1236246', 's', "Marvel's Runaways"],
+      ['tt5614844', 's', "Marvel's Cloak & Dagger"],
       ['tt5095030', 'm', 'Ant-Man and the Wasp'],
       ['tt4154756', 'm', 'Avengers: Infinity War'],
       ['tt4154796', 'm', 'Avengers: Endgame'],
@@ -125,7 +127,7 @@ const UNIVERSES = [
       ['tt0361243', 's', 'Star Wars: Clone Wars'],
       ['tt1185834', 'm', 'Star Wars: The Clone Wars'],
       ['tt0458290', 's', 'Star Wars: The Clone Wars'],
-      ['tt20723374', 's', 'Tales of the Jedi'],
+      ['tt20723374', 's', 'Star Wars: Tales of the Jedi'],
       ['tt0121766', 'm', 'Star Wars: Episode III - Revenge of the Sith'],
       ['tt12708542', 's', 'Star Wars: The Bad Batch'],
       ['tt32019314', 's', 'Star Wars: Tales of the Empire'],
@@ -137,12 +139,17 @@ const UNIVERSES = [
       ['tt0088510', 's', 'Star Wars: Droids'],
       ['tt2930604', 's', 'Star Wars Rebels'],
       ['tt3748528', 'm', 'Rogue One: A Star Wars Story'],
-      ['tt0076759', 'm', 'Star Wars: Episode IV - A New Hope'],
-      ['tt0080684', 'm', 'Star Wars: Episode V - The Empire Strikes Back'],
+      ['tt0076759', 'm', 'Star Wars', 'Star Wars: Episode IV - A New Hope'],
+      [
+        'tt0080684',
+        'm',
+        'The Empire Strikes Back',
+        'Star Wars: Episode V - The Empire Strikes Back'
+      ],
       ['tt0087225', 'm', 'The Ewok Adventure'],
       ['tt0089110', 'm', 'Ewoks: The Battle for Endor'],
       ['tt0088515', 's', 'Ewoks'],
-      ['tt0086190', 'm', 'Star Wars: Episode VI - Return of the Jedi'],
+      ['tt0086190', 'm', 'Return of the Jedi', 'Star Wars: Episode VI - Return of the Jedi'],
       ['tt8111088', 's', 'The Mandalorian'],
       ['tt13668894', 's', 'The Book of Boba Fett'],
       ['tt13622776', 's', 'Ahsoka'],
@@ -167,7 +174,7 @@ const UNIVERSES = [
       ['tt0974015', 'm', 'Justice League'],
       ['tt1477834', 'm', 'Aquaman'],
       ['tt0448115', 'm', 'Shazam!'],
-      ['tt7713068', 'm', 'Birds of Prey'],
+      ['tt7713068', 'm', 'Birds of Prey (and the Fantabulous Emancipation of One Harley Quinn)'],
       ['tt7126948', 'm', 'Wonder Woman 1984'],
       ['tt12361974', 'm', "Zack Snyder's Justice League"],
       ['tt6334354', 'm', 'The Suicide Squad'],
@@ -241,8 +248,8 @@ const UNIVERSES = [
     name: 'Star Trek',
     blurb: 'Sixty years of series and films.',
     entries: [
-      ['tt0060028', 's', 'Star Trek'],
-      ['tt0069637', 's', 'Star Trek: The Animated Series'],
+      ['tt0060028', 's', 'Star Trek', 'Star Trek: The Original Series'],
+      ['tt0069637', 's', 'Star Trek', 'Star Trek: The Animated Series'],
       ['tt0079945', 'm', 'Star Trek: The Motion Picture'],
       ['tt0084726', 'm', 'Star Trek II: The Wrath of Khan'],
       ['tt0088170', 'm', 'Star Trek III: The Search for Spock'],
@@ -319,7 +326,9 @@ const fold = (title) =>
 
 async function meta(id, kind) {
   const type = kind === 'm' ? 'movie' : 'series'
-  for (const host of HOSTS) {
+  // Twice round: a single dropped request otherwise reads as an id that
+  // does not resolve, and stops the whole run.
+  for (const host of [...HOSTS, ...HOSTS]) {
     try {
       const response = await fetch(`${host}/meta/${type}/${id}.json`)
       if (!response.ok) continue
@@ -381,7 +390,7 @@ const built = []
 for (const universe of UNIVERSES) {
   const seen = new Set()
   const entries = []
-  for (const [id, kind, expected] of universe.entries) {
+  for (const [id, kind, expected, label] of universe.entries) {
     if (seen.has(id)) problems.push(`${universe.id}: ${id} is listed twice`)
     seen.add(id)
     const found = await meta(id, kind)
@@ -389,16 +398,17 @@ for (const universe of UNIVERSES) {
       problems.push(`${universe.id}: ${id} (${expected}) did not resolve as a ${kind}`)
       continue
     }
-    const a = fold(found.name)
-    const b = fold(expected)
-    if (!a.includes(b) && !b.includes(a)) {
+    // Exactly, once punctuation is set aside. A partial match let a bare
+    // "Star Trek" stand for The Animated Series, which is how a wrong id
+    // would slip through too.
+    if (fold(found.name) !== fold(expected)) {
       problems.push(`${universe.id}: ${id} is "${found.name}", expected "${expected}"`)
     }
     const released = isoDay(found.released) || firstEpisodeDay(found.videos)
     entries.push({
       id,
       type: kind === 'm' ? 'movie' : 'series',
-      title: String(found.name),
+      title: label ?? String(found.name),
       year: released.slice(0, 4) || String(found.releaseInfo ?? found.year ?? '').slice(0, 4),
       released
     })

@@ -30,6 +30,10 @@ for (const universe of UNIVERSES) {
   assert.ok(universe.entries.length >= 2, `${universe.id} is more than one title`)
   const ids = universe.entries.map((entry) => entry.id)
   assert.equal(new Set(ids).size, ids.length, `${universe.id} lists no title twice`)
+  // Two cards with one name and one kind cannot be told apart — Cinemeta
+  // calls both the 1966 and the 1973 series "Star Trek", hence the labels.
+  const names = universe.entries.map((entry) => `${entry.type} ${entry.title}`)
+  assert.equal(new Set(names).size, names.length, `${universe.id} has no two titles named alike`)
   for (const entry of universe.entries) {
     const where = `${universe.id} ${entry.id}`
     assert.match(entry.id, /^tt\d+$/, `${where} is an IMDb id`)
@@ -50,9 +54,10 @@ assert.ok(starWars?.hasStoryOrder)
 const story = universeEntries(starWars, 'story').map((entry) => entry.title)
 const release = universeEntries(starWars, 'release').map((entry) => entry.title)
 const phantomMenace = 'Star Wars: Episode I - The Phantom Menace'
-assert.ok(story.indexOf(phantomMenace) < story.indexOf('Star Wars'), 'Episode I is before IV')
-assert.ok(release.indexOf('Star Wars') < release.indexOf(phantomMenace), '1977 is before 1999')
-assert.equal(release[0], 'Star Wars')
+const newHope = 'Star Wars: Episode IV - A New Hope'
+assert.ok(story.indexOf(phantomMenace) < story.indexOf(newHope), 'Episode I is before IV')
+assert.ok(release.indexOf(newHope) < release.indexOf(phantomMenace), '1977 is before 1999')
+assert.equal(release[0], newHope)
 assert.deepEqual([...story].sort(), [...release].sort(), 'both orders hold the same titles')
 
 const marvel = findUniverse('marvel-cinematic-universe')
