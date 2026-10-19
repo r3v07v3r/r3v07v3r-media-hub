@@ -108,6 +108,9 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'movies', label: 'Movies', icon: 'movies', href: '/movies' },
   { id: 'tv', label: 'Series', icon: 'tv', href: '/series' },
   { id: 'anime', label: 'Anime', icon: 'anime', href: '/anime' },
+  // Whole universes in order (Marvel, Star Wars) — films and series
+  // together, which none of the three library pages above can show.
+  { id: 'collections', label: 'Collections', icon: 'stack', href: '/collections' },
   { id: 'mystuff', label: 'My Stuff', icon: 'mystuff', href: '/my-stuff' },
   // Its own entry rather than a tab inside My Stuff. "Is there anything
   // on tonight" is a different question from "what have I collected",
