@@ -317,6 +317,11 @@ export interface StreamCandidate {
    *  without contacting any source. */
   cacheToken?: string
   complete?: boolean
+  /** localcache candidates only — which release the cached bytes are, when
+   *  the session recorded it. Lets the same release be recognised whether
+   *  it comes off this disk or from its source (see languageFallback.ts's
+   *  sourceKey). */
+  cacheSourceRef?: CacheSourceRef
   name?: string
   title?: string
   sources?: string[]

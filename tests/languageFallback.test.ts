@@ -86,6 +86,19 @@ check('every copy known to lack it: the closest one, once', () =>
 check('the same copy listed twice is opened once', () =>
   assert.deepEqual(languageTryOrder(a, [a, b], {}), [a, b])
 )
+check('a copy on this disk is keyed as the release it came from', () =>
+  assert.equal(
+    sourceKey({
+      source: 'localcache',
+      cacheToken: 'tok',
+      cacheSourceRef: { source: 'torbox', infoHash: a.infoHash }
+    } as StreamCandidate),
+    sourceKey(a)
+  )
+)
+check('a local session with no recorded release keeps its token', () =>
+  assert.equal(sourceKey({ source: 'localcache', cacheToken: 'tok' } as StreamCandidate), 'c:tok')
+)
 
 console.log('\npickFallback')
 check('english subtitles beat none', () =>

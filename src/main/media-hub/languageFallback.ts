@@ -30,13 +30,17 @@ export const LANGUAGE_RETRY_LIMIT = 3
 export type LanguageFindings = Record<string, LanguageFit>
 
 /** The identity a finding is stored under: the torrent hash for a TorBox
- *  or cache-daemon copy, the item for a media-server one, the cache token
- *  for a local one. Empty when a candidate has none of them, which means
- *  nothing is remembered for it. */
+ *  or cache-daemon copy, the item for a media-server one. A copy on this
+ *  disk takes the identity of the release its bytes came from, so the
+ *  same release is recognised wherever it is found; only a session that
+ *  never recorded its release falls back to its cache token. Empty when a
+ *  candidate has none of them, which means nothing is remembered for it. */
 export function sourceKey(stream: StreamCandidate): string {
-  const hash = String(stream.infoHash ?? '').toLowerCase()
+  const ref = stream.cacheSourceRef
+  const hash = String(stream.infoHash ?? ref?.infoHash ?? '').toLowerCase()
   if (hash) return `h:${hash}`
-  if (stream.itemId) return `m:${stream.itemId}:${stream.mediaSourceId ?? ''}`
+  const itemId = stream.itemId ?? ref?.itemId
+  if (itemId) return `m:${itemId}:${stream.mediaSourceId ?? ref?.mediaSourceId ?? ''}`
   if (stream.cacheToken) return `c:${stream.cacheToken}`
   return ''
 }
