@@ -12,6 +12,7 @@ import { MediaDetailPage } from '@renderer/routes/MediaDetailPage'
 import MyStuffPage from '@renderer/routes/MyStuffPage'
 import CalendarPage from '@renderer/routes/CalendarPage'
 import ForYouPage from '@renderer/routes/ForYouPage'
+import CollectionsPage, { CollectionPage } from '@renderer/routes/CollectionsPage'
 import SettingsPage from '@renderer/routes/SettingsPage'
 import MoodExplorePage from '@renderer/routes/MoodExplorePage'
 import PersonPage from '@renderer/routes/PersonPage'
@@ -122,6 +123,8 @@ export default function App() {
                   pattern (react-router's own <Navigate>, not a new mechanism). */}
                 <Route path="/tv-shows" element={<Navigate to="/series" replace />} />
                 <Route path="/tv-shows/:id" element={<LegacyTvShowDetailRedirect />} />
+                <Route path="/collections" element={<CollectionsPage />} />
+                <Route path="/collections/:id" element={<CollectionPage />} />
                 <Route path="/my-stuff" element={<MyStuffPage />} />
                 <Route path="/calendar" element={<CalendarPage />} />
                 {/* Downloads is gone. What it listed — what this device has
