@@ -38,6 +38,7 @@ import { logError } from './logger'
 import {
   checkcachedShortlist,
   cometConfigPath,
+  declaresPreferredLanguage,
   rankSafeStreams,
   releaseGroup,
   streamResolution,
@@ -66,7 +67,20 @@ import {
   lanCacheFingerprint,
   lanCacheStreamUrl
 } from './lanCache'
-import { preparePlayback } from './playbackSession'
+import {
+  fetchSubtitlesForShortfall,
+  notifyLanguageShortfall,
+  playbackLanguages,
+  preparePlayback
+} from './playbackSession'
+import { ensureSubtitleLanguage } from './playerBridge'
+import {
+  languageTryOrder,
+  pickFallback,
+  sourceKey,
+  type LanguageFindings
+} from './languageFallback'
+import { languageFit, languageName, type LanguageFit } from '../../shared/media-hub/language'
 import { reportPreparation } from './playbackProgress'
 import {
   clearTorBoxToken,
@@ -311,6 +325,11 @@ interface StreamResolvePayload {
    *  name beside its English one. Every one of them is accepted by the
    *  title guard; see titleMatchesRelease. */
   altTitles?: string[]
+  /** Skip the shortcut answers (this disk, the hour-cached answer, the
+   *  cache daemon, the copy that played last) and search properly. Sent by
+   *  the renderer when the copy a shortcut handed back turned out to lack
+   *  the wanted audio, so there are other copies to try. */
+  fresh?: boolean
   /** The identity play:stream will store on the cache session. Supplied so
    *  the local-cache tier compares like with like instead of guessing it
    *  from `id` — see the preload comment on resolve(). Optional: without
@@ -344,6 +363,11 @@ interface PlayStreamPayload {
   /** The episode's own name — carried through to the player session so
    *  the overlay's badge and title line can show it. */
   episodeTitle?: string
+  /** The copies the ranking put after `stream`, in order. play:stream opens
+   *  them in turn when `stream` turns out to lack the wanted audio — see
+   *  playWithLanguageFallback. Optional: a manual pick or an older caller
+   *  sends none, and plays exactly what it asked for. */
+  alternates?: StreamCandidate[]
 }
 
 /** How long play:stream's "last stream that actually worked for this
@@ -367,6 +391,39 @@ function showKey(type: string, id: string): string {
   // however many, since a series position with no season is "id:episode".
   const prefixed = parts.length > 1 && /^[a-z]+$/i.test(parts[0]) && /^\d+$/.test(parts[1])
   return prefixed ? parts.slice(0, 2).join(':') : parts[0]
+}
+
+/** Asks TorBox to download a release it has not cached yet, so it becomes
+ *  playable a few minutes later — createtorrent without play:stream's
+ *  `add_only_if_cached`, which is exactly what makes it a real request. */
+async function queueOnTorBox(candidate: StreamCandidate, auth: string): Promise<void> {
+  const magnet = new URL('magnet:')
+  magnet.searchParams.set('xt', `urn:btih:${torrentHash(candidate)}`)
+  for (const tracker of sanitizeTrackers(candidate.sources)) {
+    magnet.searchParams.append('tr', tracker)
+  }
+  const form = new FormData()
+  form.append('magnet', magnet.toString())
+  await torboxFetch(`${TORBOX}/torrents/createtorrent`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${auth}` },
+    body: form
+  })
+}
+
+/** What each copy of one episode turned out to hold — see languageFallback.ts. */
+function languageFindingsKey(type: string, id: string): string {
+  return `langfit:v1:${type}:${id}`
+}
+
+/** Whether every copy of this episode opened so far lacked the wanted
+ *  audio. Such an episode skips the shortcut tiers in stream:resolve, which
+ *  would only hand the same wrong copy back. */
+function episodeLacksLanguage(type: string, id: string): boolean {
+  const findings = Object.values(
+    getDatabase().getCache<LanguageFindings>(languageFindingsKey(type, id)) ?? {}
+  )
+  return findings.length > 0 && findings.every((fit) => !fit.audio)
 }
 
 /** Which release group last played an episode of this show — read back by
@@ -478,6 +535,10 @@ export function registerTorBoxIpc(): void {
       // The group that played the previous episode of this show, if any —
       // see SAME_RELEASE_GROUP_BONUS in core.ts.
       const preferredGroup = getDatabase().getCache<string>(releaseGroupMemoKey(type, id)) ?? null
+      // Every shortcut below hands back ONE copy, chosen before anyone knew
+      // what was in it. When that copy, or every copy opened so far, lacked
+      // the wanted audio, only a real search has others to try.
+      const fresh = payload.fresh === true || episodeLacksLanguage(type, id)
 
       // The group memo is not part of the key, on purpose: it changes
       // whenever another episode of the show plays from a different group,
@@ -499,45 +560,47 @@ export function registerTorBoxIpc(): void {
       // hour-cached answer, the paired cache daemon (tier 2). Their order,
       // and why each sits where it does, is answerFromCacheTiers' own —
       // held in streamTierRules so tests can pin it.
-      const answer = await answerFromCacheTiers(
-        {
-          torbox: Boolean(auth),
-          mediaServer: Boolean(mediaServer),
-          lanCache: isLanCacheConnected()
-        },
-        limits.maxResolution,
-        {
-          local: () => findLocalCacheCandidate(cacheMetaFor(payload, title)),
-          // Fast path 1: an identical resolve (same title/episode, same
-          // quality/size limits) already ran within the last hour. The answer
-          // was already being cached below — it just was never actually READ
-          // here, only ever pulled as a last-resort fallback when the fresh
-          // search below threw. That's the actual reason replaying or resuming
-          // something just watched re-ran the full two-addon search plus a
-          // TorBox checkcached call every single time, instead of reusing an
-          // answer that hadn't changed.
-          recent: () => {
-            const recent = db.getCache<StreamResolveResult>(key)
-            return recent ? withGroupMemo(recent) : null
-          },
-          lan: () => {
-            const meta = cacheMetaFor(payload, title)
-            // Must match the key the feeder queued (wantedList.ts
-            // lanCacheContentKey), so anime drops its season here too.
-            const lanKey = meta
-              ? lanCacheContentKey({
-                  catalogId: meta.catalogId ?? '',
-                  kind: type,
-                  seasonNumber: meta.seasonNumber,
-                  episodeNumber: meta.episodeNumber
-                })
-              : ''
-            return findLanCacheCandidate(lanKey)
-          },
-          rankLan: (candidate) =>
-            rankSafeStreams([candidate], audioLanguage, limits, sourcePreference)
-        }
-      )
+      const answer = fresh
+        ? null
+        : await answerFromCacheTiers(
+            {
+              torbox: Boolean(auth),
+              mediaServer: Boolean(mediaServer),
+              lanCache: isLanCacheConnected()
+            },
+            limits.maxResolution,
+            {
+              local: () => findLocalCacheCandidate(cacheMetaFor(payload, title)),
+              // Fast path 1: an identical resolve (same title/episode, same
+              // quality/size limits) already ran within the last hour. The answer
+              // was already being cached below — it just was never actually READ
+              // here, only ever pulled as a last-resort fallback when the fresh
+              // search below threw. That's the actual reason replaying or resuming
+              // something just watched re-ran the full two-addon search plus a
+              // TorBox checkcached call every single time, instead of reusing an
+              // answer that hadn't changed.
+              recent: () => {
+                const recent = db.getCache<StreamResolveResult>(key)
+                return recent ? withGroupMemo(recent) : null
+              },
+              lan: () => {
+                const meta = cacheMetaFor(payload, title)
+                // Must match the key the feeder queued (wantedList.ts
+                // lanCacheContentKey), so anime drops its season here too.
+                const lanKey = meta
+                  ? lanCacheContentKey({
+                      catalogId: meta.catalogId ?? '',
+                      kind: type,
+                      seasonNumber: meta.seasonNumber,
+                      episodeNumber: meta.episodeNumber
+                    })
+                  : ''
+                return findLanCacheCandidate(lanKey)
+              },
+              rankLan: (candidate) =>
+                rankSafeStreams([candidate], audioLanguage, limits, sourcePreference)
+            }
+          )
       if (answer) {
         if (answer.remember) db.putCache(key, answer.result, 60 * 60 * 1000)
         return answer.result
@@ -617,6 +680,7 @@ export function registerTorBoxIpc(): void {
       // it played from last and try that first" path.
       const remembered = db.getCache<StreamCandidate>(lastStreamKey(type, id))
       const rememberedUsable =
+        !fresh &&
         remembered &&
         rankSafeStreams([remembered], audioLanguage, limits, sourcePreference).length > 0 &&
         // A remembered stream from a source that is no longer configured
@@ -768,6 +832,22 @@ export function registerTorBoxIpc(): void {
           { preferredGroup }
         )
         if (streams.length) {
+          // Nothing playable right now says it has the wanted audio, but an
+          // uncached copy does: ask TorBox to fetch it, so the next play of
+          // this episode has it. This one still plays now — waiting minutes
+          // for a download is worse than subtitles.
+          if (!declaresPreferredLanguage(streams[0], audioLanguage)) {
+            const wanted = rankSafeStreams(
+              discovered.filter(
+                (s) => !available.has(torrentHash(s)) && declaresPreferredLanguage(s, audioLanguage)
+              ),
+              audioLanguage,
+              limits,
+              sourcePreference,
+              { preferredGroup }
+            )[0]
+            if (wanted) void queueOnTorBox(wanted, auth).catch(() => {})
+          }
           const result: StreamResolveResult = { streams, best: streams[0] }
           db.putCache(key, result, 60 * 60 * 1000)
           return result
@@ -794,18 +874,7 @@ export function registerTorBoxIpc(): void {
         let queued = false
         if (candidate) {
           try {
-            const magnet = new URL('magnet:')
-            magnet.searchParams.set('xt', `urn:btih:${torrentHash(candidate)}`)
-            for (const tracker of sanitizeTrackers(candidate.sources)) {
-              magnet.searchParams.append('tr', tracker)
-            }
-            const form = new FormData()
-            form.append('magnet', magnet.toString())
-            await torboxFetch(`${TORBOX}/torrents/createtorrent`, {
-              method: 'POST',
-              headers: { Authorization: `Bearer ${auth}` },
-              body: form
-            })
+            await queueOnTorBox(candidate, auth)
             queued = true
           } catch {
             // Best-effort, see comment above.
@@ -833,226 +902,305 @@ export function registerTorBoxIpc(): void {
     }
   )
 
-  handle<PlayStreamPayload, PlaybackResult>(
-    MEDIA_HUB_CHANNELS.playStream,
-    async (
-      _e,
-      {
-        stream,
-        mediaId,
-        type,
-        resolveId,
-        catalogId,
-        title,
-        posterUrl,
-        season,
-        episode,
-        episodeTitle
-      }
-    ) => {
-      // Both sources converge here: whatever produced the URL, playback
-      // opens it the same way and the same stream gets remembered. Shared
-      // as a closure rather than duplicated so the two branches can never
-      // drift on cache metadata or the last-stream memo.
-      // Recorded on the session so tier 1 can tell later WHICH encode these
-      // bytes are. Without it a partial session cannot be safely resumed —
-      // resuming against a different release of the same title splices two
-      // files together and plays corrupt video.
-      const sourceRef: CacheSourceRef = {
-        source: stream?.source ?? 'torbox',
-        infoHash: stream?.infoHash,
-        itemId: stream?.itemId,
-        mediaSourceId: stream?.mediaSourceId,
-        // The two things a resume needs that the hash alone does not carry:
-        // WHICH file of a multi-file torrent these bytes are (the add-on's
-        // index, preferred over filename guessing — see resolveDownloadUrl),
-        // and the trackers to re-add the torrent with if TorBox has since
-        // let it go. Without them a resumed season pack could pick a
-        // different episode's file, or fail to find any.
-        fileIdx: stream?.fileIdx,
-        sources: stream?.sources
-      }
-
-      const finish = async (url: string): Promise<PlaybackResult> => {
-        const result = await preparePlayback(
-          url,
-          title
-            ? {
-                title,
-                posterUrl,
-                catalogId,
-                mediaKind: type as 'movie' | 'series' | 'anime' | undefined,
-                seasonNumber: season,
-                episodeNumber: episode,
-                episodeTitle,
-                sourceRef,
-                // streamResolution, not stream.resolution: the scrapers
-                // mostly leave that field unset and put the real quality in
-                // the release text, so reading the raw field stores
-                // undefined for nearly every TorBox copy.
-                resolution: stream ? streamResolution(stream) || undefined : undefined,
-                release: stream ? releaseFacts(stream) : undefined
-              }
-            : undefined
-        )
-        // Only remembered once playback actually started — see
-        // stream:resolve's own "fast path 2" comment for where this gets
-        // read back. Records the stream that was ACTUALLY used, which
-        // isn't always stream:resolve's own top pick (a manual choice
-        // from the stream picker lands here too).
-        if (type && resolveId) rememberPlayedStream(type, resolveId, stream)
-        return result
-      }
-
-      // Tier 1's own tail. Same memo and metadata handling as `finish`,
-      // but preparePlayback opens the existing session instead of a link.
-      const finishLocal = async (cacheToken: string): Promise<PlaybackResult> => {
-        const result = await preparePlayback(
-          '',
-          title
-            ? {
-                title,
-                posterUrl,
-                catalogId,
-                mediaKind: type as 'movie' | 'series' | 'anime' | undefined,
-                seasonNumber: season,
-                episodeNumber: episode,
-                episodeTitle
-              }
-            : undefined,
-          cacheToken
-        )
-        if (type && resolveId) rememberPlayedStream(type, resolveId, stream)
-        return result
-      }
-
-      // Tier 1: the bytes are already on this disk. No URL to build, no
-      // source to contact — hand the cache session straight to the player.
-      if (stream?.source === 'localcache' && stream.complete && stream.cacheToken) {
-        reportPreparation('buffer', 'Playing from this computer')
-        return finishLocal(String(stream.cacheToken))
-      }
-
-      // Tier 2: the cache daemon already fetched the file; its /stream URL
-      // is one LAN hop away and the trusted-host allowlist (populated at
-      // pairing) is what lets mpv open it.
-      if (stream?.source === 'lancache') {
-        const lanUrl = lanCacheStreamUrl(stream)
-        if (!lanUrl) {
-          throw new Error('That cache server is no longer paired. Reconnect it in Settings.')
-        }
-        reportPreparation('link', 'Opening the file on your cache server')
-        return finish(lanUrl)
-      }
-
-      // The media server needs none of the TorBox machinery below — no
-      // torrent to find, nothing to submit, no link to mint. The file is
-      // already there; build its URL and open it.
-      if (stream?.source === 'mediaserver') {
-        const mediaUrl = mediaServerStreamUrl(stream)
-        if (!mediaUrl) {
-          throw new Error('That media server is no longer connected. Reconnect it in Settings.')
-        }
-        reportPreparation('link', 'Opening the file on your media server')
-        return finish(mediaUrl)
-      }
-
-      const auth = getTorBoxToken()
-      if (!auth) throw new Error('TorBox is not connected.')
-      const hash = String(stream?.infoHash || '').toLowerCase()
-      if (!/^[a-f0-9]{40}$/.test(hash)) {
-        throw new Error('The selected source has no valid torrent hash.')
-      }
-      // Wrapped so the whole lookup can be repeated once against a fresh
-      // listing: a cached library entry describes a torrent that existed a
-      // moment ago, and the one thing that invalidates it — the person
-      // deleting it from their TorBox account — only shows up as a failure
-      // at requestdl. Only that second attempt pays the full-library fetch.
-      const resolveDownloadUrl = async (force: boolean): Promise<string> => {
-        let item = await torboxItemForHash(hash, force)
-        if (!item) {
-          const magnet = new URL('magnet:')
-          magnet.searchParams.set('xt', `urn:btih:${hash}`)
-          for (const tracker of sanitizeTrackers(stream.sources)) {
-            magnet.searchParams.append('tr', tracker)
-          }
-          const form = new FormData()
-          form.append('magnet', magnet.toString())
-          form.append('add_only_if_cached', 'true')
-          const created = await torboxFetch<{ data?: { torrent_id?: unknown } }>(
-            `${TORBOX}/torrents/createtorrent`,
-            { method: 'POST', headers: { Authorization: `Bearer ${auth}` }, body: form }
-          )
-          const torrentId = created.data?.torrent_id
-          const fetched = await torbox<RawApiPayload>('/torrents/mylist', {
-            id: torrentId,
-            bypass_cache: true
-          })
-          item = Array.isArray(fetched.data) ? fetched.data[0] : fetched.data
-        }
-        if (!item) throw new Error('TorBox could not prepare the cached torrent.')
-        const parts = String(mediaId || '').split(':')
-        const episode = Number(parts.at(-1))
-        const season = Number(parts.at(-2))
-        const episodic = parts.length >= 3 && Number.isFinite(season) && Number.isFinite(episode)
-        const files = (item.files || []) as TorBoxFile[]
-        // Prefer the scraper add-on's own fileIdx (Torrentio provides it,
-        // Comet doesn't — see StreamCandidate.fileIdx's own doc comment)
-        // over selectVideoFile's filename-regex guessing, but only when it
-        // actually resolves to a real video file in TorBox's own listing —
-        // found live: on a large batch torrent (e.g. a "Complete Series"
-        // pack), the regex guess can miss entirely even though the add-on
-        // already told us exactly which file. Falls back to the regex guess
-        // whenever the index doesn't line up, rather than trusting it
-        // blindly (TorBox's own file ordering isn't guaranteed to match the
-        // add-on's).
-        const videoExt = /\.(mkv|mp4|avi|mov|webm|m4v|ts)$/i
-        const hintedIdx = Number(stream?.fileIdx)
-        const hinted =
-          Number.isInteger(hintedIdx) &&
-          hintedIdx >= 0 &&
-          files[hintedIdx] &&
-          videoExt.test(files[hintedIdx].name || files[hintedIdx].short_name || '')
-            ? files[hintedIdx]
-            : null
-        const file =
-          hinted ||
-          selectVideoFile(files, episodic ? season : undefined, episodic ? episode : undefined)
-        if (!file) throw new Error('No matching video file was found in the TorBox torrent.')
-        const result = await torboxFetch<{
-          data?: string | { url?: string; download_url?: string }
-        }>(
-          `${TORBOX}/torrents/requestdl?token=${encodeURIComponent(auth)}&torrent_id=${encodeURIComponent(item.id)}&file_id=${encodeURIComponent(String(file.id))}&redirect=false`
-        )
-        const url =
-          typeof result.data === 'string'
-            ? result.data
-            : result.data?.url || result.data?.download_url
-        if (!url) throw new Error('TorBox did not return a playable URL.')
-        // TorBox occasionally hands back a link for a torrent that's
-        // reported cached but isn't actually servable yet (found live: a
-        // freshly-completed download returning a non-HTTPS/malformed URL
-        // on the first requestdl right after checkcached said it was
-        // ready) — preparePlayback's own streamCache.start() would reject
-        // this exact same URL downstream anyway, just several stages later
-        // and with a confusing raw error. Failing here instead means it's
-        // caught by the retry-once wrapper below, in the same click.
-        if (!isAllowedRemoteMediaUrl(url)) {
-          throw new Error('TorBox returned a link that was not ready yet.')
-        }
-        return url
-      }
-
-      let url: string
-      try {
-        reportPreparation('link', 'Asking TorBox for a playable link')
-        url = await resolveDownloadUrl(false)
-      } catch (error) {
-        logError('torbox:play:retry', error)
-        reportPreparation('link', "That link wasn't ready — asking TorBox again")
-        url = await resolveDownloadUrl(true)
-      }
-      return finish(url)
-    }
+  handle<PlayStreamPayload, PlaybackResult>(MEDIA_HUB_CHANNELS.playStream, (_e, payload) =>
+    playWithLanguageFallback(payload)
   )
+}
+
+/**
+ * play:stream: opens the ranked pick, and when it lacks the wanted audio,
+ * the next ranked copies in turn until one has it. When none does it
+ * settles on the closest — one with subtitles in the wanted language, with
+ * them switched on — and says so once. See languageFallback.ts for the
+ * rules and why only an open file can answer this.
+ *
+ * A copy that fails to open is skipped like one in the wrong language, as
+ * long as there is another to try; the error only surfaces when nothing
+ * opened at all.
+ */
+async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<PlaybackResult> {
+  const { audio, subtitles } = playbackLanguages()
+  const alternates = Array.isArray(payload.alternates) ? payload.alternates : []
+  const memoKey =
+    payload.type && payload.resolveId ? languageFindingsKey(payload.type, payload.resolveId) : ''
+  const db = getDatabase()
+  const known: LanguageFindings = (memoKey && db.getCache<LanguageFindings>(memoKey)) || {}
+  const order = languageTryOrder(payload.stream, alternates, known)
+
+  const tried: { stream: StreamCandidate; fit: LanguageFit }[] = []
+  let current: { stream: StreamCandidate; result: PlaybackResult; fit: LanguageFit } | null = null
+  let firstError: unknown = null
+  // What is actually in the player right now. A failed open has already
+  // torn down whatever was playing before it, so this is not always
+  // `current`.
+  let open: StreamCandidate | null = null
+  for (const [index, stream] of order.entries()) {
+    if (index > 0) {
+      reportPreparation(
+        'link',
+        current
+          ? `No ${languageName(audio)} audio in that copy — trying another`
+          : "That copy wouldn't open — trying another"
+      )
+    }
+    let result: PlaybackResult
+    try {
+      result = await playCandidate({ ...payload, stream })
+    } catch (error) {
+      if (order.length === 1) throw error
+      open = null
+      firstError ??= error
+      logError('torbox:play:alternate', error)
+      continue
+    }
+    const fit = languageFit(result.tracks, audio, subtitles)
+    const key = sourceKey(stream)
+    if (key) known[key] = fit
+    tried.push({ stream, fit })
+    current = { stream, result, fit }
+    open = stream
+    if (fit.audio) break
+  }
+  if (memoKey && Object.keys(known).length) db.putCache(memoKey, known, LAST_STREAM_TTL_MS)
+  if (!current) throw firstError ?? new Error('None of the copies of this title would open.')
+
+  // The copy to end on: the one with the audio, else the closest. Opened
+  // again when something else is in the player — a later copy in the wrong
+  // language, or nothing, after a later copy failed to open.
+  const target = current.fit.audio ? current.stream : (pickFallback(tried) ?? current.stream)
+  if (target !== open) {
+    reportPreparation('link', 'Going back to the closest copy')
+    const result = await playCandidate({ ...payload, stream: target })
+    current = { stream: target, result, fit: languageFit(result.tracks, audio, subtitles) }
+  }
+
+  if (!current.fit.audio) {
+    if (current.fit.subtitles) await ensureSubtitleLanguage(current.result.tracks, subtitles)
+    notifyLanguageShortfall(current.result.tracks, current.fit)
+    // Neither the audio nor subtitles anyone here can read: fetch some.
+    // Not awaited — playback has started, and the search can take seconds.
+    if (!current.fit.subtitles) void fetchSubtitlesForShortfall()
+  }
+  return { ...current.result, languageFit: current.fit }
+}
+
+/**
+ * Opens one copy: mints its link (or finds its file), opens it in the
+ * player, and remembers it as the copy that played. play:stream's whole job
+ * before it learned to look past a copy in the wrong language — see
+ * playWithLanguageFallback.
+ */
+async function playCandidate({
+  stream,
+  mediaId,
+  type,
+  resolveId,
+  catalogId,
+  title,
+  posterUrl,
+  season,
+  episode,
+  episodeTitle
+}: PlayStreamPayload): Promise<PlaybackResult> {
+  // Both sources converge here: whatever produced the URL, playback
+  // opens it the same way and the same stream gets remembered. Shared
+  // as a closure rather than duplicated so the two branches can never
+  // drift on cache metadata or the last-stream memo.
+  // Recorded on the session so tier 1 can tell later WHICH encode these
+  // bytes are. Without it a partial session cannot be safely resumed —
+  // resuming against a different release of the same title splices two
+  // files together and plays corrupt video.
+  const sourceRef: CacheSourceRef = {
+    source: stream?.source ?? 'torbox',
+    infoHash: stream?.infoHash,
+    itemId: stream?.itemId,
+    mediaSourceId: stream?.mediaSourceId,
+    // The two things a resume needs that the hash alone does not carry:
+    // WHICH file of a multi-file torrent these bytes are (the add-on's
+    // index, preferred over filename guessing — see resolveDownloadUrl),
+    // and the trackers to re-add the torrent with if TorBox has since
+    // let it go. Without them a resumed season pack could pick a
+    // different episode's file, or fail to find any.
+    fileIdx: stream?.fileIdx,
+    sources: stream?.sources
+  }
+
+  const finish = async (url: string): Promise<PlaybackResult> => {
+    const result = await preparePlayback(
+      url,
+      title
+        ? {
+            title,
+            posterUrl,
+            catalogId,
+            mediaKind: type as 'movie' | 'series' | 'anime' | undefined,
+            seasonNumber: season,
+            episodeNumber: episode,
+            episodeTitle,
+            sourceRef,
+            // streamResolution, not stream.resolution: the scrapers
+            // mostly leave that field unset and put the real quality in
+            // the release text, so reading the raw field stores
+            // undefined for nearly every TorBox copy.
+            resolution: stream ? streamResolution(stream) || undefined : undefined,
+            release: stream ? releaseFacts(stream) : undefined
+          }
+        : undefined
+    )
+    // Only remembered once playback actually started — see
+    // stream:resolve's own "fast path 2" comment for where this gets
+    // read back. Records the stream that was ACTUALLY used, which
+    // isn't always stream:resolve's own top pick (a manual choice
+    // from the stream picker lands here too).
+    if (type && resolveId) rememberPlayedStream(type, resolveId, stream)
+    return result
+  }
+
+  // Tier 1's own tail. Same memo and metadata handling as `finish`,
+  // but preparePlayback opens the existing session instead of a link.
+  const finishLocal = async (cacheToken: string): Promise<PlaybackResult> => {
+    const result = await preparePlayback(
+      '',
+      title
+        ? {
+            title,
+            posterUrl,
+            catalogId,
+            mediaKind: type as 'movie' | 'series' | 'anime' | undefined,
+            seasonNumber: season,
+            episodeNumber: episode,
+            episodeTitle
+          }
+        : undefined,
+      cacheToken
+    )
+    if (type && resolveId) rememberPlayedStream(type, resolveId, stream)
+    return result
+  }
+
+  // Tier 1: the bytes are already on this disk. No URL to build, no
+  // source to contact — hand the cache session straight to the player.
+  if (stream?.source === 'localcache' && stream.complete && stream.cacheToken) {
+    reportPreparation('buffer', 'Playing from this computer')
+    return finishLocal(String(stream.cacheToken))
+  }
+
+  // Tier 2: the cache daemon already fetched the file; its /stream URL
+  // is one LAN hop away and the trusted-host allowlist (populated at
+  // pairing) is what lets mpv open it.
+  if (stream?.source === 'lancache') {
+    const lanUrl = lanCacheStreamUrl(stream)
+    if (!lanUrl) {
+      throw new Error('That cache server is no longer paired. Reconnect it in Settings.')
+    }
+    reportPreparation('link', 'Opening the file on your cache server')
+    return finish(lanUrl)
+  }
+
+  // The media server needs none of the TorBox machinery below — no
+  // torrent to find, nothing to submit, no link to mint. The file is
+  // already there; build its URL and open it.
+  if (stream?.source === 'mediaserver') {
+    const mediaUrl = mediaServerStreamUrl(stream)
+    if (!mediaUrl) {
+      throw new Error('That media server is no longer connected. Reconnect it in Settings.')
+    }
+    reportPreparation('link', 'Opening the file on your media server')
+    return finish(mediaUrl)
+  }
+
+  const auth = getTorBoxToken()
+  if (!auth) throw new Error('TorBox is not connected.')
+  const hash = String(stream?.infoHash || '').toLowerCase()
+  if (!/^[a-f0-9]{40}$/.test(hash)) {
+    throw new Error('The selected source has no valid torrent hash.')
+  }
+  // Wrapped so the whole lookup can be repeated once against a fresh
+  // listing: a cached library entry describes a torrent that existed a
+  // moment ago, and the one thing that invalidates it — the person
+  // deleting it from their TorBox account — only shows up as a failure
+  // at requestdl. Only that second attempt pays the full-library fetch.
+  const resolveDownloadUrl = async (force: boolean): Promise<string> => {
+    let item = await torboxItemForHash(hash, force)
+    if (!item) {
+      const magnet = new URL('magnet:')
+      magnet.searchParams.set('xt', `urn:btih:${hash}`)
+      for (const tracker of sanitizeTrackers(stream.sources)) {
+        magnet.searchParams.append('tr', tracker)
+      }
+      const form = new FormData()
+      form.append('magnet', magnet.toString())
+      form.append('add_only_if_cached', 'true')
+      const created = await torboxFetch<{ data?: { torrent_id?: unknown } }>(
+        `${TORBOX}/torrents/createtorrent`,
+        { method: 'POST', headers: { Authorization: `Bearer ${auth}` }, body: form }
+      )
+      const torrentId = created.data?.torrent_id
+      const fetched = await torbox<RawApiPayload>('/torrents/mylist', {
+        id: torrentId,
+        bypass_cache: true
+      })
+      item = Array.isArray(fetched.data) ? fetched.data[0] : fetched.data
+    }
+    if (!item) throw new Error('TorBox could not prepare the cached torrent.')
+    const parts = String(mediaId || '').split(':')
+    const episode = Number(parts.at(-1))
+    const season = Number(parts.at(-2))
+    const episodic = parts.length >= 3 && Number.isFinite(season) && Number.isFinite(episode)
+    const files = (item.files || []) as TorBoxFile[]
+    // Prefer the scraper add-on's own fileIdx (Torrentio provides it,
+    // Comet doesn't — see StreamCandidate.fileIdx's own doc comment)
+    // over selectVideoFile's filename-regex guessing, but only when it
+    // actually resolves to a real video file in TorBox's own listing —
+    // found live: on a large batch torrent (e.g. a "Complete Series"
+    // pack), the regex guess can miss entirely even though the add-on
+    // already told us exactly which file. Falls back to the regex guess
+    // whenever the index doesn't line up, rather than trusting it
+    // blindly (TorBox's own file ordering isn't guaranteed to match the
+    // add-on's).
+    const videoExt = /\.(mkv|mp4|avi|mov|webm|m4v|ts)$/i
+    const hintedIdx = Number(stream?.fileIdx)
+    const hinted =
+      Number.isInteger(hintedIdx) &&
+      hintedIdx >= 0 &&
+      files[hintedIdx] &&
+      videoExt.test(files[hintedIdx].name || files[hintedIdx].short_name || '')
+        ? files[hintedIdx]
+        : null
+    const file =
+      hinted ||
+      selectVideoFile(files, episodic ? season : undefined, episodic ? episode : undefined)
+    if (!file) throw new Error('No matching video file was found in the TorBox torrent.')
+    const result = await torboxFetch<{
+      data?: string | { url?: string; download_url?: string }
+    }>(
+      `${TORBOX}/torrents/requestdl?token=${encodeURIComponent(auth)}&torrent_id=${encodeURIComponent(item.id)}&file_id=${encodeURIComponent(String(file.id))}&redirect=false`
+    )
+    const url =
+      typeof result.data === 'string' ? result.data : result.data?.url || result.data?.download_url
+    if (!url) throw new Error('TorBox did not return a playable URL.')
+    // TorBox occasionally hands back a link for a torrent that's
+    // reported cached but isn't actually servable yet (found live: a
+    // freshly-completed download returning a non-HTTPS/malformed URL
+    // on the first requestdl right after checkcached said it was
+    // ready) — preparePlayback's own streamCache.start() would reject
+    // this exact same URL downstream anyway, just several stages later
+    // and with a confusing raw error. Failing here instead means it's
+    // caught by the retry-once wrapper below, in the same click.
+    if (!isAllowedRemoteMediaUrl(url)) {
+      throw new Error('TorBox returned a link that was not ready yet.')
+    }
+    return url
+  }
+
+  let url: string
+  try {
+    reportPreparation('link', 'Asking TorBox for a playable link')
+    url = await resolveDownloadUrl(false)
+  } catch (error) {
+    logError('torbox:play:retry', error)
+    reportPreparation('link', "That link wasn't ready — asking TorBox again")
+    url = await resolveDownloadUrl(true)
+  }
+  return finish(url)
 }

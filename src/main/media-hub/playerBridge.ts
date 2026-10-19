@@ -50,6 +50,8 @@ import {
   type SubtitleStyle
 } from '../../shared/media-hub/subtitleStyle'
 import { getDatabase } from './dbState'
+import { languageMatches } from '../../shared/media-hub/language'
+import type { MediaTracks } from '../../shared/media-hub/types'
 import {
   normalizeVideoScaling,
   scalerPropertiesFor,
@@ -158,7 +160,10 @@ async function recoverFromHang(): Promise<void> {
   const load = lastLoad
   const snapshot = sessionSnapshot
   if (!load) {
-    logError('media-hub:player', new Error('mpv stopped answering and was killed; nothing was playing'))
+    logError(
+      'media-hub:player',
+      new Error('mpv stopped answering and was killed; nothing was playing')
+    )
     return
   }
   const position = lastTimePos
@@ -173,7 +178,9 @@ async function recoverFromHang(): Promise<void> {
   hangRecoveredUrl = load.url
   logError(
     'media-hub:player',
-    new Error(`mpv stopped answering and was killed; reloading the title at ${position.toFixed(1)}s`)
+    new Error(
+      `mpv stopped answering and was killed; reloading the title at ${position.toFixed(1)}s`
+    )
   )
   try {
     await startPlayerSession(load.url, { ...load.options, startSeconds: position })
@@ -1055,6 +1062,28 @@ export async function addSubtitleFileToPlayer(filePath: string): Promise<number>
   // immediately, rather than waiting for the observed track-list push.
   const sid = await player.get('sid').catch(() => undefined)
   return ordinalForMpvTrackId(sid)
+}
+
+/**
+ * Turns on the first subtitle track in `language`, if the file has one and
+ * none is showing. For a copy played in the wrong audio language: mpv's own
+ * `slang` choice only applies when a subtitle language is set, and someone
+ * who only ever set an audio language still needs to read what is said.
+ * Best-effort; returns whether a track was turned on.
+ */
+export async function ensureSubtitleLanguage(
+  tracks: MediaTracks,
+  language: string
+): Promise<boolean> {
+  if (!player.running) return false
+  const ordinal = tracks.subtitle.findIndex((track) =>
+    languageMatches(String(track.language ?? ''), language)
+  )
+  if (ordinal < 0) return false
+  const sid = await player.get('sid').catch(() => undefined)
+  if (sid !== undefined && sid !== false && sid !== 'no') return false
+  await player.set('sid', mpvTrackIdForOrdinal(ordinal)).catch(() => {})
+  return true
 }
 
 /**

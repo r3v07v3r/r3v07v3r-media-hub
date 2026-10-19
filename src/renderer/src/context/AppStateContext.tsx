@@ -31,11 +31,14 @@ import type {
   PartyChatMessage,
   PartyQueueEntry,
   PartyStatusResult,
+  PlaybackResult,
   ProfilePublic,
   ReconcileResolution,
   EpisodeSyncService,
   ShowSyncAction,
   ShowSyncRow,
+  StreamCandidate,
+  StreamResolveResult,
   WatchStatusDiscrepancy
 } from '@shared/media-hub/types'
 import type { ChangedEpisode, TitleStatus } from '@shared/media-hub/types'
@@ -523,6 +526,11 @@ interface AppStateValue {
 // card off early would be worse than leaving it a while — it would look
 // like the party had started without them.
 const PARTY_PREPARING_TIMEOUT_MS = 3 * 60 * 1000
+
+/** How many copies ranked after the pick go with it to play:stream, to be
+ *  tried when the pick lacks the wanted audio. Matches main's
+ *  LANGUAGE_RETRY_LIMIT, which is what actually caps the tries. */
+const LANGUAGE_ALTERNATES = 3
 
 /** Structural equality for the small, flat IPC payloads this file holds in
  *  state (party status, party queue). Deliberately not a deep-equality
@@ -1991,25 +1999,47 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         }
 
         setResolvingMedia({ id: media.id, title: media.title, stage: 'buffering' })
-        const playTask = api.stream.play(resolved.best, mediaId, kind, resolveId, {
-          catalogId: media.id,
-          title: media.title,
-          posterUrl: media.posterUrl,
-          mediaKind: kind,
-          seasonNumber: media.seasonNumber,
-          episodeNumber: media.episodeNumber,
-          episodeTitle: media.episodeTitle
-        })
-        // If cancellation/timeout wins the race, a late successful IPC result
-        // must not leave its newly-created backend playback session running.
-        void playTask.then(
-          () => {
-            if (!isCurrent()) api.playback.stop().catch(() => {})
-          },
-          () => {
-            // The awaited, deadline-bounded branch below owns user feedback.
-          }
-        )
+        // The copies ranked after the pick go along with it: main opens them
+        // in turn when the pick turns out to lack the wanted audio (see
+        // torbox.ts's playWithLanguageFallback), so an episode from a
+        // Japanese-only release does not just play in Japanese.
+        const playResolved = (
+          from: StreamResolveResult,
+          best: StreamCandidate
+        ): { task: Promise<PlaybackResult>; deadline: number } => {
+          const alternates = from.streams
+            .filter((stream) => stream !== best)
+            .slice(0, LANGUAGE_ALTERNATES)
+          const task = api.stream.play(
+            best,
+            mediaId,
+            kind,
+            resolveId,
+            {
+              catalogId: media.id,
+              title: media.title,
+              posterUrl: media.posterUrl,
+              mediaKind: kind,
+              seasonNumber: media.seasonNumber,
+              episodeNumber: media.episodeNumber,
+              episodeTitle: media.episodeTitle
+            },
+            alternates
+          )
+          // If cancellation/timeout wins the race, a late successful IPC result
+          // must not leave its newly-created backend playback session running.
+          void task.then(
+            () => {
+              if (!isCurrent()) api.playback.stop().catch(() => {})
+            },
+            () => {
+              // The awaited, deadline-bounded branch below owns user feedback.
+            }
+          )
+          // Each extra copy is another link, cache fill and open.
+          return { task, deadline: 90_000 + alternates.length * 45_000 }
+        }
+        const first = playResolved(resolved, resolved.best)
         // This one IPC call (play:stream) covers the whole real critical
         // path for starting a title, not just the player opening: TorBox's
         // own requestdl round trip, torbox.ts's retry-once wrapper around
@@ -2027,8 +2057,47 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         // bit longer for one already under way. 90s gives real margin
         // over that while the ordinary fast path (a few seconds) is
         // completely unaffected — this is a ceiling, not a typical wait.
-        await runPlaybackPreparationStage(playTask, 'buffering', 90_000, controller.signal)
+        const played = await runPlaybackPreparationStage(
+          first.task,
+          'buffering',
+          first.deadline,
+          controller.signal
+        )
         if (!isCurrent()) return { started: false, target: media }
+        // A shortcut answer (this disk, the copy that played last) is one
+        // copy, with nothing to fall back to. When it lacks the wanted
+        // audio, search properly once and let main try the others; copies it
+        // already knows lack the audio are not opened again.
+        if (played.languageFit?.audio === false && resolved.streams.length < 2) {
+          const wider = await runPlaybackPreparationStage(
+            api.stream.resolve(
+              kind,
+              resolveId,
+              media.title,
+              {
+                catalogId: media.id,
+                seasonNumber: media.seasonNumber,
+                episodeNumber: media.episodeNumber
+              },
+              media.originalTitle ? [media.originalTitle] : undefined,
+              { fresh: true }
+            ),
+            'buffering',
+            30_000,
+            controller.signal
+          ).catch(() => null)
+          if (!isCurrent()) return { started: false, target: media }
+          if (wider?.best && wider.streams.length > 1) {
+            const retry = playResolved(wider, wider.best)
+            await runPlaybackPreparationStage(
+              retry.task,
+              'buffering',
+              retry.deadline,
+              controller.signal
+            )
+            if (!isCurrent()) return { started: false, target: media }
+          }
+        }
         setResolvingMedia({ id: media.id, title: media.title, stage: 'starting' })
         setPlaybackMedia(media)
         // The two upfront warnings that used to fire here are gone with the

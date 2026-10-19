@@ -532,6 +532,10 @@ export interface PlaybackResult {
    *  default" and "the track you are hearing" are routinely different, so the
    *  audio menu has no other way to know what to mark. */
   selection?: { audio?: number }
+  /** Whether the copy that ended up playing has the wanted audio and
+   *  subtitles — what play:stream found after opening it, and after trying
+   *  other copies when it did not. */
+  languageFit?: { audio: boolean; subtitles: boolean }
 }
 
 // Tracked-show entry as persisted (normalizeTitle shape) — matches

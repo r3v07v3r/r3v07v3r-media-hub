@@ -38,7 +38,7 @@ import type {
   SubtitlesApplyResult
 } from '../../shared/media-hub/types'
 import { handle } from './ipcGuard'
-import { languageName, tracksLackLanguage } from '../../shared/media-hub/language'
+import { languageName, type LanguageFit } from '../../shared/media-hub/language'
 import { sendToRenderer } from './rendererBridge'
 import { getPlaybackBufferSeconds } from '../../shared/media-hub/playbackBuffer'
 import { normalizeVideoScaling } from '../../shared/media-hub/videoScaling'
@@ -60,6 +60,7 @@ import {
   storedSubtitleStyle
 } from './playerBridge'
 import { readSettings } from './settingsStore'
+import { logError } from './logger'
 import { setPressure } from './taskScheduler'
 import {
   cacheRootDir,
@@ -70,7 +71,7 @@ import {
   memoryModeEnabled,
   MIN_CACHE_BYTES
 } from './streamCache'
-import { downloadSubtitleText } from './subtitlesService'
+import { downloadSubtitleText, searchSubtitles } from './subtitlesService'
 
 export { mpvPath } from './mpv'
 
@@ -214,6 +215,37 @@ export async function preparePlayback(
 }
 
 /**
+ * The person's audio and subtitle languages, as playback reads them. The
+ * subtitle language falls back to the audio one: someone who wants English
+ * audio and never set a subtitle language still wants English subtitles
+ * when the audio is not English.
+ */
+export function playbackLanguages(): { audio: string; subtitles: string } {
+  const settings = readSettings()
+  const audio = settings.audioLanguage || 'en'
+  return { audio, subtitles: settings.subtitleLanguage || audio }
+}
+
+/**
+ * Said once, after play:stream has settled on a copy, when that copy still
+ * lacks the wanted audio — so "why is this episode in Japanese" has an
+ * answer, and the Audio menu is right there. Names the subtitles when the
+ * copy has them in the wanted language, since that is why it was chosen.
+ */
+export function notifyLanguageShortfall(tracks: MediaTracks, fit: LanguageFit): void {
+  if (fit.audio) return
+  const { audio, subtitles } = playbackLanguages()
+  const playing = tracks.audio[0]?.label || tracks.audio[0]?.language || 'another language'
+  sendToRenderer(MEDIA_HUB_CHANNELS.playerUiEvent, {
+    type: 'notify',
+    tone: 'info',
+    message: fit.subtitles
+      ? `No copy with ${languageName(audio)} audio — playing ${playing} with ${languageName(subtitles)} subtitles.`
+      : `No ${languageName(audio)} audio in this release — playing ${playing}.`
+  })
+}
+
+/**
  * Works out which episode follows the one now playing, and pushes it into the
  * live session snapshot as a second update.
  *
@@ -345,19 +377,9 @@ async function openPlayback(
     mediaKind: cacheMeta?.mediaKind
   })
   activeMediaTracks = tracks
-  // The ranking preferred a release that declared the wanted audio, and mpv
-  // asked the container for it (--alang); this is the one place that knows
-  // whether either worked. Said once, as a toast, so "why is this episode
-  // in Japanese" has an answer — and the Audio menu is right there.
-  const wantedAudio = settings.audioLanguage ?? ''
-  if (tracksLackLanguage(tracks, wantedAudio)) {
-    const playing = tracks.audio[0]?.label || tracks.audio[0]?.language || 'another language'
-    sendToRenderer(MEDIA_HUB_CHANNELS.playerUiEvent, {
-      type: 'notify',
-      tone: 'info',
-      message: `No ${languageName(wantedAudio)} audio in this release — playing ${playing}.`
-    })
-  }
+  // Whether the file has the wanted audio is play:stream's question now —
+  // it may open other copies before settling, and reports the outcome once
+  // with notifyLanguageShortfall below.
   // Now that mpv has opened the file, hand its duration to the cache so the
   // retention window can size itself in bytes rather than chunk counts.
   streamCache.setDuration(tracks.durationSeconds)
@@ -484,27 +506,69 @@ function parseSubtitleSelection(payload: SubtitlesApplyPayload | undefined): Sub
   return { provider: 'opensubtitles', fileId, downloadPath: '' }
 }
 
+/**
+ * Fetches subtitles in the wanted language and switches them on, for a copy
+ * play:stream settled on with neither the wanted audio nor subtitles — the
+ * case where nothing on screen can be understood. Off when the person turned
+ * automatic subtitles off. Best-effort: a search that finds nothing leaves
+ * the Subtitles menu exactly as it was, and the shortfall toast has already
+ * said why. Prefers a row whose hash matched the file playing, since that
+ * one is timed to this exact release.
+ */
+export async function fetchSubtitlesForShortfall(): Promise<void> {
+  if (readSettings().autoSubtitlesEnabled === false) return
+  const media = getSessionSnapshot()?.media
+  const playing = activeMediaUrl
+  if (!media || !playing) return
+  const { subtitles } = playbackLanguages()
+  try {
+    const results = await searchSubtitles(
+      { id: media.id, type: media.kind, title: media.title },
+      { language: subtitles, season: media.seasonNumber, episode: media.episodeNumber }
+    )
+    const pick = results.find((result) => result.hashMatch) ?? results[0]
+    // The title may have changed while the search ran.
+    if (!pick || activeMediaUrl !== playing) return
+    await applySubtitleSelection(pick)
+    sendToRenderer(MEDIA_HUB_CHANNELS.playerUiEvent, {
+      type: 'notify',
+      tone: 'info',
+      message: `Added ${languageName(subtitles)} subtitles from ${
+        pick.provider === 'subdl' ? 'SubDL' : 'OpenSubtitles'
+      }.`
+    })
+  } catch (error) {
+    logError('media-hub:subtitles:auto', error)
+  }
+}
+
+/** Downloads one provider row, writes it as an .srt and loads it into the
+ *  player, selected. Returns the subtitle ordinal it landed on. */
+async function applySubtitleSelection(payload: SubtitlesApplyPayload | undefined): Promise<number> {
+  if (!activeMediaUrl) throw new Error('No active media is available for subtitles.')
+  const srtText = await downloadSubtitleText(parseSubtitleSelection(payload))
+  clearActiveSubtitle()
+  const dir = subtitleCacheDir()
+  fs.mkdirSync(dir, { recursive: true })
+  const filePath = path.join(dir, `${crypto.randomBytes(16).toString('hex')}.srt`)
+  fs.writeFileSync(filePath, srtText, { mode: 0o600 })
+  activeSubtitlePath = filePath
+  // Handed straight to the player rather than converted or burned in. Both
+  // of the old branches are gone: the renderer no longer mounts a WebVTT
+  // <track> (so nothing calls srtToVtt, and with it goes the silent failure
+  // where an .ass or frame-based .sub came back from a provider, got
+  // `WEBVTT` stapled to the front, and produced a track with zero parseable
+  // cues that the app reported as success), and the compatibility branch
+  // that restarted the transcode with an `externalSubtitlePath`
+  // buildFfmpegArguments never actually read is gone with the transcode.
+  return addSubtitleFileToPlayer(filePath)
+}
+
 export function registerPlaybackIpc(): void {
   handle<SubtitlesApplyPayload | undefined, SubtitlesApplyResult>(
     MEDIA_HUB_CHANNELS.subtitlesApply,
     async (_event, payload) => {
-      if (!activeMediaUrl) throw new Error('No active media is available for subtitles.')
-      const srtText = await downloadSubtitleText(parseSubtitleSelection(payload))
-      clearActiveSubtitle()
-      const dir = subtitleCacheDir()
-      fs.mkdirSync(dir, { recursive: true })
-      const filePath = path.join(dir, `${crypto.randomBytes(16).toString('hex')}.srt`)
-      fs.writeFileSync(filePath, srtText, { mode: 0o600 })
-      activeSubtitlePath = filePath
-      // Handed straight to the player rather than converted or burned in. Both
-      // of the old branches are gone: the renderer no longer mounts a WebVTT
-      // <track> (so nothing calls srtToVtt, and with it goes the silent failure
-      // where an .ass or frame-based .sub came back from a provider, got
-      // `WEBVTT` stapled to the front, and produced a track with zero parseable
-      // cues that the app reported as success), and the compatibility branch
-      // that restarted the transcode with an `externalSubtitlePath`
-      // buildFfmpegArguments never actually read is gone with the transcode.
-      const ordinal = await addSubtitleFileToPlayer(filePath)
+      const ordinal = await applySubtitleSelection(payload)
       return { ok: true, ordinal }
     }
   )
