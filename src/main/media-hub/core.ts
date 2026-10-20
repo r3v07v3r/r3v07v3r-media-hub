@@ -407,7 +407,7 @@ const NOT_A_GROUP_RE = /^(?:\d{3,4}p|\d{1,2}bits?|\d{4}|\d\.\d|[0-9]+)$/
 /** Whether a candidate carries the wanted audio: the server's own track
  *  languages when it can say (a media server), else what the release name
  *  declares. Silence is neither. */
-function declaresPreferredLanguage(stream: StreamCandidate, preferred: string): boolean {
+export function declaresPreferredLanguage(stream: StreamCandidate, preferred: string): boolean {
   if (stream.audioLanguages?.length) {
     return stream.audioLanguages.some((language) => languageMatches(language, preferred))
   }

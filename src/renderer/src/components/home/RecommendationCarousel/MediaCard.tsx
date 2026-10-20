@@ -40,7 +40,8 @@ export function MediaCard({
   media,
   reason,
   showKind = false,
-  showProvenance = false
+  showProvenance = false,
+  originLabel
 }: {
   media: MediaItem
   reason?: string
@@ -50,6 +51,10 @@ export function MediaCard({
    *  badge — the Planned tab and the lists, where every card is planned
    *  and "which service" is the fact worth reading. */
   showProvenance?: boolean
+  /** What the detail page's back control names, where the route alone cannot
+   *  say — a collection page is /collections/:id, which openDetail has no
+   *  label for and would call Browse. */
+  originLabel?: string
 }) {
   const { plannedSources, myList, dislikedIds } = useAppState()
   const { openDetail, startPartyPlayback, openContextMenu, continueWatching, resolvingMedia } =
@@ -121,9 +126,9 @@ export function MediaCard({
         role="button"
         tabIndex={0}
         data-media-id={media.id}
-        onClick={() => openDetail(media)}
+        onClick={() => openDetail(media, originLabel)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') openDetail(media)
+          if (e.key === 'Enter') openDetail(media, originLabel)
         }}
         onContextMenu={handleContextMenu}
         aria-label={`${media.title}, ${media.matchPercentage ?? 0} percent match${

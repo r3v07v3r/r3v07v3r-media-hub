@@ -1,0 +1,189 @@
+/* The Collections pages. The wrap, heading, tabs and footnote are My Stuff's
+   own (MyStuff.module.css) and the ordered grid is the library grid's; what
+   is here is the tile, the progress bar and the summary row. */
+
+.description {
+  margin: -10px 0 22px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  max-width: 640px;
+}
+
+.tiles {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 32px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 18px;
+}
+
+.tile {
+  display: flex;
+  align-items: stretch;
+  gap: 16px;
+  height: 100%;
+  padding: 14px;
+  border-radius: var(--radius-medium);
+  color: inherit;
+  text-decoration: none;
+  transition: background var(--transition-fast);
+}
+
+.tile:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.tile:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 2px;
+}
+
+/* Three posters fanned over one another: enough to recognise the universe,
+   without the tile becoming a row of its own. */
+.faces {
+  position: relative;
+  flex: 0 0 auto;
+  width: 136px;
+  height: 126px;
+}
+
+.face {
+  position: absolute;
+  top: 0;
+  width: 84px;
+  height: 126px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+.face:nth-child(1) {
+  left: 0;
+  z-index: 3;
+}
+.face:nth-child(2) {
+  left: 26px;
+  z-index: 2;
+  opacity: 0.85;
+}
+.face:nth-child(3) {
+  left: 52px;
+  z-index: 1;
+  opacity: 0.65;
+}
+
+.tileBody {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.tileName {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.tileBlurb {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.tileCount {
+  margin-top: auto;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.bar {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.barFill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent-cyan);
+}
+
+/* ---- One universe ------------------------------------------------------ */
+
+.crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 10px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.crumb:hover {
+  color: var(--accent-cyan);
+}
+
+.summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.summary .bar {
+  flex: 0 1 220px;
+  min-width: 120px;
+}
+
+.summaryCount {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.next {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  border: 1px solid color-mix(in srgb, var(--accent-cyan) 40%, transparent);
+  background: color-mix(in srgb, var(--accent-cyan) 12%, transparent);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background var(--transition-fast);
+}
+
+.next:hover {
+  background: color-mix(in srgb, var(--accent-cyan) 22%, transparent);
+}
+
+.next:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 2px;
+}
+
+.orderNote {
+  margin: 0 0 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+}

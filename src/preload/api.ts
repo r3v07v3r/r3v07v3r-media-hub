@@ -754,14 +754,17 @@ export function createApi(transport: ApiTransport) {
           title?: string,
           cacheKey?: { catalogId?: string; seasonNumber?: number; episodeNumber?: number },
           /** Other names the title is released under (an anime's romaji name). */
-          altTitles?: string[]
+          altTitles?: string[],
+          /** Skip the shortcut answers and search properly — see torbox.ts. */
+          options?: { fresh?: boolean }
         ): Promise<StreamResolveResult> =>
           transport.invoke(MEDIA_HUB_CHANNELS.streamResolve, {
             type,
             id,
             title,
             cacheKey,
-            altTitles
+            altTitles,
+            fresh: options?.fresh
           }),
         // `type`/`resolveId` are optional and only used so the main process
         // can remember "the stream that actually worked" under the exact key
@@ -772,10 +775,18 @@ export function createApi(transport: ApiTransport) {
           mediaId?: string,
           type?: string,
           resolveId?: string,
-          meta?: CacheSessionMeta
+          meta?: CacheSessionMeta,
+          /** The copies ranked after `stream`, tried in turn when it lacks
+           *  the wanted audio — see torbox.ts's playWithLanguageFallback. */
+          alternates?: StreamCandidate[],
+          /** A copy the renderer may still replace — see torbox.ts's
+           *  PlayStreamPayload.provisional. */
+          options?: { provisional?: boolean }
         ): Promise<PlaybackResult> =>
           transport.invoke(MEDIA_HUB_CHANNELS.playStream, {
             stream,
+            alternates,
+            provisional: options?.provisional,
             mediaId,
             type,
             resolveId,
@@ -813,6 +824,10 @@ export function createApi(transport: ApiTransport) {
         // touches the stream itself anymore.
         stop: (options?: { watched?: boolean }): Promise<{ ok: true }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.playbackStop, options),
+        /** For a provisional copy that stays: switch on its subtitles, say
+         *  what is playing, fetch subtitles if it has none. */
+        settleLanguage: (): Promise<{ ok: true }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.playbackLanguageSettle),
         thumbnail: (seconds: number): Promise<string | null> =>
           transport.invoke(MEDIA_HUB_CHANNELS.playbackThumbnail, seconds),
         skipTimes: (
