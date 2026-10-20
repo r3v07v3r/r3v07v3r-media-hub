@@ -38,7 +38,7 @@ import type {
   SubtitlesApplyResult
 } from '../../shared/media-hub/types'
 import { handle } from './ipcGuard'
-import { languageName, tracksLackLanguage } from '../../shared/media-hub/language'
+import { languageFit, languageName, type LanguageFit } from '../../shared/media-hub/language'
 import { sendToRenderer } from './rendererBridge'
 import { getPlaybackBufferSeconds } from '../../shared/media-hub/playbackBuffer'
 import { normalizeVideoScaling } from '../../shared/media-hub/videoScaling'
@@ -52,7 +52,10 @@ import {
   addSubtitleFileToPlayer,
   applyStoredNightMode,
   applyStoredSubtitleStyle,
+  ensureSubtitleLanguage,
   getSessionSnapshot,
+  noteSubtitleChoice,
+  subtitleChoiceCount,
   pushSessionSnapshot,
   nightModeEnabled,
   startPlayerSession,
@@ -60,6 +63,7 @@ import {
   storedSubtitleStyle
 } from './playerBridge'
 import { readSettings } from './settingsStore'
+import { logError } from './logger'
 import { setPressure } from './taskScheduler'
 import {
   cacheRootDir,
@@ -70,7 +74,7 @@ import {
   memoryModeEnabled,
   MIN_CACHE_BYTES
 } from './streamCache'
-import { downloadSubtitleText } from './subtitlesService'
+import { downloadSubtitleText, searchSubtitles } from './subtitlesService'
 
 export { mpvPath } from './mpv'
 
@@ -108,10 +112,9 @@ const streamCache = createStreamCache()
 let thumbnailRequest = 0
 let thumbnailInFlight: Promise<void> = Promise.resolve()
 
-let activeMediaUrl = ''
 // StreamCache's local server URL for the current title — what mpv actually
-// opens. Distinct from activeMediaUrl (the real, remote debrid link), which
-// only streamCache.start() ever touches directly. Thumbnail capture reads from
+// opens. Distinct from the real, remote debrid link, which only
+// streamCache.start() ever touches directly. Thumbnail capture reads from
 // this one too, so it never costs a second connection to the remote link.
 let activeCacheUrl = ''
 let activeMediaTracks: MediaTracks = { video: [], audio: [], subtitle: [], probed: false }
@@ -214,6 +217,85 @@ export async function preparePlayback(
 }
 
 /**
+ * The person's audio and subtitle languages, as playback reads them. Each
+ * defaults to English on its own, the same default Settings shows and the
+ * subtitle search uses — an unset subtitle language does not follow the
+ * audio one, so someone who chose Japanese audio still gets English
+ * subtitles.
+ */
+export function playbackLanguages(): { audio: string; subtitles: string } {
+  const settings = readSettings()
+  return {
+    audio: settings.audioLanguage || 'en',
+    subtitles: settings.subtitleLanguage || 'en'
+  }
+}
+
+/**
+ * Said once, after play:stream has settled on a copy, when that copy still
+ * lacks the wanted audio — so "why is this episode in Japanese" has an
+ * answer, and the Audio menu is right there. Names the subtitles when the
+ * copy has them in the wanted language, since that is why it was chosen.
+ */
+export function notifyLanguageShortfall(tracks: MediaTracks, fit: LanguageFit): void {
+  if (fit.audio) return
+  const { audio, subtitles } = playbackLanguages()
+  const playing = tracks.audio[0]?.label || tracks.audio[0]?.language || 'another language'
+  sendToRenderer(MEDIA_HUB_CHANNELS.playerUiEvent, {
+    type: 'notify',
+    tone: 'info',
+    message: fit.subtitles
+      ? `No copy with ${languageName(audio)} audio — playing ${playing} with ${languageName(subtitles)} subtitles.`
+      : `No ${languageName(audio)} audio in this release — playing ${playing}.`
+  })
+}
+
+/** The subtitle choice count when a provisional copy started playing — see
+ *  holdLanguageSettle. Null when no provisional copy is waiting. */
+let provisionalSince: number | null = null
+
+/** Called by play:stream when it leaves a provisional copy unsettled. A
+ *  subtitle picked while the renderer searches again is the person's
+ *  choice, and the settle that may follow must not undo it. */
+export function holdLanguageSettle(): void {
+  provisionalSince = subtitleChoiceCount()
+}
+
+/** The held count, once: whoever settles the provisional copy takes it. */
+export function takeHeldLanguageSettle(): number | undefined {
+  const since = provisionalSince ?? undefined
+  provisionalSince = null
+  return since
+}
+
+/**
+ * What follows settling on a copy without the wanted audio: its subtitles
+ * in the wanted language switched on if it has them, one toast saying what
+ * is playing, and subtitles fetched from a provider if it has none. Run by
+ * play:stream, or — for a provisional copy the renderer may still replace —
+ * by playback:language-settle once the renderer knows it will not.
+ *
+ * `since` is the subtitle choice count the copy started from. If anything
+ * has been chosen since, the toast still says what is playing, but nothing
+ * is switched or fetched over that choice.
+ */
+export async function settleLanguageShortfall(
+  tracks: MediaTracks,
+  fit: LanguageFit,
+  since = subtitleChoiceCount()
+): Promise<void> {
+  if (fit.audio) return
+  const untouched = subtitleChoiceCount() === since
+  if (fit.subtitles && untouched) {
+    await ensureSubtitleLanguage(tracks, playbackLanguages().subtitles)
+  }
+  notifyLanguageShortfall(tracks, fit)
+  // Neither the audio nor subtitles anyone here can read: fetch some.
+  // Not awaited — playback has started, and the search can take seconds.
+  if (!fit.subtitles && untouched) void fetchSubtitlesForShortfall(since)
+}
+
+/**
  * Works out which episode follows the one now playing, and pushes it into the
  * live session snapshot as a second update.
  *
@@ -275,7 +357,6 @@ async function openPlayback(
   cacheMeta?: CacheSessionMeta,
   localToken?: string
 ): Promise<PlaybackResult> {
-  activeMediaUrl = url
   // StreamCache is the sole owner of the upstream connection to `url`. It is
   // started before the player opens anything, and mpv then reads only from its
   // local server — never the remote link. That constraint has not changed with
@@ -345,19 +426,9 @@ async function openPlayback(
     mediaKind: cacheMeta?.mediaKind
   })
   activeMediaTracks = tracks
-  // The ranking preferred a release that declared the wanted audio, and mpv
-  // asked the container for it (--alang); this is the one place that knows
-  // whether either worked. Said once, as a toast, so "why is this episode
-  // in Japanese" has an answer — and the Audio menu is right there.
-  const wantedAudio = settings.audioLanguage ?? ''
-  if (tracksLackLanguage(tracks, wantedAudio)) {
-    const playing = tracks.audio[0]?.label || tracks.audio[0]?.language || 'another language'
-    sendToRenderer(MEDIA_HUB_CHANNELS.playerUiEvent, {
-      type: 'notify',
-      tone: 'info',
-      message: `No ${languageName(wantedAudio)} audio in this release — playing ${playing}.`
-    })
-  }
+  // Whether the file has the wanted audio is play:stream's question now —
+  // it may open other copies before settling, and reports the outcome once
+  // with notifyLanguageShortfall below.
   // Now that mpv has opened the file, hand its duration to the cache so the
   // retention window can size itself in bytes rather than chunk counts.
   streamCache.setDuration(tracks.durationSeconds)
@@ -441,7 +512,6 @@ export async function stopPlayback(deleteCache = false): Promise<void> {
   // app quitting. A missed release would leave background work suspended
   // for the rest of the session with nothing playing to explain it.
   setPressure('playback', 'idle')
-  activeMediaUrl = ''
   activeCacheUrl = ''
   activeMediaTracks = { video: [], audio: [], subtitle: [], probed: false }
   clearActiveSubtitle()
@@ -484,30 +554,112 @@ function parseSubtitleSelection(payload: SubtitlesApplyPayload | undefined): Sub
   return { provider: 'opensubtitles', fileId, downloadPath: '' }
 }
 
+/**
+ * Fetches subtitles in the wanted language and switches them on, for a copy
+ * play:stream settled on with neither the wanted audio nor subtitles — the
+ * case where nothing on screen can be understood. Off when the person turned
+ * automatic subtitles off. Best-effort: a search that finds nothing leaves
+ * the Subtitles menu exactly as it was, and the shortfall toast has already
+ * said why. Prefers a row whose hash matched the file playing, since that
+ * one is timed to this exact release.
+ */
+export async function fetchSubtitlesForShortfall(
+  /** The subtitle choice count to measure "chosen since" from. */
+  since = subtitleChoiceCount()
+): Promise<void> {
+  if (readSettings().autoSubtitlesEnabled === false) return
+  const media = getSessionSnapshot()?.media
+  // The cache URL, which every session has — a copy played from this disk
+  // has no remote link at all, and is as likely to need subtitles as any.
+  const playing = activeCacheUrl
+  if (!media || !playing) return
+  // Any subtitle chosen after `since` — by hand, from the menu — wins;
+  // this fetch then lands nothing.
+  const { subtitles } = playbackLanguages()
+  try {
+    const results = await searchSubtitles(
+      { id: media.id, type: media.kind, title: media.title },
+      { language: subtitles, season: media.seasonNumber, episode: media.episodeNumber }
+    )
+    const pick = results.find((result) => result.hashMatch) ?? results[0]
+    // The title may have changed while the search ran.
+    if (!pick || activeCacheUrl !== playing || subtitleChoiceCount() !== since) return
+    await applySubtitleSelection(pick, since)
+    sendToRenderer(MEDIA_HUB_CHANNELS.playerUiEvent, {
+      type: 'notify',
+      tone: 'info',
+      message: `Added ${languageName(subtitles)} subtitles from ${
+        pick.provider === 'subdl' ? 'SubDL' : 'OpenSubtitles'
+      }.`
+    })
+  } catch (error) {
+    logError('media-hub:subtitles:auto', error)
+  }
+}
+
+/** Downloads one provider row, writes it as an .srt and loads it into the
+ *  player, selected. Returns the subtitle ordinal it landed on. `since`,
+ *  for an automatic fetch, is the choice count it started from: any choice
+ *  made after it cancels this one. A newer apply always cancels an older
+ *  one still downloading, so the last thing chosen is what shows. */
+async function applySubtitleSelection(
+  payload: SubtitlesApplyPayload | undefined,
+  since?: number
+): Promise<number> {
+  if (since !== undefined && subtitleChoiceCount() !== since) {
+    throw new Error('A subtitle was chosen meanwhile.')
+  }
+  const mine = noteSubtitleChoice()
+  // activeCacheUrl is set for every session, a local one included. The
+  // remote link this used to check is empty for a copy played from this
+  // disk, which refused subtitles for every one.
+  if (!activeCacheUrl) throw new Error('No active media is available for subtitles.')
+  const playing = activeCacheUrl
+  const srtText = await downloadSubtitleText(parseSubtitleSelection(payload))
+  // The download takes a while; another title may have started meanwhile,
+  // and this file must not land in it.
+  if (activeCacheUrl !== playing) {
+    throw new Error('The title changed before the subtitles arrived.')
+  }
+  if (subtitleChoiceCount() !== mine) throw new Error('A subtitle was chosen meanwhile.')
+  clearActiveSubtitle()
+  const dir = subtitleCacheDir()
+  fs.mkdirSync(dir, { recursive: true })
+  const filePath = path.join(dir, `${crypto.randomBytes(16).toString('hex')}.srt`)
+  fs.writeFileSync(filePath, srtText, { mode: 0o600 })
+  activeSubtitlePath = filePath
+  // Handed straight to the player rather than converted or burned in. Both
+  // of the old branches are gone: the renderer no longer mounts a WebVTT
+  // <track> (so nothing calls srtToVtt, and with it goes the silent failure
+  // where an .ass or frame-based .sub came back from a provider, got
+  // `WEBVTT` stapled to the front, and produced a track with zero parseable
+  // cues that the app reported as success), and the compatibility branch
+  // that restarted the transcode with an `externalSubtitlePath`
+  // buildFfmpegArguments never actually read is gone with the transcode.
+  return addSubtitleFileToPlayer(filePath)
+}
+
 export function registerPlaybackIpc(): void {
   handle<SubtitlesApplyPayload | undefined, SubtitlesApplyResult>(
     MEDIA_HUB_CHANNELS.subtitlesApply,
     async (_event, payload) => {
-      if (!activeMediaUrl) throw new Error('No active media is available for subtitles.')
-      const srtText = await downloadSubtitleText(parseSubtitleSelection(payload))
-      clearActiveSubtitle()
-      const dir = subtitleCacheDir()
-      fs.mkdirSync(dir, { recursive: true })
-      const filePath = path.join(dir, `${crypto.randomBytes(16).toString('hex')}.srt`)
-      fs.writeFileSync(filePath, srtText, { mode: 0o600 })
-      activeSubtitlePath = filePath
-      // Handed straight to the player rather than converted or burned in. Both
-      // of the old branches are gone: the renderer no longer mounts a WebVTT
-      // <track> (so nothing calls srtToVtt, and with it goes the silent failure
-      // where an .ass or frame-based .sub came back from a provider, got
-      // `WEBVTT` stapled to the front, and produced a track with zero parseable
-      // cues that the app reported as success), and the compatibility branch
-      // that restarted the transcode with an `externalSubtitlePath`
-      // buildFfmpegArguments never actually read is gone with the transcode.
-      const ordinal = await addSubtitleFileToPlayer(filePath)
+      const ordinal = await applySubtitleSelection(payload)
       return { ok: true, ordinal }
     }
   )
+
+  handle<undefined, { ok: true }>(MEDIA_HUB_CHANNELS.playbackLanguageSettle, async () => {
+    const since = takeHeldLanguageSettle()
+    if (activeCacheUrl) {
+      const { audio, subtitles } = playbackLanguages()
+      await settleLanguageShortfall(
+        activeMediaTracks,
+        languageFit(activeMediaTracks, audio, subtitles),
+        since
+      )
+    }
+    return { ok: true }
+  })
 
   handle<{ watched?: boolean } | undefined, { ok: true }>(
     MEDIA_HUB_CHANNELS.playbackStop,

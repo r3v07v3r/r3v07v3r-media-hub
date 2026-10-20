@@ -317,6 +317,11 @@ export interface StreamCandidate {
    *  without contacting any source. */
   cacheToken?: string
   complete?: boolean
+  /** localcache candidates only — which release the cached bytes are, when
+   *  the session recorded it. Lets the same release be recognised whether
+   *  it comes off this disk or from its source (see languageFallback.ts's
+   *  sourceKey). */
+  cacheSourceRef?: CacheSourceRef
   name?: string
   title?: string
   sources?: string[]
@@ -348,6 +353,12 @@ export interface StreamResolveResult {
    *  apart from a genuine "nothing exists for this title anywhere" dead
    *  end, since only one of those is worth "try again in a few minutes." */
   queued?: boolean
+  /** True when the answer came from a shortcut (this disk, the hour-cached
+   *  answer, the cache daemon, the media server's copy ending the search,
+   *  the copy that played last, or a fallback after the search failed)
+   *  rather than a completed search — so a fresh search may find copies
+   *  this one never looked for. */
+  shortcut?: boolean
 }
 
 export interface MediaTrack {
@@ -532,6 +543,10 @@ export interface PlaybackResult {
    *  default" and "the track you are hearing" are routinely different, so the
    *  audio menu has no other way to know what to mark. */
   selection?: { audio?: number }
+  /** Whether the copy that ended up playing has the wanted audio and
+   *  subtitles — what play:stream found after opening it, and after trying
+   *  other copies when it did not. */
+  languageFit?: { audio: boolean; subtitles: boolean }
 }
 
 // Tracked-show entry as persisted (normalizeTitle shape) — matches
