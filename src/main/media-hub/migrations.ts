@@ -554,7 +554,10 @@ const animeGroupLedger: Migration = {
 const indexReleaseDate: Migration = {
   name: 'index-release-date',
   apply(sql) {
-    sql.exec('ALTER TABLE catalog_index ADD COLUMN release_date TEXT')
+    // Tolerant of the column already being there: a database rolled back
+    // to an earlier version with this column left in place (the title-key
+    // backfill test does exactly that) must not fail to open over it.
+    addColumnIfMissing(sql, 'catalog_index', 'release_date', 'TEXT')
   }
 }
 

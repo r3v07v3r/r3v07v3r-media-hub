@@ -336,6 +336,7 @@ check('an index crawled before migration 5 gets its search keys backfilled', () 
   // And what later migrations added, or they would run a second time over
   // their own work.
   raw.exec('DROP TABLE anime_group_ledger')
+  raw.exec('ALTER TABLE catalog_index DROP COLUMN release_date')
   raw.exec('PRAGMA user_version = 5')
   raw.close()
   const after = createDatabase(file, 'profile-under-test')
