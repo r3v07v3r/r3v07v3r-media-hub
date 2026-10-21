@@ -12,7 +12,9 @@ import assert from 'node:assert/strict'
 
 import {
   UNIVERSES,
+  addedCollectionId,
   findUniverse,
+  parseTraktListLink,
   universeEntries,
   universeEntryReleased,
   universeEntryToCatalogItem,
@@ -123,5 +125,28 @@ assert.equal(card.releaseDate, '2010-06-01')
 assert.deepEqual([card.genres, card.videos, card.trailers], [[], [], []])
 assert.ok(card.poster.includes('/tt3/'), 'artwork is addressed by the same id')
 assert.equal(new URL(card.poster).hostname, 'images.metahub.space', 'a host the page may load')
+
+// ---- A pasted Trakt list link -------------------------------------------
+
+assert.deepEqual(parseTraktListLink('https://trakt.tv/lists/1338'), { listId: 1338 })
+assert.deepEqual(parseTraktListLink('  trakt.tv/lists/55?sort=rank,asc '), { listId: 55 })
+assert.deepEqual(
+  parseTraktListLink('https://trakt.tv/users/sean/lists/star-wars-in-machete-order?sort=rank,asc'),
+  { owner: 'sean', slug: 'star-wars-in-machete-order' }
+)
+assert.deepEqual(parseTraktListLink('https://app.trakt.tv/users/sean/lists/stargate/'), {
+  owner: 'sean',
+  slug: 'stargate'
+})
+assert.deepEqual(parseTraktListLink('https://www.trakt.tv/lists/7'), { listId: 7 })
+assert.equal(parseTraktListLink('https://simkl.com/5/list/2707/mcu'), null, 'Simkl is not read')
+assert.equal(parseTraktListLink('https://trakt.tv.evil.example/lists/1'), null, 'host is exact')
+assert.equal(parseTraktListLink('https://trakt.tv/movies/inception-2010'), null, 'not a list')
+assert.equal(parseTraktListLink('https://trakt.tv/lists/official/abc'), null, 'id must be a number')
+assert.equal(parseTraktListLink(''), null)
+assert.equal(parseTraktListLink('not a link at all'), null)
+assert.equal(addedCollectionId(1338), 'trakt-1338')
+assert.match(addedCollectionId(1338), /^[a-z0-9-]+$/, 'a route segment, like the bundled ids')
+assert.ok(!UNIVERSES.some((universe) => universe.id.startsWith('trakt-')), 'no clash with added')
 
 console.log('universes: ok')

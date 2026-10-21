@@ -265,6 +265,23 @@ export async function traktRequest<T = unknown>(
   return writes ? retryOnceOn429(send) : send()
 }
 
+/**
+ * A read of Trakt's public data — lists, search — that needs the app key
+ * and nobody signed in. Throws when no key is saved.
+ */
+export async function traktPublicRequest<T = unknown>(
+  pathname: string,
+  priority: TaskPriority = 'interactive'
+): Promise<T> {
+  const { clientId } = traktCredentials()
+  if (!clientId) throw new Error('No Trakt app key is saved.')
+  return fetchJson<T>(
+    `${API}${pathname}`,
+    { headers: headers(clientId) },
+    { priority, label: 'Trakt' }
+  )
+}
+
 /** Who is signed in, for the Settings card. */
 export async function traktStatus(): Promise<TraktStatus> {
   const { clientId, clientSecret, accessToken } = traktCredentials()

@@ -17,7 +17,10 @@
 //
 //   - catalog_cache. Every row of it is refetchable, and it is by far the
 //     largest thing in the file — a single catalog row runs to megabytes. A
-//     backup that is mostly cache is a backup people stop taking.
+//     backup that is mostly cache is a backup people stop taking. The one
+//     exception is the Collections page's record (which lists were added from
+//     Trakt, which collections were removed): it is kept there, but it is a
+//     choice somebody made, and it travels as BackupFile.collections.
 //
 //   - credentials. API tokens are stored through Electron's safeStorage,
 //     which is bound to the OS keychain of the machine that wrote them. They
@@ -32,6 +35,7 @@
 import fs from 'node:fs'
 import type { DatabaseSync, SQLOutputValue } from 'node:sqlite'
 
+import { COLLECTIONS_KEY_PREFIX, COLLECTIONS_STATE_TTL_MS } from '../../shared/media-hub/universes'
 import { SCHEMA_VERSION } from './migrations'
 
 /** Tables a backup carries, each keyed by profile. Order matters on restore:
@@ -96,6 +100,14 @@ export interface BackupFile {
    * the way this install's are, which is the only thing that can be assumed.
    */
   readonly animeGroups?: unknown[]
+  /**
+   * Each profile's Collections record — added Trakt lists and removed
+   * collections — keyed by profile id (main/media-hub/collections.ts).
+   *
+   * Optional: a backup from before Collections had one. Restoring a file
+   * without it leaves this install's records as they are, as the ledger does.
+   */
+  readonly collections?: Record<string, unknown>
   readonly tables: Record<string, Row[]>
 }
 
@@ -150,6 +162,10 @@ export function writeBackup(
     profiles,
     activeProfileId: options.activeProfileId,
     ...animeGroupsOf(sql),
+    ...collectionsOf(
+      sql,
+      profiles.map((profile) => String(profile.id ?? ''))
+    ),
     tables
   }
 
@@ -173,6 +189,31 @@ function animeGroupsOf(sql: DatabaseSync): { animeGroups?: unknown[] } {
   } catch {
     return {}
   }
+}
+
+/**
+ * The declared profiles' Collections records. Always present, even empty: an
+ * empty snapshot restores as "nothing added, nothing removed", while a file
+ * with no field at all is one from before Collections and is left alone.
+ */
+function collectionsOf(
+  sql: DatabaseSync,
+  profileIds: string[]
+): { collections: Record<string, unknown> } {
+  const collections: Record<string, unknown> = {}
+  for (const profileId of profileIds.filter(Boolean)) {
+    const row = sql
+      .prepare('SELECT payload_json FROM catalog_cache WHERE cache_key=?')
+      .get(`${COLLECTIONS_KEY_PREFIX}${profileId}`) as Row | undefined
+    if (!row) continue
+    try {
+      const record: unknown = JSON.parse(String(row.payload_json))
+      if (record && typeof record === 'object') collections[profileId] = record
+    } catch {
+      // An unreadable record is left out rather than failing the backup.
+    }
+  }
+  return { collections }
 }
 
 /** Reads and validates a backup file, throwing a message worth showing. */
@@ -324,6 +365,33 @@ export function restoreBackup(sql: DatabaseSync, backup: BackupFile): RestoreSum
            ON CONFLICT(id) DO UPDATE SET groups_json=excluded.groups_json,recorded_at=excluded.recorded_at`
         )
         .run(JSON.stringify(backup.animeGroups), new Date().toISOString())
+    }
+    // The Collections records replace this install's, like the tables do —
+    // but only when the file carries them (see BackupFile.collections), and
+    // only for profiles the file declares.
+    if (backup.collections && typeof backup.collections === 'object') {
+      sql
+        .prepare('DELETE FROM catalog_cache WHERE cache_key LIKE ?')
+        .run(`${COLLECTIONS_KEY_PREFIX}%`)
+      const declaredIds = new Set(
+        (backup.profiles as { id?: unknown }[]).map((profile) => String(profile?.id ?? ''))
+      )
+      const write = sql.prepare(
+        `INSERT INTO catalog_cache(cache_key,payload_json,expires_at,updated_at) VALUES(?,?,?,?)
+         ON CONFLICT(cache_key) DO UPDATE SET payload_json=excluded.payload_json,expires_at=excluded.expires_at,updated_at=excluded.updated_at`
+      )
+      const now = Date.now()
+      for (const [profileId, record] of Object.entries(backup.collections)) {
+        if (!profileId || !declaredIds.has(profileId) || !record || typeof record !== 'object') {
+          continue
+        }
+        write.run(
+          `${COLLECTIONS_KEY_PREFIX}${profileId}`,
+          JSON.stringify(record),
+          now + COLLECTIONS_STATE_TTL_MS,
+          now
+        )
+      }
     }
     sql.exec('COMMIT')
   } catch (error) {

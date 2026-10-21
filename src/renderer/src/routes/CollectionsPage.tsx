@@ -6,9 +6,13 @@
 // story runs in come from the bundled list (shared/media-hub/universes.ts,
 // which says why nothing online could supply it); everything else on a card —
 // artwork, rating, watched state — is the local library's own.
+//
+// Past the bundled set, any public Trakt list can be added (Browse for more,
+// or a pasted link), and any collection, bundled or added, can be taken off
+// the page and restored later (main/media-hub/collections.ts keeps both).
 
-import { useMemo } from 'react'
-import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { Icon } from '@renderer/components/icons/Icon'
 import { MediaCard } from '@renderer/components/home/RecommendationCarousel/MediaCard'
@@ -17,14 +21,16 @@ import grid from '@renderer/components/category/MediaGrid.module.css'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { resolveArtwork } from '@renderer/lib/artwork'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
+import { useCollections, type Collections } from '@renderer/lib/mediaHub/useCollections'
 import { useUniverseItems } from '@renderer/lib/mediaHub/useUniverseItems'
 import { getWatchStatus } from '@renderer/lib/mediaHub/watchStatus'
 import type { ContinueWatchingItem, MediaItem } from '@renderer/types'
 import {
-  UNIVERSES,
-  findUniverse,
+  addedCollectionId,
+  parseTraktListLink,
   universeEntries,
   universeEntryReleased,
+  type CollectionCandidate,
   type UniverseEntry,
   type UniverseOrder
 } from '@shared/media-hub/universes'
@@ -64,20 +70,210 @@ function ProgressBar({ done, total }: { done: number; total: number }) {
   )
 }
 
+/** A main-process error as a sentence: Electron wraps the message. */
+function errorText(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
+}
+
+/**
+ * Browse for more: Trakt's public lists, the most liked first, or the ones
+ * matching a search — and below them, a box for a list's link.
+ */
+function CollectionBrowser({ collections }: { collections: Collections }) {
+  const api = window.api?.mediaHub?.collections
+  const navigate = useNavigate()
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<CollectionCandidate[] | null>(null)
+  const [searchError, setSearchError] = useState('')
+  const [adding, setAdding] = useState<number | 'link' | null>(null)
+  const [addError, setAddError] = useState('')
+  const [link, setLink] = useState('')
+  const [linkError, setLinkError] = useState('')
+
+  // Searched once typing pauses; an empty box is the most liked lists, so
+  // the panel opens with something in it.
+  useEffect(() => {
+    if (!api?.search) return
+    let cancelled = false
+    const timer = setTimeout(
+      () => {
+        setSearchError('')
+        void api
+          .search(query.trim())
+          .then((answer) => {
+            if (!cancelled) setResults(answer.results)
+          })
+          .catch((error) => {
+            if (!cancelled) {
+              setResults([])
+              setSearchError(errorText(error))
+            }
+          })
+      },
+      query.trim() ? 400 : 0
+    )
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [api, query])
+
+  const add = async (from: { listId: number } | { link: string }): Promise<void> => {
+    if (!api?.add) return
+    setAdding('listId' in from ? from.listId : 'link')
+    setAddError('')
+    setLinkError('')
+    try {
+      const answer = await api.add(from)
+      if (collections.apply(answer)) navigate(`/collections/${answer.addedId}`)
+    } catch (error) {
+      if ('link' in from) setLinkError(errorText(error))
+      else setAddError(errorText(error))
+    } finally {
+      setAdding(null)
+    }
+  }
+
+  const submitLink = (event: FormEvent): void => {
+    event.preventDefault()
+    if (!parseTraktListLink(link)) {
+      setLinkError('Paste a trakt.tv list link: trakt.tv/users/…/lists/… or trakt.tv/lists/….')
+      return
+    }
+    void add({ link })
+  }
+
+  return (
+    <section className={`${styles.browser} glass-panel`} aria-label="Browse for more">
+      <label className={styles.searchField}>
+        <Icon name="search" size={14} />
+        <input
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search Trakt lists — Stargate, Bond, Pixar…"
+          aria-label="Search Trakt lists"
+          autoFocus
+        />
+      </label>
+      <p className={styles.browserNote}>
+        {query.trim() ? 'Lists on Trakt matching your search.' : 'The most liked lists on Trakt.'}{' '}
+        Anyone can make one, so check the count and the author.
+      </p>
+      {searchError && <p className={styles.error}>{searchError}</p>}
+      {addError && <p className={styles.error}>{addError}</p>}
+      {results === null && !searchError && <p className={styles.browserNote}>Looking…</p>}
+      {results?.length === 0 && !searchError && (
+        <p className={styles.browserNote}>No lists found.</p>
+      )}
+      {results && results.length > 0 && (
+        <ul className={styles.results}>
+          {results.map((result) => {
+            const id = addedCollectionId(result.listId)
+            const held = Boolean(collections.find(id)) && !collections.isRemoved(id)
+            return (
+              <li key={result.listId} className={styles.result}>
+                <span className={styles.resultBody}>
+                  <span className={styles.resultName}>{result.name}</span>
+                  <span className={styles.resultMeta}>
+                    {result.itemCount} titles · by {result.owner}
+                    {result.likes > 0 ? ` · ${result.likes} likes` : ''}
+                  </span>
+                  {result.description && (
+                    <span className={styles.resultDescription}>{result.description}</span>
+                  )}
+                </span>
+                {held ? (
+                  <Link to={`/collections/${id}`} className={styles.pill}>
+                    <Icon name="check" size={12} />
+                    Added
+                  </Link>
+                ) : (
+                  <button
+                    type="button"
+                    className={styles.pill}
+                    disabled={adding !== null}
+                    onClick={() => void add({ listId: result.listId })}
+                  >
+                    <Icon name="plus" size={12} />
+                    {adding === result.listId ? 'Adding…' : 'Add'}
+                  </button>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      <form className={styles.linkRow} onSubmit={submitLink}>
+        <input
+          type="text"
+          value={link}
+          onChange={(event) => {
+            setLink(event.target.value)
+            setLinkError('')
+          }}
+          placeholder="Or paste a Trakt list link"
+          aria-label="Trakt list link"
+          className={styles.linkInput}
+        />
+        <button type="submit" className={styles.pill} disabled={!link.trim() || adding !== null}>
+          {adding === 'link' ? 'Adding…' : 'Add by link'}
+        </button>
+      </form>
+      {linkError && <p className={styles.error}>{linkError}</p>}
+    </section>
+  )
+}
+
 /** Every universe, as a tile. */
 export default function CollectionsPage() {
   useRestoreBrowsingOrigin(true)
   const { continueWatching } = useAppState()
-  const items = useUniverseItems(UNIVERSES)
+  const collections = useCollections()
+  const items = useUniverseItems(collections.shown)
+  const [browsing, setBrowsing] = useState(false)
+
+  const restore = (id: string): void => {
+    void window.api?.mediaHub?.collections
+      ?.restore(id)
+      .then(collections.apply)
+      .catch(() => {
+        // Nothing changed; the row stays to be tried again.
+      })
+  }
 
   return (
     <div className={page.wrap}>
-      <h1 className={page.heading}>Collections</h1>
+      <div className={styles.headingRow}>
+        <h1 className={page.heading}>Collections</h1>
+        {collections.traktReady && (
+          <button
+            type="button"
+            className={styles.pill}
+            aria-expanded={browsing}
+            onClick={() => setBrowsing((open) => !open)}
+          >
+            <Icon name={browsing ? 'x' : 'plus'} size={12} />
+            {browsing ? 'Close' : 'Browse for more'}
+          </button>
+        )}
+      </div>
       <p className={styles.description}>
         Whole universes in order — every film and series, with how far through each you are.
       </p>
+      {collections.loaded && !collections.traktReady && window.api?.mediaHub?.collections && (
+        <p className={styles.orderNote}>
+          To add more collections from Trakt, save a Trakt app key under{' '}
+          <Link to="/settings" className={styles.inlineLink}>
+            Settings → Accounts → Tracking
+          </Link>
+          .
+        </p>
+      )}
+      {browsing && <CollectionBrowser collections={collections} />}
       <ul className={styles.tiles}>
-        {UNIVERSES.map((universe) => {
+        {collections.shown.map((universe) => {
           const released = universeEntries(universe, 'release')
           const done = released.filter((entry) =>
             isFinished(items.get(entry.id), continueWatching)
@@ -122,6 +318,34 @@ export default function CollectionsPage() {
           )
         })}
       </ul>
+
+      {collections.removed.length > 0 && (
+        <details className={styles.removed}>
+          <summary>Removed collections ({collections.removed.length})</summary>
+          <ul>
+            {collections.removed.map((collection) => (
+              <li key={collection.id} className={styles.removedRow}>
+                <span>
+                  {collection.name}
+                  <span className={styles.resultMeta}>
+                    {' '}
+                    · {collection.entries.length} titles
+                    {collection.source ? ` · Trakt list by ${collection.source.owner}` : ''}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  className={styles.pill}
+                  onClick={() => restore(collection.id)}
+                >
+                  <Icon name="refresh" size={12} />
+                  Restore
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
     </div>
   )
 }
@@ -135,7 +359,9 @@ const ORDER_LABELS: Record<UniverseOrder, string> = {
 export function CollectionPage() {
   useRestoreBrowsingOrigin(true)
   const { id } = useParams<{ id: string }>()
-  const universe = findUniverse(id ?? '')
+  const collections = useCollections()
+  const universe = collections.find(id ?? '')
+  const navigate = useNavigate()
   const { continueWatching, openDetail } = useAppState()
   // In the address rather than in state: a title opened from here comes back
   // to this route, and should come back to the order it was opened from.
@@ -144,7 +370,24 @@ export function CollectionPage() {
   const universes = useMemo(() => (universe ? [universe] : []), [universe])
   const items = useUniverseItems(universes)
 
-  if (!universe) return <Navigate to="/collections" replace />
+  // An added list is only known once main has answered.
+  if (!universe) return collections.loaded ? <Navigate to="/collections" replace /> : null
+  const removed = collections.isRemoved(universe.id)
+  const orderLabels: Record<UniverseOrder, string> = universe.source
+    ? { ...ORDER_LABELS, story: 'List order' }
+    : ORDER_LABELS
+
+  const toggleRemoved = (): void => {
+    const api = window.api?.mediaHub?.collections
+    if (!api) return
+    void (removed ? api.restore(universe.id) : api.remove(universe.id))
+      .then((state) => {
+        if (collections.apply(state) && !removed) navigate('/collections')
+      })
+      .catch(() => {
+        // Nothing changed; the button stays to be pressed again.
+      })
+  }
 
   const order: UniverseOrder =
     universe.hasStoryOrder && search.get('order') !== 'release' ? 'story' : 'release'
@@ -167,7 +410,15 @@ export function CollectionPage() {
         Collections
       </Link>
       <h1 className={page.heading}>{universe.name}</h1>
-      <p className={styles.description}>{universe.blurb}</p>
+      <p className={styles.description}>
+        {universe.blurb}
+        {universe.source && (
+          <span className={styles.sourceNote}>
+            {' '}
+            A Trakt list by {universe.source.owner}, read again each day.
+          </span>
+        )}
+      </p>
 
       <div className={styles.summary}>
         <span className={styles.summaryCount}>
@@ -182,6 +433,12 @@ export function CollectionPage() {
           >
             <Icon name="play" size={12} />
             {done > 0 ? 'Next' : 'Start with'}: {nextItem.title}
+          </button>
+        )}
+        {window.api?.mediaHub?.collections && (
+          <button type="button" className={styles.quiet} onClick={toggleRemoved}>
+            <Icon name={removed ? 'refresh' : 'trash'} size={12} />
+            {removed ? 'Restore to Collections' : 'Remove from Collections'}
           </button>
         )}
       </div>
@@ -199,7 +456,7 @@ export function CollectionPage() {
                 setSearch(choice === 'release' ? { order: 'release' } : {}, { replace: true })
               }
             >
-              {ORDER_LABELS[choice]}
+              {orderLabels[choice]}
             </button>
           ))}
         </div>
@@ -230,7 +487,7 @@ export function CollectionPage() {
         })}
       </ol>
 
-      {order === 'story' && (
+      {order === 'story' && !universe.source && (
         <p className={page.footnote}>
           Story order places a series where it begins, so a show that runs alongside several films
           is one stop rather than several.
