@@ -326,8 +326,18 @@ db.exportBackup(backupFile, {
   assert.equal(target.getCache('collections:v1:profile-undeclared'), null, 'only declared ones')
 
   // A file from before Collections had a record leaves this install's alone.
-  target.importBackup(backupFile)
+  const legacy = path.join(dir, 'collections-legacy.json')
+  const parsed = JSON.parse(fs.readFileSync(backupFile, 'utf8'))
+  delete parsed.collections
+  fs.writeFileSync(legacy, JSON.stringify(parsed), 'utf8')
+  target.importBackup(legacy)
   assert.deepEqual(target.getCache(`collections:v1:${ALICE}`), record(['star-wars']))
+
+  // A backup taken before any collection was changed is an empty snapshot,
+  // and restoring it puts the page back to the bundled set.
+  assert.deepEqual(readBackup(backupFile).collections, {})
+  target.importBackup(backupFile)
+  assert.equal(target.getCache(`collections:v1:${ALICE}`), null, 'changes since are undone')
   target.close()
 }
 

@@ -191,11 +191,15 @@ function animeGroupsOf(sql: DatabaseSync): { animeGroups?: unknown[] } {
   }
 }
 
-/** The declared profiles' Collections records, or nothing when none has one. */
+/**
+ * The declared profiles' Collections records. Always present, even empty: an
+ * empty snapshot restores as "nothing added, nothing removed", while a file
+ * with no field at all is one from before Collections and is left alone.
+ */
 function collectionsOf(
   sql: DatabaseSync,
   profileIds: string[]
-): { collections?: Record<string, unknown> } {
+): { collections: Record<string, unknown> } {
   const collections: Record<string, unknown> = {}
   for (const profileId of profileIds.filter(Boolean)) {
     const row = sql
@@ -209,7 +213,7 @@ function collectionsOf(
       // An unreadable record is left out rather than failing the backup.
     }
   }
-  return Object.keys(collections).length > 0 ? { collections } : {}
+  return { collections }
 }
 
 /** Reads and validates a backup file, throwing a message worth showing. */
