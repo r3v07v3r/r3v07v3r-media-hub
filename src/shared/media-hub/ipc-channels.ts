@@ -71,6 +71,13 @@ export const MEDIA_HUB_CHANNELS = {
   trackingSetScrobble: 'mediahub:tracking:set-scrobble',
   /** Named lists somebody built in Trakt or Simkl, read-only. */
   listsRemote: 'mediahub:lists:remote',
+  /** The Collections page: lists added from Trakt and collections taken
+   *  off the page; searching Trakt's public lists; add, remove, restore. */
+  collectionsState: 'mediahub:collections:state',
+  collectionsSearch: 'mediahub:collections:search',
+  collectionsAdd: 'mediahub:collections:add',
+  collectionsRemove: 'mediahub:collections:remove',
+  collectionsRestore: 'mediahub:collections:restore',
   /** The caller's own cached titles, and the sharing control over them. */
   lanCacheMyItems: 'mediahub:lancache:my-items',
   lanCacheSetSharing: 'mediahub:lancache:set-sharing',
