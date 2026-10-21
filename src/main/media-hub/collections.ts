@@ -18,8 +18,10 @@
 
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import {
+  COLLECTIONS_STATE_TTL_MS,
   UNIVERSES,
   addedCollectionId,
+  collectionsStateKey,
   parseTraktListLink,
   type CollectionCandidate,
   type CollectionsState,
@@ -36,11 +38,6 @@ import { traktCredentials } from './settingsStore'
 import { traktPublicRequest } from './traktClient'
 import type { TaskPriority } from './taskScheduler'
 
-/** Per profile: one household member removing Marvel is not everyone's. */
-const stateKey = (profile: string): string => `collections:v1:${profile}`
-/** A record somebody made, not a cache of something fetched — rewritten on
- *  every change, and long enough that only a decade of disuse lets it go. */
-const STATE_TTL_MS = 10 * 365 * 24 * 60 * 60 * 1000
 /** How stale an added list may get before the page reads it again. */
 const REFRESH_AFTER_MS = 24 * 60 * 60 * 1000
 /** Lists bigger than this are not collections anybody works through. */
@@ -51,9 +48,18 @@ interface StoredCollections {
   removed: string[]
 }
 
-function readStored(): StoredCollections {
-  const db = getDatabase()
-  const stored = db.getCache<StoredCollections>(stateKey(db.activeProfile()), {
+/**
+ * Per profile: one household member removing Marvel is not everyone's.
+ *
+ * Every read and write names its profile. Adding a list waits on Trakt, and
+ * somebody can switch profiles in the meantime; taking the active profile at
+ * write time would file the list under whoever is watching by then. So a
+ * caller takes the profile once, before anything is awaited, and keeps it.
+ */
+const activeProfile = (): string => getDatabase().activeProfile()
+
+function readStored(profile: string): StoredCollections {
+  const stored = getDatabase().getCache<StoredCollections>(collectionsStateKey(profile), {
     allowExpired: true
   })
   return {
@@ -62,9 +68,10 @@ function readStored(): StoredCollections {
   }
 }
 
-function writeStored(stored: StoredCollections): void {
-  const db = getDatabase()
-  db.putCache(stateKey(db.activeProfile()), stored, STATE_TTL_MS, { durable: true })
+function writeStored(profile: string, stored: StoredCollections): void {
+  getDatabase().putCache(collectionsStateKey(profile), stored, COLLECTIONS_STATE_TTL_MS, {
+    durable: true
+  })
 }
 
 function stateOf(stored: StoredCollections): CollectionsState {
@@ -257,9 +264,9 @@ let refreshing: Promise<void> | null = null
  * already has. A list that fails keeps what it had: Trakt being down for an
  * afternoon must not empty somebody's collection.
  */
-function refreshStale(): void {
+function refreshStale(profile: string): void {
   if (refreshing || !traktCredentials().clientId) return
-  const stale = readStored().added.filter(
+  const stale = readStored(profile).added.filter(
     (collection) =>
       collection.source && Date.now() - collection.source.refreshedAt > REFRESH_AFTER_MS
   )
@@ -277,9 +284,10 @@ function refreshStale(): void {
     if (fresh.size === 0) return
     // Read again rather than reuse the snapshot from before the fetch:
     // somebody may have removed or added a list while it ran.
-    const current = readStored()
+    // Into the profile it was read for, whoever is watching now.
+    const current = readStored(profile)
     current.added = current.added.map((collection) => fresh.get(collection.id) ?? collection)
-    writeStored(current)
+    writeStored(profile, current)
     notifyLibraryChanged('collections-refresh', 'lists')
   })().finally(() => {
     refreshing = null
@@ -290,8 +298,9 @@ function refreshStale(): void {
 
 export function registerCollectionsIpc(): void {
   handle<undefined, CollectionsState>(MEDIA_HUB_CHANNELS.collectionsState, () => {
-    refreshStale()
-    return stateOf(readStored())
+    const profile = activeProfile()
+    refreshStale(profile)
+    return stateOf(readStored(profile))
   })
 
   handle<{ query?: string }, { results: CollectionCandidate[] }>(
@@ -321,26 +330,29 @@ export function registerCollectionsIpc(): void {
         if (!ref) throw new Error('That is not a Trakt list link.')
       }
       if (!ref) throw new Error('Nothing to add.')
+      // Taken before Trakt is asked: see activeProfile.
+      const profile = activeProfile()
       const collection = await readCollection(ref, 'interactive')
-      const stored = readStored()
+      const stored = readStored(profile)
       const existing = stored.added.findIndex((item) => item.id === collection.id)
       if (existing >= 0) stored.added[existing] = collection
       else stored.added.push(collection)
       stored.removed = stored.removed.filter((id) => id !== collection.id)
-      writeStored(stored)
+      writeStored(profile, stored)
       return { ...stateOf(stored), addedId: collection.id }
     }
   )
 
   handle<{ id?: string }, CollectionsState>(MEDIA_HUB_CHANNELS.collectionsRemove, (_e, payload) => {
     const id = String(payload?.id ?? '')
-    const stored = readStored()
+    const profile = activeProfile()
+    const stored = readStored(profile)
     const known =
       UNIVERSES.some((universe) => universe.id === id) ||
       stored.added.some((collection) => collection.id === id)
     if (known && !stored.removed.includes(id)) {
       stored.removed.push(id)
-      writeStored(stored)
+      writeStored(profile, stored)
     }
     return stateOf(stored)
   })
@@ -349,10 +361,11 @@ export function registerCollectionsIpc(): void {
     MEDIA_HUB_CHANNELS.collectionsRestore,
     (_e, payload) => {
       const id = String(payload?.id ?? '')
-      const stored = readStored()
+      const profile = activeProfile()
+      const stored = readStored(profile)
       if (stored.removed.includes(id)) {
         stored.removed = stored.removed.filter((removed) => removed !== id)
-        writeStored(stored)
+        writeStored(profile, stored)
       }
       return stateOf(stored)
     }

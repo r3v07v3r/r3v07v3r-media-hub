@@ -109,6 +109,16 @@ export function parseTraktListLink(text: string): TraktListRef | null {
   return null
 }
 
+/** Where one profile's added and removed collections are kept (catalog_cache,
+ *  durable). Here rather than in main's collections.ts because the backup
+ *  carries these rows too. */
+export const COLLECTIONS_KEY_PREFIX = 'collections:v1:'
+export const collectionsStateKey = (profile: string): string =>
+  `${COLLECTIONS_KEY_PREFIX}${profile}`
+/** A record somebody made, not a cache of something fetched — rewritten on
+ *  every change, and long enough that only a decade of disuse lets it go. */
+export const COLLECTIONS_STATE_TTL_MS = 10 * 365 * 24 * 60 * 60 * 1000
+
 /** The route id an added list lives under. */
 export function addedCollectionId(listId: number): string {
   return `trakt-${listId}`

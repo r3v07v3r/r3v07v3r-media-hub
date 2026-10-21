@@ -126,8 +126,7 @@ function CollectionBrowser({ collections }: { collections: Collections }) {
     setLinkError('')
     try {
       const answer = await api.add(from)
-      collections.apply(answer)
-      navigate(`/collections/${answer.addedId}`)
+      if (collections.apply(answer)) navigate(`/collections/${answer.addedId}`)
     } catch (error) {
       if ('link' in from) setLinkError(errorText(error))
       else setAddError(errorText(error))
@@ -383,8 +382,7 @@ export function CollectionPage() {
     if (!api) return
     void (removed ? api.restore(universe.id) : api.remove(universe.id))
       .then((state) => {
-        collections.apply(state)
-        if (!removed) navigate('/collections')
+        if (collections.apply(state) && !removed) navigate('/collections')
       })
       .catch(() => {
         // Nothing changed; the button stays to be pressed again.
