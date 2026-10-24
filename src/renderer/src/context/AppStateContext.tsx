@@ -337,6 +337,9 @@ interface AppStateValue {
   recommendations: Recommendation[]
   /** The ranking shelved by reason — the For You page's rows. */
   recommendationRails: HomeRail[]
+  /** The best of each kind, for the Movies/Series/Anime shelf. A kind with
+   *  no entry has not been answered yet; fall back to `recommendations`. */
+  recommendationsByKind: Partial<Record<MediaKind, Recommendation[]>>
   featured: MediaItem[]
   homeFeedLive: boolean
   /** The home:personalized fetch is still out. Distinct from
@@ -3181,6 +3184,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       watchedIds: watchedIdsResult.watchedIds,
       recommendations: homeFeed.recommendations,
       recommendationRails: homeFeed.rails,
+      recommendationsByKind: homeFeed.byKind,
       featured: homeFeed.featured,
       homeFeedLive: homeFeed.live,
       homeFeedLoading: homeFeed.loading,
@@ -3281,6 +3285,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       watchedIdsResult.watchedIds,
       homeFeed.recommendations,
       homeFeed.rails,
+      homeFeed.byKind,
       homeFeed.featured,
       homeFeed.live,
       homeFeed.loading,

@@ -953,6 +953,13 @@ export interface HomePersonalizedResult {
    * produced reasons to shelve by.
    */
   recommendationRails: RecommendationRail[]
+  /**
+   * The best of each kind from the whole buffer, for the Movies, Series and
+   * Anime pages' own shelf — see recommendations.ts's topByKind. Reasons
+   * for these are in recommendationReasons too. Optional so an older main
+   * (the phone's backend mid-update) still answers.
+   */
+  recommendationsByKind?: Partial<Record<MediaKind, CatalogItem[]>>
   preferredGenres: string[]
   /**
    * Which tracking services have each planned title on their own list.

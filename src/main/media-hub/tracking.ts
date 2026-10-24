@@ -70,11 +70,15 @@ import { toSimklAnimeEpisode, watchedLaterSeasons } from '../../shared/media-hub
 import {
   abandonedIds,
   liveExclusions,
+  passedOverIds,
+  passedOverLast,
+  passOverRecommendations,
   readStoredRecommendations,
   reasonsFor,
   recommendable,
   requestRecommendationsRebuild,
   storeRecommendations,
+  topByKind,
   SERVED_COUNT
 } from './recommendations'
 import {
@@ -3120,6 +3124,19 @@ export function registerTrackingIpc(): void {
     }
   )
 
+  // "Show me others" on the suggestion row: the titles on screen go to the
+  // back for a few weeks (recommendations.ts's PASSED_OVER_MS). A read-time
+  // reorder, so no rebuild is asked for; the caller refetches the feed.
+  handle<{ ids: string[] }, { passed: number }>(
+    MEDIA_HUB_CHANNELS.recommendationsPassOver,
+    (_e, payload) => {
+      const ids = Array.isArray(payload?.ids)
+        ? payload.ids.filter((id): id is string => typeof id === 'string' && id.length > 0)
+        : []
+      return { passed: ids.length ? passOverRecommendations(ids.slice(0, 100)) : 0 }
+    }
+  )
+
   handle<undefined, HomePersonalizedResult>(MEDIA_HUB_CHANNELS.homePersonalized, async () => {
     const db = getDatabase()
     // Which profile this whole response is about, captured before the first
@@ -3146,10 +3163,12 @@ export function registerTrackingIpc(): void {
     let recommendations: CatalogItem[]
     let recommendationReasons: Record<string, RecommendationReason>
     let recommendationRails: RecommendationRail[]
+    let recommendationsByKind: HomePersonalizedResult['recommendationsByKind']
     let preferredGenres: string[]
 
     if (stored) {
       recommendations = stored.items
+      recommendationsByKind = stored.byKind
       recommendationReasons = stored.reasons
       recommendationRails = stored.rails
       preferredGenres = stored.preferredGenres
@@ -3199,13 +3218,18 @@ export function registerTrackingIpc(): void {
       storeRecommendations(full, preferredGenres, { announce: false, profile })
       // Through the same cadence pass the stored path uses, so the row is
       // ordered the same way whichever branch produced it.
-      recommendations = applyCadence(full, watchCadenceProfile(history), SERVED_COUNT)
+      const ordered = passedOverLast(full, passedOverIds())
+      recommendations = applyCadence(ordered, watchCadenceProfile(history), SERVED_COUNT)
+      recommendationsByKind = topByKind(ordered)
       // Thinner than the stored path's, and knowingly so. This branch ranks
       // without credits or a taste profile (see the comment above), so the
       // only reasons it can produce are the ones the catalog alone
       // supports — a franchise continuation, a genre, a release year. The
       // background rebuild fills in the rest within minutes.
-      recommendationReasons = reasonsFor(recommendations, full)
+      recommendationReasons = reasonsFor(
+        [...recommendations, ...Object.values(recommendationsByKind).flat()],
+        full
+      )
       recommendationRails = groupRecommendationRails(full)
     }
 
@@ -3263,6 +3287,7 @@ export function registerTrackingIpc(): void {
       recommendations,
       recommendationReasons,
       recommendationRails,
+      recommendationsByKind,
       preferredGenres,
       // Read here rather than fetched: it is whatever the last pull
       // recorded, so tagging a card costs nothing on this path.
@@ -3275,7 +3300,10 @@ export function registerTrackingIpc(): void {
       completedIds: db.indexByIds([
         ...new Set([
           ...recommendations.map((item) => String(item.id)),
-          ...recommendationRails.flatMap((rail) => rail.items.map((item) => String(item.id)))
+          ...recommendationRails.flatMap((rail) => rail.items.map((item) => String(item.id))),
+          ...Object.values(recommendationsByKind ?? {}).flatMap((list) =>
+            (list ?? []).map((item) => String(item.id))
+          )
         ])
       ]).completedIds
     }

@@ -20,6 +20,7 @@
 // as it stands.
 
 import type { HomeRail, MediaItem, Recommendation } from '@renderer/types'
+import type { MediaKind } from '@shared/media-hub/types'
 import { isDetailRoute } from './browsingContext'
 
 /** What a change is known to have done to a title's own flags, applied to
@@ -31,6 +32,8 @@ export interface HoldableFeed {
   recommendations: Recommendation[]
   featured: MediaItem[]
   rails: HomeRail[]
+  /** The library pages' own shelves — held like `recommendations`. */
+  byKind?: Partial<Record<MediaKind, Recommendation[]>>
 }
 
 /**
@@ -64,7 +67,7 @@ export function holdEntries<T>(
 
 /**
  * The fresh feed with the held titles back in the recommendations, the
- * hero's pool and the For You rails. A held copy takes its plan state from
+ * library pages' per-kind shelves, the hero's pool and the For You rails. A held copy takes its plan state from
  * the fresh answer's tracked ids and its watched state from the recorded
  * change. A rail the fresh feed no longer has is not brought back.
  */
@@ -82,15 +85,28 @@ export function holdTouchedEntries<F extends HoldableFeed>(
     inMyList: trackedIds.has(media.id)
   })
   const previousRails = new Map(previous.rails.map((rail) => [rail.id, rail]))
-  return {
-    ...next,
-    recommendations: holdEntries(
-      previous.recommendations,
-      next.recommendations,
+  const holdRecommendations = (before: Recommendation[], after: Recommendation[]) =>
+    holdEntries(
+      before,
+      after,
       ids,
       (rec) => rec.media.id,
       (rec) => ({ ...rec, media: patch(rec.media) })
-    ),
+    )
+  // A kind the fresh feed no longer has is not brought back, as for rails.
+  const byKind = next.byKind && {
+    ...next.byKind,
+    ...Object.fromEntries(
+      (Object.keys(next.byKind) as MediaKind[]).map((kind) => [
+        kind,
+        holdRecommendations(previous.byKind?.[kind] ?? [], next.byKind?.[kind] ?? [])
+      ])
+    )
+  }
+  return {
+    ...next,
+    ...(byKind ? { byKind } : {}),
+    recommendations: holdRecommendations(previous.recommendations, next.recommendations),
     featured: holdEntries(previous.featured, next.featured, ids, (media) => media.id, patch),
     rails: next.rails.map((rail) => {
       const before = previousRails.get(rail.id)

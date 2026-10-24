@@ -65,6 +65,7 @@ const NO_ITEMS: MediaItem[] = []
 const EMPTY_HOME_FEED = {
   continueWatching: [] as ContinueWatchingItem[],
   recommendations: [] as Recommendation[],
+  byKind: {} as Partial<Record<MediaKind, Recommendation[]>>,
   rails: [] as HomeRail[],
   featured: [] as MediaItem[],
   preferredGenres: [] as string[],
@@ -829,6 +830,10 @@ export interface HomeFeedResult {
   // longer be defined as "whatever that one adapter happens to return".
   continueWatching: ContinueWatchingItem[]
   recommendations: Recommendation[]
+  /** The best of each kind from the whole ranking, for the library pages'
+   *  own shelf — see HomePersonalizedResult.recommendationsByKind. Not
+   *  remembered across launches; a page falls back to `recommendations`. */
+  byKind: Partial<Record<MediaKind, Recommendation[]>>
   /** The same ranking shelved by reason, for the For You page. Not
    *  remembered across launches: it follows the live feed. */
   rails: HomeRail[]
@@ -911,17 +916,24 @@ export function useMediaHubHomeFeed(
         const completed = new Set(result.completedIds ?? [])
         const finished = (media: MediaItem): MediaItem =>
           completed.has(media.id) ? { ...media, watched: true, completed: true } : media
+        const toRecommendation = (item: CatalogItem): Recommendation => {
+          const rec = catalogItemToRecommendation(item, result.preferredGenres, {
+            trackedIds,
+            // Sparse by design — a title nothing picked out has no entry,
+            // and its card shows no chip. See RecommendationReason.
+            reason: result.recommendationReasons?.[String(item.id)]
+          })
+          return { ...rec, media: finished(rec.media) }
+        }
+        const byKind: Partial<Record<MediaKind, Recommendation[]>> = {}
+        for (const kind of CATALOG_KINDS) {
+          const list = result.recommendationsByKind?.[kind]
+          if (list?.length) byKind[kind] = list.map(toRecommendation)
+        }
         const next = {
           continueWatching: result.continueWatching.map(continueWatchingEntryToItem),
-          recommendations: result.recommendations.map((item) => {
-            const rec = catalogItemToRecommendation(item, result.preferredGenres, {
-              trackedIds,
-              // Sparse by design — a title nothing picked out has no entry,
-              // and its card shows no chip. See RecommendationReason.
-              reason: result.recommendationReasons?.[String(item.id)]
-            })
-            return { ...rec, media: finished(rec.media) }
-          }),
+          recommendations: result.recommendations.map(toRecommendation),
+          byKind,
           rails: (result.recommendationRails ?? [])
             .map((rail) => ({
               id: rail.id,
