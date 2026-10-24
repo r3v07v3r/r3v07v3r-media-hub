@@ -440,8 +440,9 @@ interface AppStateValue {
    *  is labelled with. Null once the chain is fully unwound. */
   browsingOrigin: BrowsingOrigin | null
   /** `originLabelOverride`: only needed when opening a title from within
-   *  another detail page — see the implementation's own comment. */
-  openDetail: (media: MediaItem, originLabelOverride?: string) => void
+   *  another detail page — see the implementation's own comment. `season`
+   *  opens a series on that season's tab (a collection's season stop). */
+  openDetail: (media: MediaItem, originLabelOverride?: string, season?: number) => void
   /** Opens what else this catalog has of one person's — see routes/PersonPage.
    *  A drill-down from a title page, not a nav destination. */
   openPerson: (name: string) => void
@@ -1660,7 +1661,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   )
 
   const openDetail = useCallback(
-    (media: MediaItem, originLabelOverride?: string) => {
+    (media: MediaItem, originLabelOverride?: string, season?: number) => {
       const route = `${location.pathname}${location.search}`
       const label =
         originLabelOverride ??
@@ -1682,7 +1683,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // A new drill-down invalidates any restore the last Back left pending.
       setPendingRestore(null)
       closeContextMenu()
-      navigate(mediaKindToDetailPath(media))
+      // The same navigation state a later-season anime link leaves behind,
+      // which the detail page already reads (MediaDetailPage's openedSeason).
+      navigate(mediaKindToDetailPath(media), season != null ? { state: { season } } : undefined)
     },
     [location.pathname, location.search, categorySearch, activeMood, navigate, closeContextMenu]
   )

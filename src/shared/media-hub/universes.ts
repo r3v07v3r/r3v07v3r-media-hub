@@ -13,8 +13,19 @@
 // Cinemeta. This module is the pure part both sides share: the shapes, the two
 // orders, and a card for a title the local index has not met yet.
 
-import type { CatalogItem } from './types'
+import type { CatalogItem, HistoryEntry } from './types'
 import { UNIVERSE_DATA } from './universeData'
+
+/** One season of a series, or the run of its episodes on one side of a film
+ *  that lands part-way through that season. */
+export interface UniversePart {
+  season: number
+  first: number
+  last: number
+  /** Whether first..last is the whole season, so the card can say "Season
+   *  2" rather than spell out every episode. */
+  whole: boolean
+}
 
 export interface UniverseEntry {
   /** IMDb id — what the movie and series catalogues are keyed by. */
@@ -23,8 +34,13 @@ export interface UniverseEntry {
   title: string
   year: string
   /** YYYY-MM-DD: a film's release, a series' first episode. Empty when
-   *  neither source had a day, and then `year` is all the ordering has. */
+   *  neither source had a day, and then `year` is all the ordering has.
+   *  For a part, its first episode. */
   released: string
+  /** Set when this stop is one season (or part of one) rather than the
+   *  whole series. A series that runs alongside several films is listed
+   *  once per season, each where it falls in the story. */
+  part?: UniversePart
 }
 
 export interface UniverseDefinition {
@@ -137,12 +153,45 @@ export function findUniverse(id: string): UniverseDefinition | undefined {
 const releaseKey = (entry: UniverseEntry): string =>
   entry.released || `${entry.year || '9999'}-12-31`
 
+/** What tells one stop from another: the id alone names a whole series,
+ *  and every season of it once it is split. */
+export function universeEntryKey(entry: UniverseEntry): string {
+  const { part } = entry
+  return part ? `${entry.id}:${part.season}:${part.first}-${part.last}` : entry.id
+}
+
+/** "Season 2", or "Season 2 · Episodes 1–19" for the run before a film. */
+export function universePartLabel(part: UniversePart): string {
+  if (part.whole) return `Season ${part.season}`
+  const episodes =
+    part.first === part.last ? `Episode ${part.first}` : `Episodes ${part.first}–${part.last}`
+  return `Season ${part.season} · ${episodes}`
+}
+
+/** How far through one part somebody is, from tracking history, and the
+ *  episode its Play starts: the first of the run not yet seen, or the first
+ *  of all once every one has been. */
+export function universePartProgress(
+  entry: UniverseEntry & { part: UniversePart },
+  history: readonly HistoryEntry[]
+): { watched: number; total: number; next: number } {
+  const { season, first, last } = entry.part
+  const seen = new Set<number>()
+  for (const row of history) {
+    if (row.id !== entry.id || row.season !== season || row.episode == null) continue
+    if (row.episode >= first && row.episode <= last) seen.add(row.episode)
+  }
+  let next = first
+  while (next <= last && seen.has(next)) next++
+  return { watched: seen.size, total: last - first + 1, next: next > last ? first : next }
+}
+
 /**
  * A universe's titles in the order asked for.
  *
- * Story order is the list as written. It places a series where it STARTS —
- * a show that runs alongside five films is one card, not five — so it is a
- * viewing order rather than a strict timeline. Asking for it of a universe
+ * Story order is the list as written. A short series is one stop where it
+ * starts; a long one is a stop per season, and a season a film lands in the
+ * middle of is split at that film. Asking for it of a universe
  * that has none gives release order, never the arbitrary written one.
  */
 export function universeEntries(
