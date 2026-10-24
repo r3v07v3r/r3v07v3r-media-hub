@@ -23,6 +23,7 @@ import {
   seasonStillAiring
 } from '../src/main/media-hub/episodeAiring'
 import {
+  formatReleaseDate,
   isFutureInstant,
   isFutureRelease,
   isUpcomingEpisode,
@@ -762,8 +763,13 @@ assert.equal(isUpcomingEpisode(ep(1, 1, { released: '2026-09-17' }), LOCAL_NOON)
 
 {
   const now = new Date(2026, 9, 13, 12).getTime() // 13 Oct 2026, local noon
-  // The full date decides when there is one.
-  assert.equal(titleUnreleased({ releaseDate: '2027-03-12' }, now), 'Releases 12 Mar 2027')
+  // The full date decides when there is one. Spelled through the same
+  // formatter, since it writes the day in the machine's own locale ("12 Mar
+  // 2027" here, "Mar 12, 2027" on the CI runner).
+  assert.equal(
+    titleUnreleased({ releaseDate: '2027-03-12' }, now),
+    `Releases ${formatReleaseDate('2027-03-12')}`
+  )
   assert.equal(titleUnreleased({ releaseDate: '2026-10-13' }, now), null, 'out today is out')
   assert.equal(titleUnreleased({ releaseDate: '2024-01-01', releaseYear: 2027 }, now), null,
     'a real past date outranks a year that says otherwise')
