@@ -58,8 +58,9 @@ export function MediaCard({
   originLabel?: string
   /** This card stands for one season of the series, or a run of its
    *  episodes (a collection's season stop): named under the title, opened
-   *  on that season, and watched by those episodes rather than the show. */
-  part?: { label: string; season: number; status: WatchStatus }
+   *  on that season, watched by those episodes rather than the show, and
+   *  played from `episode` — the run's own next one, not the show's. */
+  part?: { label: string; season: number; episode: number; status: WatchStatus }
 }) {
   const { plannedSources, myList, dislikedIds, toggleDisliked, pushNotification, activeProfileId } =
     useAppState()
@@ -157,7 +158,10 @@ export function MediaCard({
           className={styles.playButton}
           onClick={(e) => {
             e.stopPropagation()
-            startPartyPlayback(media)
+            startPartyPlayback(
+              media,
+              part ? { season: part.season, episode: part.episode } : undefined
+            )
           }}
           disabled={isResolving}
           aria-busy={isResolving}

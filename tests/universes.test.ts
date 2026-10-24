@@ -203,7 +203,18 @@ const progress = universePartProgress(seasonTwo, [
   seen(2, 21, 'tt8'), // another show
   seen(2, null)
 ])
-assert.deepEqual(progress, { watched: 1, total: 3 })
+assert.deepEqual(progress, { watched: 1, total: 3, next: 21 }, 'Play starts at the first unseen')
+assert.equal(universePartProgress(seasonTwo, []).next, 20, 'an untouched run starts at its first')
+assert.equal(
+  universePartProgress(seasonTwo, [seen(2, 20), seen(2, 21), seen(2, 22)]).next,
+  20,
+  'a finished run starts again from its first'
+)
+assert.equal(
+  universePartProgress(seasonTwo, [seen(2, 20), seen(2, 22)]).next,
+  21,
+  'a gap is filled before going on'
+)
 
 // ---- Out yet -------------------------------------------------------------
 

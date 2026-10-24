@@ -528,6 +528,7 @@ export function CollectionPage() {
                 entry.part && {
                   label: universePartLabel(entry.part),
                   season: entry.part.season,
+                  episode: universePartProgress({ ...entry, part: entry.part }, history ?? []).next,
                   status: entryStatus(entry, item, continueWatching, history)
                 }
               }

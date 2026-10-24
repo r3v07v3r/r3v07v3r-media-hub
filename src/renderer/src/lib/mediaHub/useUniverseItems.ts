@@ -50,13 +50,19 @@ export function useUniverseItems(
  * time — what tells a season stop is done, which the show's own flags cannot
  * (a show half watched has some seasons finished). Null until read, and not
  * read at all when no universe here is split. Read again whenever watch
- * status changes anywhere, as the detail page reads its own.
+ * status changes anywhere, as the detail page reads its own, and whenever
+ * the library itself changes (another profile, a restored backup).
  */
 export function useSeasonHistory(
   universes: readonly UniverseDefinition[]
 ): readonly HistoryEntry[] | null {
-  const { watchStatusVersion } = useAppState()
-  const [history, setHistory] = useState<readonly HistoryEntry[] | null>(null)
+  const { watchStatusVersion, libraryKey } = useAppState()
+  // Kept with the library it was read from, so a profile switch or a
+  // restored backup shows nothing until its own history is in, rather than
+  // the last library's.
+  const [read, setRead] = useState<{ libraryKey: string; rows: readonly HistoryEntry[] } | null>(
+    null
+  )
   const splitIds = useMemo(
     () =>
       [
@@ -77,7 +83,9 @@ export function useSeasonHistory(
     api
       .list()
       .then((result) => {
-        if (!cancelled) setHistory(result.history.filter((row) => wanted.has(row.id)))
+        if (!cancelled) {
+          setRead({ libraryKey, rows: result.history.filter((row) => wanted.has(row.id)) })
+        }
       })
       .catch(() => {
         // Left as it was: a season stop then goes by the show's own flags.
@@ -85,7 +93,7 @@ export function useSeasonHistory(
     return () => {
       cancelled = true
     }
-  }, [splitIds, watchStatusVersion])
+  }, [splitIds, watchStatusVersion, libraryKey])
 
-  return history
+  return read?.libraryKey === libraryKey ? read.rows : null
 }

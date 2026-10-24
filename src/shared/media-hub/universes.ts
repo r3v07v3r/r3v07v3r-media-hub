@@ -168,18 +168,22 @@ export function universePartLabel(part: UniversePart): string {
   return `Season ${part.season} · ${episodes}`
 }
 
-/** How far through one part somebody is, from tracking history. */
+/** How far through one part somebody is, from tracking history, and the
+ *  episode its Play starts: the first of the run not yet seen, or the first
+ *  of all once every one has been. */
 export function universePartProgress(
   entry: UniverseEntry & { part: UniversePart },
   history: readonly HistoryEntry[]
-): { watched: number; total: number } {
+): { watched: number; total: number; next: number } {
   const { season, first, last } = entry.part
   const seen = new Set<number>()
   for (const row of history) {
     if (row.id !== entry.id || row.season !== season || row.episode == null) continue
     if (row.episode >= first && row.episode <= last) seen.add(row.episode)
   }
-  return { watched: seen.size, total: last - first + 1 }
+  let next = first
+  while (next <= last && seen.has(next)) next++
+  return { watched: seen.size, total: last - first + 1, next: next > last ? first : next }
 }
 
 /**
