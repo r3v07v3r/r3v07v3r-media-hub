@@ -28,6 +28,8 @@ import {
   storeKey,
   liveExclusions,
   onRebuildRequested,
+  passOverRecommendations,
+  passedOverIds,
   readStoredRecommendations,
   recommendable,
   requestRecommendationsRebuild,
@@ -345,6 +347,45 @@ check('a silent store still writes — it only skips the announcement', () => {
 check('a rebuild request with nothing listening is a no-op, not a throw', () => {
   onRebuildRequested(null)
   assert.doesNotThrow(() => requestRecommendationsRebuild())
+})
+
+check('"Show me others" puts the titles on screen behind the rest, and only for a while', () => {
+  freshDatabase()
+  storeRecommendations(ranked(STORED_COUNT), ['Action'])
+  const none = {
+    watchedIds: new Set<string>(),
+    trackedIds: new Set<string>(),
+    dislikedIds: new Set<string>()
+  }
+
+  const now = Date.now()
+  passOverRecommendations(['id-0', 'id-1', 'id-2', 'id-3'], now)
+  const served = readStoredRecommendations(none, NO_HISTORY)
+  assert.ok(served, 'passing over is a reorder, not an exclusion — the row must still be served')
+  assert.equal(served.items.length, SERVED_COUNT)
+  assert.equal(served.items[0].id, 'id-4', 'the row must lead with what was behind them')
+  const ids = served.items.map((x) => x.id)
+  assert.ok(!ids.includes('id-0'), 'a passed-over title must not come straight back')
+
+  // A second press adds to the first rather than replacing it.
+  passOverRecommendations(['id-4'], now)
+  assert.deepEqual([...passedOverIds(now)].sort(), ['id-0', 'id-1', 'id-2', 'id-3', 'id-4'])
+
+  // And they come back once the snooze runs out.
+  assert.equal(passedOverIds(now + 22 * 24 * 60 * 60 * 1000).size, 0)
+})
+
+check('passing over the whole buffer still serves a full row, in ranked order', () => {
+  freshDatabase()
+  storeRecommendations(ranked(STORED_COUNT), ['Action'])
+  passOverRecommendations(ranked(STORED_COUNT).map((entry) => String(entry.item.id)))
+  const served = readStoredRecommendations(
+    { watchedIds: new Set(), trackedIds: new Set(), dislikedIds: new Set() },
+    NO_HISTORY
+  )
+  assert.ok(served)
+  assert.equal(served.items.length, SERVED_COUNT)
+  assert.equal(served.items[0].id, 'id-0')
 })
 
 console.log(`\n${pass} passed`)

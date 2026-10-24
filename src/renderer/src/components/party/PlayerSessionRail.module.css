@@ -83,6 +83,28 @@
   font-size: 11px;
   font-style: normal;
 }
+/* Who drives play/pause and seeking: a switch for the host, a line for
+   everyone else. */
+.controlToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 9px;
+  color: rgba(255, 255, 255, 0.78);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 11px;
+  cursor: pointer;
+}
+.controlToggle input {
+  accent-color: #65e6f7;
+}
+.controlNote {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.54);
+  font-size: 11px;
+}
 /* The standing Rooms, one compact row per room. Hard-coded dark styling
    like the rest of this file: this window floats over the film, not over
    the themed app. */

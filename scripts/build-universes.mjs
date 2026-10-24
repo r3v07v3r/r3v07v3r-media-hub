@@ -22,6 +22,12 @@
 // gives too bare to tell apart: three different works are all "Star Trek". A
 // universe with `story: true` is written in story order; one without is in
 // whatever order, and the page offers release order only.
+//
+// A series can instead be listed a season at a time, with a part last:
+// { season: 2 } for the whole season, or { season: 2, last: 19 } and
+// { season: 2, first: 20 } for the two sides of a film released part-way
+// through it. The episode numbers left out are filled in from Cinemeta, and
+// a run that names an episode the season does not have stops the build.
 
 import { execSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
@@ -33,9 +39,11 @@ const OUT = resolve(
   '../src/shared/media-hub/universeData.ts'
 )
 
-/** Either Cinemeta host serves the same records; the second is tried when the
- *  first does not resolve. */
-const HOSTS = ['https://v3-cinemeta.strem.io', 'https://cinemeta-live.strem.io']
+/** Both Cinemeta hosts serve the same ids; the second is tried when the first
+ *  does not resolve. cinemeta-live first, because the list was written
+ *  against its names, and its films carry a year where v3 carries a US
+ *  release day: Wikidata then supplies the earliest premiere (see below). */
+const HOSTS = ['https://cinemeta-live.strem.io', 'https://v3-cinemeta.strem.io']
 
 const UNIVERSES = [
   {
@@ -45,7 +53,8 @@ const UNIVERSES = [
     story: true,
     entries: [
       ['tt0458339', 'm', 'Captain America: The First Avenger'],
-      ['tt3475734', 's', "Marvel's Agent Carter"],
+      ['tt3475734', 's', "Marvel's Agent Carter", { season: 1 }],
+      ['tt3475734', 's', "Marvel's Agent Carter", { season: 2 }],
       ['tt4154664', 'm', 'Captain Marvel'],
       ['tt0371746', 'm', 'Iron Man'],
       ['tt1228705', 'm', 'Iron Man 2'],
@@ -54,33 +63,66 @@ const UNIVERSES = [
       ['tt0848228', 'm', 'The Avengers'],
       ['tt1981115', 'm', 'Thor: The Dark World'],
       ['tt1300854', 'm', 'Iron Man 3'],
-      ['tt2364582', 's', "Marvel's Agents of S.H.I.E.L.D."],
+      // S.H.I.E.L.D. falls with the Winter Soldier's HYDRA reveal in episode 17.
+      ['tt2364582', 's', "Marvel's Agents of S.H.I.E.L.D.", { season: 1, last: 16 }],
       ['tt1843866', 'm', 'Captain America: The Winter Soldier'],
+      ['tt2364582', 's', "Marvel's Agents of S.H.I.E.L.D.", { season: 1, first: 17 }],
       ['tt2015381', 'm', 'Guardians of the Galaxy'],
       ['tt3896198', 'm', 'Guardians of the Galaxy Vol. 2'],
-      ['tt13623148', 's', 'I Am Groot'],
-      ['tt3322312', 's', "Marvel's Daredevil"],
-      ['tt2357547', 's', "Marvel's Jessica Jones"],
+      ['tt13623148', 's', 'I Am Groot', { season: 1 }],
+      ['tt13623148', 's', 'I Am Groot', { season: 2 }],
+      // Episode 19 leads into Age of Ultron; 20 picks up after it.
+      ['tt2364582', 's', "Marvel's Agents of S.H.I.E.L.D.", { season: 2, last: 19 }],
+      ['tt3322312', 's', "Marvel's Daredevil", { season: 1 }],
+      ['tt2357547', 's', "Marvel's Jessica Jones", { season: 1 }],
       ['tt2395427', 'm', 'Avengers: Age of Ultron'],
+      ['tt2364582', 's', "Marvel's Agents of S.H.I.E.L.D.", { season: 2, first: 20 }],
       ['tt0478970', 'm', 'Ant-Man'],
-      ['tt3322314', 's', "Marvel's Luke Cage"],
-      ['tt3322310', 's', "Marvel's Iron Fist"],
+      // The Sokovia Accords arrive in episode 20, after Civil War.
+      ['tt2364582', 's', "Marvel's Agents of S.H.I.E.L.D.", { season: 3, last: 19 }],
+      ['tt3322312', 's', "Marvel's Daredevil", { season: 2 }],
+      ['tt3322314', 's', "Marvel's Luke Cage", { season: 1 }],
+      ['tt3322310', 's', "Marvel's Iron Fist", { season: 1 }],
       ['tt4230076', 's', "Marvel's The Defenders"],
       ['tt3498820', 'm', 'Captain America: Civil War'],
+      ['tt2364582', 's', "Marvel's Agents of S.H.I.E.L.D.", { season: 3, first: 20 }],
       ['tt3480822', 'm', 'Black Widow'],
       ['tt1825683', 'm', 'Black Panther'],
       ['tt2250912', 'm', 'Spider-Man: Homecoming'],
-      ['tt5675620', 's', "Marvel's The Punisher"],
+      ['tt5675620', 's', "Marvel's The Punisher", { season: 1 }],
       ['tt1211837', 'm', 'Doctor Strange'],
+      ['tt2364582', 's', "Marvel's Agents of S.H.I.E.L.D.", { season: 4 }],
       ['tt3501632', 'm', 'Thor: Ragnarok'],
       ['tt4154858', 's', "Marvel's Inhumans"],
-      ['tt1236246', 's', "Marvel's Runaways"],
-      ['tt5614844', 's', "Marvel's Cloak & Dagger"],
+      // Runaways and Cloak & Dagger alternate: the third Runaways season
+      // brings Tandy and Tyrone in after their own second.
+      ['tt1236246', 's', "Marvel's Runaways", { season: 1 }],
+      ['tt5614844', 's', "Marvel's Cloak & Dagger", { season: 1 }],
+      ['tt1236246', 's', "Marvel's Runaways", { season: 2 }],
+      ['tt5614844', 's', "Marvel's Cloak & Dagger", { season: 2 }],
+      ['tt1236246', 's', "Marvel's Runaways", { season: 3 }],
+      // The rest of the Netflix street-level run, all before the snap, in
+      // the order it was made.
+      ['tt2357547', 's', "Marvel's Jessica Jones", { season: 2 }],
+      ['tt3322314', 's', "Marvel's Luke Cage", { season: 2 }],
+      ['tt3322310', 's', "Marvel's Iron Fist", { season: 2 }],
+      ['tt3322312', 's', "Marvel's Daredevil", { season: 3 }],
+      ['tt5675620', 's', "Marvel's The Punisher", { season: 2 }],
+      ['tt2357547', 's', "Marvel's Jessica Jones", { season: 3 }],
+      // Thanos's attack is felt from episode 20.
+      ['tt2364582', 's', "Marvel's Agents of S.H.I.E.L.D.", { season: 5, last: 19 }],
       ['tt5095030', 'm', 'Ant-Man and the Wasp'],
       ['tt4154756', 'm', 'Avengers: Infinity War'],
+      ['tt2364582', 's', "Marvel's Agents of S.H.I.E.L.D.", { season: 5, first: 20 }],
+      // The last two seasons never meet the snap; they sit before Endgame.
+      ['tt2364582', 's', "Marvel's Agents of S.H.I.E.L.D.", { season: 6 }],
+      ['tt2364582', 's', "Marvel's Agents of S.H.I.E.L.D.", { season: 7 }],
       ['tt4154796', 'm', 'Avengers: Endgame'],
-      ['tt9140554', 's', 'Loki'],
-      ['tt10168312', 's', 'What If...?'],
+      ['tt9140554', 's', 'Loki', { season: 1 }],
+      ['tt9140554', 's', 'Loki', { season: 2 }],
+      ['tt10168312', 's', 'What If...?', { season: 1 }],
+      ['tt10168312', 's', 'What If...?', { season: 2 }],
+      ['tt10168312', 's', 'What If...?', { season: 3 }],
       ['tt9140560', 's', 'WandaVision'],
       ['tt9208876', 's', 'The Falcon and the Winter Soldier'],
       ['tt9376612', 'm', 'Shang-Chi and the Legend of the Ten Rings'],
@@ -103,12 +145,13 @@ const UNIVERSES = [
       ['tt13966962', 's', 'Echo'],
       ['tt6263850', 'm', 'Deadpool & Wolverine'],
       ['tt15571732', 's', 'Agatha All Along'],
-      ['tt18923754', 's', 'Daredevil: Born Again'],
+      ['tt18923754', 's', 'Daredevil: Born Again', { season: 1 }],
       ['tt14513804', 'm', 'Captain America: Brave New World'],
       ['tt20969586', 'm', 'Thunderbolts*'],
       ['tt13623126', 's', 'Ironheart'],
       ['tt10676052', 'm', 'The Fantastic 4: First Steps'],
       ['tt21066182', 's', 'Wonder Man'],
+      ['tt18923754', 's', 'Daredevil: Born Again', { season: 2 }],
       ['tt22084616', 'm', 'Spider-Man: Brand New Day'],
       ['tt23112594', 's', 'VisionQuest'],
       ['tt21357150', 'm', 'Avengers: Doomsday']
@@ -324,8 +367,17 @@ const fold = (title) =>
     .replace(/&/g, 'and')
     .replace(/[^a-z0-9]/g, '')
 
-async function meta(id, kind) {
+/**
+ * A title's record, preferring the host whose name for it is the one written
+ * in the list. The two hosts have drifted apart on names (one says "Agents of
+ * S.H.I.E.L.D.", the other "Marvel's Agents of S.H.I.E.L.D."), and a list
+ * that passed against one would otherwise fail against the other with
+ * nothing wrong in it. With no host agreeing, the first answer is returned
+ * and the name check below reports it.
+ */
+async function meta(id, kind, expected) {
   const type = kind === 'm' ? 'movie' : 'series'
+  let first = null
   // Twice round: a single dropped request otherwise reads as an id that
   // does not resolve, and stops the whole run.
   for (const host of [...HOSTS, ...HOSTS]) {
@@ -333,12 +385,14 @@ async function meta(id, kind) {
       const response = await fetch(`${host}/meta/${type}/${id}.json`)
       if (!response.ok) continue
       const body = await response.json()
-      if (body?.meta?.name) return body.meta
+      if (!body?.meta?.name) continue
+      if (fold(body.meta.name) === fold(expected)) return body.meta
+      first ??= body.meta
     } catch {
       // The next host.
     }
   }
-  return null
+  return first
 }
 
 const isoDay = (value) =>
@@ -385,15 +439,28 @@ async function wikidataReleaseDays(ids) {
   return days
 }
 
+/** A season's regular episodes, in order, from a series' videos. */
+function seasonEpisodes(videos, season) {
+  return (Array.isArray(videos) ? videos : [])
+    .filter((video) => Number(video?.season) === season && Number(video?.episode) > 0)
+    .sort((a, b) => Number(a.episode) - Number(b.episode))
+}
+
 const problems = []
 const built = []
+// One fetch per series however many seasons it is listed under.
+const metas = new Map()
 for (const universe of UNIVERSES) {
   const seen = new Set()
   const entries = []
-  for (const [id, kind, expected, label] of universe.entries) {
-    if (seen.has(id)) problems.push(`${universe.id}: ${id} is listed twice`)
-    seen.add(id)
-    const found = await meta(id, kind)
+  for (const [id, kind, expected, ...rest] of universe.entries) {
+    const label = rest.find((value) => typeof value === 'string')
+    const wanted = rest.find((value) => typeof value === 'object')
+    const key = wanted ? `${id} ${JSON.stringify(wanted)}` : id
+    if (seen.has(key)) problems.push(`${universe.id}: ${key} is listed twice`)
+    seen.add(key)
+    if (!metas.has(id)) metas.set(id, await meta(id, kind, expected))
+    const found = metas.get(id)
     if (!found) {
       problems.push(`${universe.id}: ${id} (${expected}) did not resolve as a ${kind}`)
       continue
@@ -404,13 +471,32 @@ for (const universe of UNIVERSES) {
     if (fold(found.name) !== fold(expected)) {
       problems.push(`${universe.id}: ${id} is "${found.name}", expected "${expected}"`)
     }
-    const released = isoDay(found.released) || firstEpisodeDay(found.videos)
+    let part
+    let released = isoDay(found.released) || firstEpisodeDay(found.videos)
+    if (wanted) {
+      const episodes = seasonEpisodes(found.videos, wanted.season)
+      const numbers = episodes.map((video) => Number(video.episode))
+      const first = wanted.first ?? numbers[0]
+      const last = wanted.last ?? numbers.at(-1)
+      if (kind !== 's' || !numbers.includes(first) || !numbers.includes(last) || first > last) {
+        problems.push(`${universe.id}: ${id} has no season ${wanted.season} run ${first}-${last}`)
+        continue
+      }
+      part = {
+        season: wanted.season,
+        first,
+        last,
+        whole: first === numbers[0] && last === numbers.at(-1)
+      }
+      released = isoDay(episodes.find((video) => Number(video.episode) === first)?.released)
+    }
     entries.push({
       id,
       type: kind === 'm' ? 'movie' : 'series',
       title: label ?? String(found.name),
       year: released.slice(0, 4) || String(found.releaseInfo ?? found.year ?? '').slice(0, 4),
-      released
+      released,
+      ...(part ? { part } : {})
     })
   }
   built.push({

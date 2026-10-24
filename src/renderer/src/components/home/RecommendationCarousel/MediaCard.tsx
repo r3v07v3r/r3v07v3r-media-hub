@@ -6,7 +6,7 @@ import { Icon } from '@renderer/components/icons/Icon'
 import { resolveArtwork } from '@renderer/lib/artwork'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { WatchStatusBadge } from '@renderer/components/media/WatchStatusBadge'
-import { getWatchStatus } from '@renderer/lib/mediaHub/watchStatus'
+import { getWatchStatus, type WatchStatus } from '@renderer/lib/mediaHub/watchStatus'
 import { titleUnreleased } from '@renderer/lib/mediaHub/releaseDate'
 import styles from './RecommendationCarousel.module.css'
 import { RatingBadge } from '@renderer/components/detail/RatingBadge'
@@ -14,6 +14,7 @@ import { ratingSourceFor } from '@renderer/components/detail/ratingSource'
 import type { PlannedServiceId } from '@shared/media-hub/types'
 import { kindOf } from '@renderer/components/mystuff/plannedFilterRules'
 import { mergedSeasonsLabel } from '@shared/media-hub/catalogFields'
+import { dislikedToast } from '@renderer/lib/mediaHub/statusToasts'
 
 const MATCH_CLASS: Record<string, string> = {
   excellent: styles.matchExcellent,
@@ -41,7 +42,8 @@ export function MediaCard({
   reason,
   showKind = false,
   showProvenance = false,
-  originLabel
+  originLabel,
+  part
 }: {
   media: MediaItem
   reason?: string
@@ -55,8 +57,17 @@ export function MediaCard({
    *  say — a collection page is /collections/:id, which openDetail has no
    *  label for and would call Browse. */
   originLabel?: string
+  /** This card stands for one season of the series, or a run of its
+   *  episodes (a collection's season stop): named under the title, opened
+   *  on that season, watched by those episodes rather than the show, and
+   *  played from `episode` — the run's own next one, not the show's. `key`
+   *  stands in for the show's id on the card, so coming Back to the page
+   *  returns to this season rather than the show's first card (see
+   *  browsingContext's focusedItemId). */
+  part?: { key: string; label: string; season: number; episode: number; status: WatchStatus }
 }) {
-  const { plannedSources, myList, dislikedIds } = useAppState()
+  const { plannedSources, myList, dislikedIds, toggleDisliked, pushNotification, activeProfileId } =
+    useAppState()
   const { openDetail, startPartyPlayback, openContextMenu, continueWatching, resolvingMedia } =
     useAppState()
   const artwork = resolveArtwork(media)
@@ -95,7 +106,8 @@ export function MediaCard({
   // recommendation planned from its own menu stays in its row until the
   // page is left (lib/mediaHub/heldFeed.ts), and should say Planned at
   // once rather than when the next feed arrives.
-  const status = getWatchStatus({ ...media, inMyList: myList.has(media.id) }, continueWatching)
+  const status =
+    part?.status ?? getWatchStatus({ ...media, inMyList: myList.has(media.id) }, continueWatching)
   const watchStatus =
     status.state === 'planned' && plannedTag ? { state: 'unwatched' as const } : status
 
@@ -125,13 +137,17 @@ export function MediaCard({
         className={`${styles.card} ${disliked ? styles.cardDisliked : ''} animated-edge light-sweep`}
         role="button"
         tabIndex={0}
-        data-media-id={media.id}
-        onClick={() => openDetail(media, originLabel)}
+        data-media-id={part?.key ?? media.id}
+        onClick={() => openDetail(media, originLabel, part?.season)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') openDetail(media, originLabel)
+          // Only a key pressed on the card itself. Enter on the play, Not
+          // interested or "..." button bubbles up here, and would open the
+          // title on top of that button's own action.
+          if (e.target !== e.currentTarget) return
+          if (e.key === 'Enter') openDetail(media, originLabel, part?.season)
         }}
         onContextMenu={handleContextMenu}
-        aria-label={`${media.title}, ${media.matchPercentage ?? 0} percent match${
+        aria-label={`${media.title}${part ? `, ${part.label}` : ''}, ${media.matchPercentage ?? 0} percent match${
           disliked ? ', not interested' : ''
         }`}
       >
@@ -161,7 +177,10 @@ export function MediaCard({
             className={styles.playButton}
             onClick={(e) => {
               e.stopPropagation()
-              startPartyPlayback(media)
+              startPartyPlayback(
+                media,
+                part ? { season: part.season, episode: part.episode } : undefined
+              )
             }}
             disabled={isResolving}
             aria-busy={isResolving}
@@ -178,6 +197,25 @@ export function MediaCard({
             )}
           </button>
         )}
+        <button
+          type="button"
+          className={`${styles.moreButton} ${styles.dislikeButton}`}
+          aria-pressed={disliked}
+          onClick={(e) => {
+            e.stopPropagation()
+            toggleDisliked(media)
+            // Same toast and Undo as the menu's item — see statusToasts.ts.
+            pushNotification(
+              dislikedToast(media, !disliked, activeProfileId, () => toggleDisliked(media, false))
+            )
+          }}
+          aria-label={
+            disliked ? `Remove dislike from ${media.title}` : `Not interested in ${media.title}`
+          }
+          title={disliked ? 'Remove dislike' : 'Not interested'}
+        >
+          <Icon name="thumbs-down" />
+        </button>
         <button
           type="button"
           className={styles.moreButton}
@@ -207,6 +245,7 @@ export function MediaCard({
             </span>
           )}
           <span className={styles.cardTitle}>{media.title}</span>
+          {part && <span className={styles.cardPart}>{part.label}</span>}
           {/* What it is, and where it came from, on one row: the kind for a
               list that holds all three, and — on the Planned tab only — the
               service whose watchlist it arrived from, since a list pulled in
@@ -239,7 +278,7 @@ export function MediaCard({
                 value={(media.imdbRating ?? media.communityRating ?? 0).toFixed(1)}
               />
             )}
-            {seasons && <span className={styles.seasonsChip}>{seasons}</span>}
+            {seasons && !part && <span className={styles.seasonsChip}>{seasons}</span>}
           </div>
           {media.matchPercentage !== undefined && (
             <span

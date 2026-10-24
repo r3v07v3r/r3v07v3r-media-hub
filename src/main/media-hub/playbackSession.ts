@@ -269,11 +269,18 @@ export function takeHeldLanguageSettle(): number | undefined {
 }
 
 /**
- * What follows settling on a copy without the wanted audio: its subtitles
- * in the wanted language switched on if it has them, one toast saying what
- * is playing, and subtitles fetched from a provider if it has none. Run by
+ * What follows settling on a copy: subtitles in the wanted language
+ * switched on if it has them, fetched from a provider if it has none, and —
+ * when it lacks the wanted audio — one toast saying what is playing. Run by
  * play:stream, or — for a provisional copy the renderer may still replace —
  * by playback:language-settle once the renderer knows it will not.
+ *
+ * With the wanted audio, subtitles are only switched on or fetched when
+ * "Show subtitles automatically" is on. That setting's own fetch-on-start
+ * lived in the old <video> overlay and went with it in the move to mpv, so
+ * a file with no subtitles in the wanted language showed none. Without the
+ * wanted audio they always are (the fetch still honours the setting),
+ * since nothing else on screen can be understood.
  *
  * `since` is the subtitle choice count the copy started from. If anything
  * has been chosen since, the toast still says what is playing, but nothing
@@ -284,13 +291,16 @@ export async function settleLanguageShortfall(
   fit: LanguageFit,
   since = subtitleChoiceCount()
 ): Promise<void> {
-  if (fit.audio) return
+  if (fit.audio && readSettings().autoSubtitlesEnabled === false) return
   const untouched = subtitleChoiceCount() === since
   if (fit.subtitles && untouched) {
+    // With the right audio too: whether mpv's own `slang` choice turns on
+    // subtitles in the language being spoken depends on its version's
+    // subs-with-matching-audio default. A no-op when they already show.
     await ensureSubtitleLanguage(tracks, playbackLanguages().subtitles)
   }
   notifyLanguageShortfall(tracks, fit)
-  // Neither the audio nor subtitles anyone here can read: fetch some.
+  // No subtitles in the wanted language in the file: fetch some.
   // Not awaited — playback has started, and the search can take seconds.
   if (!fit.subtitles && untouched) void fetchSubtitlesForShortfall(since)
 }
@@ -556,9 +566,8 @@ function parseSubtitleSelection(payload: SubtitlesApplyPayload | undefined): Sub
 
 /**
  * Fetches subtitles in the wanted language and switches them on, for a copy
- * play:stream settled on with neither the wanted audio nor subtitles — the
- * case where nothing on screen can be understood. Off when the person turned
- * automatic subtitles off. Best-effort: a search that finds nothing leaves
+ * play:stream settled on with no subtitles in that language — see
+ * settleLanguageShortfall. Off when the person turned automatic subtitles off. Best-effort: a search that finds nothing leaves
  * the Subtitles menu exactly as it was, and the shortfall toast has already
  * said why. Prefers a row whose hash matched the file playing, since that
  * one is timed to this exact release.

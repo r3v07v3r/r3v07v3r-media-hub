@@ -269,6 +269,98 @@ export function requestRecommendationsRebuild(): void {
  */
 const ABANDONED_AFTER_MS = 10 * 24 * 60 * 60 * 1000
 
+/**
+ * How long a title passed over with "Show me others" stays at the back of
+ * the row. The ranking is deterministic, so without this the same few
+ * titles led the row for as long as the history did not move — days, for
+ * someone who was not watching anything they were offered. Long enough to
+ * get through the buffer, short enough that a title can come back once the
+ * mood has changed. Not interested is the permanent version.
+ */
+const PASSED_OVER_MS = 21 * 24 * 60 * 60 * 1000
+
+function passedKey(profileId: string = getDatabase().activeProfile()): string {
+  return `recommendations:passed:${profileId}`
+}
+
+/** Ids passed over and still inside PASSED_OVER_MS, with when each expires. */
+function passedOverEntries(now = Date.now()): Record<string, number> {
+  try {
+    const stored = getDatabase().getCache<Record<string, number>>(passedKey(), {
+      allowExpired: true
+    })
+    const live: Record<string, number> = {}
+    for (const [id, until] of Object.entries(stored ?? {})) {
+      if (Number(until) > now) live[id] = Number(until)
+    }
+    return live
+  } catch (error) {
+    logError('recommendations:passed-read', error)
+    return {}
+  }
+}
+
+/** Titles the person has asked to see past — see PASSED_OVER_MS. */
+export function passedOverIds(now = Date.now()): Set<string> {
+  return new Set(Object.keys(passedOverEntries(now)))
+}
+
+/**
+ * Sends `ids` to the back of the row for PASSED_OVER_MS. Not an exclusion:
+ * they stay in the buffer, so passing over everything still leaves a full
+ * row rather than a live re-rank, and they return in their own order once
+ * the fresh titles run out.
+ */
+export function passOverRecommendations(ids: string[], now = Date.now()): number {
+  const entries = passedOverEntries(now)
+  for (const id of ids) entries[String(id)] = now + PASSED_OVER_MS
+  try {
+    getDatabase().putCache(passedKey(), entries, PASSED_OVER_MS)
+  } catch (error) {
+    logError('recommendations:passed-write', error)
+  }
+  return Object.keys(entries).length
+}
+
+/**
+ * `ranked` with the passed-over titles moved behind everything else, each
+ * group in its own order. applyCadence keeps order within a kind, so this
+ * is enough for the row to lead with titles not yet passed over.
+ */
+export function passedOverLast<T extends { item: CatalogItem }>(
+  ranked: T[],
+  passed: ReadonlySet<string>
+): T[] {
+  if (passed.size === 0) return ranked
+  const fresh: T[] = []
+  const seen: T[] = []
+  for (const entry of ranked) (passed.has(String(entry.item.id)) ? seen : fresh).push(entry)
+  return [...fresh, ...seen]
+}
+
+/** How many suggestions each library page's own shelf gets. */
+export const SERVED_PER_KIND = 18
+
+/**
+ * The best SERVED_PER_KIND of each kind, from the whole buffer.
+ *
+ * The Movies, Series and Anime pages used to take Home's served row and
+ * keep their own kind. That row is mixed by the time-of-day pass, and on a
+ * mostly-anime evening it held four films — so the Movies page showed the
+ * same four for days while twenty more sat unused in the buffer.
+ */
+export function topByKind(
+  ranked: readonly ScoredRecommendation[],
+  count = SERVED_PER_KIND
+): Partial<Record<CatalogItem['type'], CatalogItem[]>> {
+  const byKind: Partial<Record<CatalogItem['type'], CatalogItem[]>> = {}
+  for (const entry of ranked) {
+    const list = (byKind[entry.item.type] ??= [])
+    if (list.length < count) list.push(entry.item)
+  }
+  return byKind
+}
+
 /** Titles started and left — see ABANDONED_AFTER_MS. */
 export function abandonedIds(now = Date.now()): Set<string> {
   try {
@@ -354,6 +446,7 @@ export function readStoredRecommendations(
   now = new Date()
 ): {
   items: CatalogItem[]
+  byKind: Partial<Record<CatalogItem['type'], CatalogItem[]>>
   reasons: Record<string, RecommendationReason>
   rails: RecommendationRail[]
   preferredGenres: string[]
@@ -398,11 +491,14 @@ export function readStoredRecommendations(
   // what time it is at the moment somebody looks, not on when the list was
   // built. Cheap enough to redo per read precisely because there are only
   // STORED_COUNT of them by this point.
-  const items = applyCadence(surviving, watchCadenceProfile(history, now), SERVED_COUNT)
+  const ordered = passedOverLast(surviving, passedOverIds(now.getTime()))
+  const items = applyCadence(ordered, watchCadenceProfile(history, now), SERVED_COUNT)
+  const byKind = topByKind(ordered)
 
   return {
     items,
-    reasons: reasonsFor(items, surviving),
+    byKind,
+    reasons: reasonsFor([...items, ...Object.values(byKind).flat()], surviving),
     // Over everything that survived, not the served row: the shelves are
     // where the rest of the buffer becomes visible.
     rails: groupRecommendationRails(surviving),

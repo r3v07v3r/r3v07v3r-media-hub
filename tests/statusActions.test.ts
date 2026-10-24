@@ -530,6 +530,32 @@ check('the recommendations, the hero pool and the rails all hold the title', () 
   assert.deepEqual(result.preferredGenres, [])
 })
 
+check("the library pages' per-kind shelves hold the title too", () => {
+  const previous = {
+    recommendations: [] as Recommendation[],
+    featured: [] as MediaItem[],
+    rails: [] as HomeRail[],
+    byKind: { movie: [rec('a'), rec('b'), rec('c')] }
+  }
+  const next = {
+    recommendations: [] as Recommendation[],
+    featured: [] as MediaItem[],
+    rails: [] as HomeRail[],
+    byKind: { movie: [rec('a'), rec('c')], series: [rec('s')] }
+  }
+  const held = new Map([['b', {}]])
+  const result = holdTouchedEntries(previous, next, held, new Set(['b']))
+  assert.deepEqual(
+    result.byKind.movie?.map((r) => r.media.id),
+    ['a', 'b', 'c']
+  )
+  assert.equal(result.byKind.movie?.[1].media.inMyList, true)
+  assert.deepEqual(
+    result.byKind.series?.map((r) => r.media.id),
+    ['s']
+  )
+})
+
 check('with nothing held the fresh feed is returned as it is', () => {
   const next = { recommendations: [rec('a')], featured: [media('a')], rails: [] as HomeRail[] }
   const previous = {

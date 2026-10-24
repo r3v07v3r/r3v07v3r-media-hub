@@ -1079,7 +1079,9 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
   if (current.fit.audio && payload.type && payload.resolveId) {
     rememberReleaseGroup(payload.type, payload.resolveId, current.stream)
   }
-  if (payload.provisional) holdLanguageSettle()
+  // The renderer only replaces a provisional copy that lacks the audio, so
+  // one that has it is settled now — its subtitles still need seeing to.
+  if (payload.provisional && !current.fit.audio) holdLanguageSettle()
   else await settleLanguageShortfall(current.result.tracks, current.fit)
   return { ...current.result, languageFit: current.fit }
 }

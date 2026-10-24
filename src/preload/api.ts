@@ -6,6 +6,7 @@ import {
   SystemSnapshot
 } from '../shared/ipc-types'
 import { MEDIA_HUB_CHANNELS } from '../shared/media-hub/ipc-channels'
+import type { CollectionCandidate, CollectionsState } from '../shared/media-hub/universes'
 import type {
   LanCacheDevicesResponse,
   LanCacheOwnItem,
@@ -584,6 +585,10 @@ export function createApi(transport: ApiTransport) {
       home: {
         personalized: (): Promise<HomePersonalizedResult> =>
           transport.invoke(MEDIA_HUB_CHANNELS.homePersonalized),
+        /** Send these suggestions to the back of the row for a few weeks,
+         *  then refetch personalized() to see what comes up instead. */
+        passOver: (ids: string[]): Promise<{ passed: number }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.recommendationsPassOver, { ids }),
         /** Fires when the background job has rebuilt the stored suggestion
          *  list. Carries no rows on purpose — the subscriber refetches
          *  through personalized() above, so there is one path to that data
@@ -698,6 +703,24 @@ export function createApi(transport: ApiTransport) {
 
       stats: {
         get: (): Promise<ViewingStats> => transport.invoke(MEDIA_HUB_CHANNELS.statsGet)
+      },
+
+      collections: {
+        /** Lists added from Trakt and collections taken off the page. */
+        state: (): Promise<CollectionsState> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.collectionsState),
+        /** Trakt's public lists matching a search; the most liked when empty. */
+        search: (query: string): Promise<{ results: CollectionCandidate[] }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.collectionsSearch, { query }),
+        /** By the id a search found, or a pasted trakt.tv link. */
+        add: (
+          from: { listId: number } | { link: string }
+        ): Promise<CollectionsState & { addedId: string }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.collectionsAdd, from),
+        remove: (id: string): Promise<CollectionsState> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.collectionsRemove, { id }),
+        restore: (id: string): Promise<CollectionsState> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.collectionsRestore, { id })
       },
 
       lists: {

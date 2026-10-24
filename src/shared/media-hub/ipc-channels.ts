@@ -71,6 +71,13 @@ export const MEDIA_HUB_CHANNELS = {
   trackingSetScrobble: 'mediahub:tracking:set-scrobble',
   /** Named lists somebody built in Trakt or Simkl, read-only. */
   listsRemote: 'mediahub:lists:remote',
+  /** The Collections page: lists added from Trakt and collections taken
+   *  off the page; searching Trakt's public lists; add, remove, restore. */
+  collectionsState: 'mediahub:collections:state',
+  collectionsSearch: 'mediahub:collections:search',
+  collectionsAdd: 'mediahub:collections:add',
+  collectionsRemove: 'mediahub:collections:remove',
+  collectionsRestore: 'mediahub:collections:restore',
   /** The caller's own cached titles, and the sharing control over them. */
   lanCacheMyItems: 'mediahub:lancache:my-items',
   lanCacheSetSharing: 'mediahub:lancache:set-sharing',
@@ -150,6 +157,9 @@ export const MEDIA_HUB_CHANNELS = {
    *  rather than polling, so a rebuild that finishes mid-session reaches
    *  the row without waiting for the next launch. */
   recommendationsChanged: 'mediahub:recommendations:changed', // push event
+  /** "Show me others": the suggestions on screen go to the back of the row
+   *  for a few weeks — see main/media-hub/recommendations.ts. */
+  recommendationsPassOver: 'mediahub:recommendations:pass-over',
   trackingList: 'mediahub:tracking:list',
   trackingToggle: 'mediahub:tracking:toggle',
   /** The Undo on the "off your plan" toast: puts back the tracked row the

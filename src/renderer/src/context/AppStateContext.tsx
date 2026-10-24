@@ -337,6 +337,9 @@ interface AppStateValue {
   recommendations: Recommendation[]
   /** The ranking shelved by reason — the For You page's rows. */
   recommendationRails: HomeRail[]
+  /** The best of each kind, for the Movies/Series/Anime shelf. A kind with
+   *  no entry has not been answered yet; fall back to `recommendations`. */
+  recommendationsByKind: Partial<Record<MediaKind, Recommendation[]>>
   featured: MediaItem[]
   homeFeedLive: boolean
   /** The home:personalized fetch is still out. Distinct from
@@ -437,8 +440,9 @@ interface AppStateValue {
    *  is labelled with. Null once the chain is fully unwound. */
   browsingOrigin: BrowsingOrigin | null
   /** `originLabelOverride`: only needed when opening a title from within
-   *  another detail page — see the implementation's own comment. */
-  openDetail: (media: MediaItem, originLabelOverride?: string) => void
+   *  another detail page — see the implementation's own comment. `season`
+   *  opens a series on that season's tab (a collection's season stop). */
+  openDetail: (media: MediaItem, originLabelOverride?: string, season?: number) => void
   /** Opens what else this catalog has of one person's — see routes/PersonPage.
    *  A drill-down from a title page, not a nav destination. */
   openPerson: (name: string) => void
@@ -1657,7 +1661,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   )
 
   const openDetail = useCallback(
-    (media: MediaItem, originLabelOverride?: string) => {
+    (media: MediaItem, originLabelOverride?: string, season?: number) => {
       const route = `${location.pathname}${location.search}`
       const label =
         originLabelOverride ??
@@ -1679,7 +1683,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // A new drill-down invalidates any restore the last Back left pending.
       setPendingRestore(null)
       closeContextMenu()
-      navigate(mediaKindToDetailPath(media))
+      // The same navigation state a later-season anime link leaves behind,
+      // which the detail page already reads (MediaDetailPage's openedSeason).
+      navigate(mediaKindToDetailPath(media), season != null ? { state: { season } } : undefined)
     },
     [location.pathname, location.search, categorySearch, activeMood, navigate, closeContextMenu]
   )
@@ -3181,6 +3187,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       watchedIds: watchedIdsResult.watchedIds,
       recommendations: homeFeed.recommendations,
       recommendationRails: homeFeed.rails,
+      recommendationsByKind: homeFeed.byKind,
       featured: homeFeed.featured,
       homeFeedLive: homeFeed.live,
       homeFeedLoading: homeFeed.loading,
@@ -3281,6 +3288,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       watchedIdsResult.watchedIds,
       homeFeed.recommendations,
       homeFeed.rails,
+      homeFeed.byKind,
       homeFeed.featured,
       homeFeed.live,
       homeFeed.loading,
