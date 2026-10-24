@@ -304,6 +304,14 @@ function broadcastQueue(): void {
   sendPartyEvent({ type: 'queue-sync', queue: current.queue })
 }
 
+/** What a member may only send while the host has "Everyone can control
+ *  playback" on. Gated on receipt, not just in the member's UI, so a member
+ *  whose switch state is stale (or whose build ignores it) cannot pause the
+ *  party anyway. */
+function isMemberControlAction(msg: PartyMessage | null | undefined): boolean {
+  return msg?.type === 'seek' || msg?.type === 'play' || msg?.type === 'pause'
+}
+
 function handlePartyMessage(fromId: string, msg: PartyMessage): void {
   const current = party
   if (msg?.type === 'chat') {
@@ -390,7 +398,7 @@ function handlePartyMessage(fromId: string, msg: PartyMessage): void {
     broadcastQueue()
     return
   }
-  if (current?.role === 'host' && msg?.type === 'seek' && !current.allowMemberControl) return
+  if (current?.role === 'host' && isMemberControlAction(msg) && !current.allowMemberControl) return
   if (current?.role === 'host') {
     forwardFromMember(fromId, encryptMessage(current.secret, { ...msg, from: fromId }))
   }
@@ -1016,7 +1024,7 @@ export function registerWatchPartyIpc(): void {
         if (!envelope.isHost && msg.type === 'nowPlaying') return
         if (
           !envelope.isHost &&
-          msg.type === 'seek' &&
+          isMemberControlAction(msg) &&
           !(party?.role === 'client' && party.allowMemberControl)
         )
           return
