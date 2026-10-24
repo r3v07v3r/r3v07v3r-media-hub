@@ -59,8 +59,11 @@ export function MediaCard({
   /** This card stands for one season of the series, or a run of its
    *  episodes (a collection's season stop): named under the title, opened
    *  on that season, watched by those episodes rather than the show, and
-   *  played from `episode` — the run's own next one, not the show's. */
-  part?: { label: string; season: number; episode: number; status: WatchStatus }
+   *  played from `episode` — the run's own next one, not the show's. `key`
+   *  stands in for the show's id on the card, so coming Back to the page
+   *  returns to this season rather than the show's first card (see
+   *  browsingContext's focusedItemId). */
+  part?: { key: string; label: string; season: number; episode: number; status: WatchStatus }
 }) {
   const { plannedSources, myList, dislikedIds, toggleDisliked, pushNotification, activeProfileId } =
     useAppState()
@@ -129,7 +132,7 @@ export function MediaCard({
         className={`${styles.card} ${disliked ? styles.cardDisliked : ''} animated-edge light-sweep`}
         role="button"
         tabIndex={0}
-        data-media-id={media.id}
+        data-media-id={part?.key ?? media.id}
         onClick={() => openDetail(media, originLabel, part?.season)}
         onKeyDown={(e) => {
           // Only a key pressed on the card itself. Enter on the play, Not

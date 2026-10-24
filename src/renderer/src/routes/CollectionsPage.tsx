@@ -526,6 +526,7 @@ export function CollectionPage() {
               originLabel={universe.name}
               part={
                 entry.part && {
+                  key: universeEntryKey(entry),
                   label: universePartLabel(entry.part),
                   season: entry.part.season,
                   episode: universePartProgress({ ...entry, part: entry.part }, history ?? []).next,
