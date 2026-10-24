@@ -23,7 +23,26 @@ export const UNIVERSE_DATA: UniverseDefinition[] = [
         type: 'series',
         title: "Marvel's Agent Carter",
         year: '2015',
-        released: '2015-01-06'
+        released: '2015-01-06',
+        part: {
+          season: 1,
+          first: 1,
+          last: 8,
+          whole: true
+        }
+      },
+      {
+        id: 'tt3475734',
+        type: 'series',
+        title: "Marvel's Agent Carter",
+        year: '2016',
+        released: '2016-01-19',
+        part: {
+          season: 2,
+          first: 1,
+          last: 10,
+          whole: true
+        }
       },
       {
         id: 'tt4154664',
@@ -86,7 +105,13 @@ export const UNIVERSE_DATA: UniverseDefinition[] = [
         type: 'series',
         title: "Marvel's Agents of S.H.I.E.L.D.",
         year: '2013',
-        released: '2013-09-24'
+        released: '2013-09-24',
+        part: {
+          season: 1,
+          first: 1,
+          last: 16,
+          whole: false
+        }
       },
       {
         id: 'tt1843866',
@@ -94,6 +119,19 @@ export const UNIVERSE_DATA: UniverseDefinition[] = [
         title: 'Captain America: The Winter Soldier',
         year: '2014',
         released: '2014-03-26'
+      },
+      {
+        id: 'tt2364582',
+        type: 'series',
+        title: "Marvel's Agents of S.H.I.E.L.D.",
+        year: '2014',
+        released: '2014-04-08',
+        part: {
+          season: 1,
+          first: 17,
+          last: 22,
+          whole: false
+        }
       },
       {
         id: 'tt2015381',
@@ -114,21 +152,65 @@ export const UNIVERSE_DATA: UniverseDefinition[] = [
         type: 'series',
         title: 'I Am Groot',
         year: '2022',
-        released: '2022-08-10'
+        released: '2022-08-10',
+        part: {
+          season: 1,
+          first: 1,
+          last: 5,
+          whole: true
+        }
+      },
+      {
+        id: 'tt13623148',
+        type: 'series',
+        title: 'I Am Groot',
+        year: '2023',
+        released: '2023-09-06',
+        part: {
+          season: 2,
+          first: 1,
+          last: 5,
+          whole: true
+        }
+      },
+      {
+        id: 'tt2364582',
+        type: 'series',
+        title: "Marvel's Agents of S.H.I.E.L.D.",
+        year: '2014',
+        released: '2014-09-23',
+        part: {
+          season: 2,
+          first: 1,
+          last: 19,
+          whole: false
+        }
       },
       {
         id: 'tt3322312',
         type: 'series',
         title: "Marvel's Daredevil",
         year: '2015',
-        released: '2015-04-10'
+        released: '2015-04-10',
+        part: {
+          season: 1,
+          first: 1,
+          last: 13,
+          whole: true
+        }
       },
       {
         id: 'tt2357547',
         type: 'series',
         title: "Marvel's Jessica Jones",
         year: '2015',
-        released: '2015-11-20'
+        released: '2015-11-20',
+        part: {
+          season: 1,
+          first: 1,
+          last: 13,
+          whole: true
+        }
       },
       {
         id: 'tt2395427',
@@ -138,6 +220,19 @@ export const UNIVERSE_DATA: UniverseDefinition[] = [
         released: '2015-04-22'
       },
       {
+        id: 'tt2364582',
+        type: 'series',
+        title: "Marvel's Agents of S.H.I.E.L.D.",
+        year: '2015',
+        released: '2015-05-05',
+        part: {
+          season: 2,
+          first: 20,
+          last: 22,
+          whole: false
+        }
+      },
+      {
         id: 'tt0478970',
         type: 'movie',
         title: 'Ant-Man',
@@ -145,18 +240,56 @@ export const UNIVERSE_DATA: UniverseDefinition[] = [
         released: '2015-07-17'
       },
       {
+        id: 'tt2364582',
+        type: 'series',
+        title: "Marvel's Agents of S.H.I.E.L.D.",
+        year: '2015',
+        released: '2015-09-29',
+        part: {
+          season: 3,
+          first: 1,
+          last: 19,
+          whole: false
+        }
+      },
+      {
+        id: 'tt3322312',
+        type: 'series',
+        title: "Marvel's Daredevil",
+        year: '2016',
+        released: '2016-03-18',
+        part: {
+          season: 2,
+          first: 1,
+          last: 13,
+          whole: true
+        }
+      },
+      {
         id: 'tt3322314',
         type: 'series',
         title: "Marvel's Luke Cage",
         year: '2016',
-        released: '2016-09-30'
+        released: '2016-09-30',
+        part: {
+          season: 1,
+          first: 1,
+          last: 13,
+          whole: true
+        }
       },
       {
         id: 'tt3322310',
         type: 'series',
         title: "Marvel's Iron Fist",
         year: '2017',
-        released: '2017-03-17'
+        released: '2017-03-17',
+        part: {
+          season: 1,
+          first: 1,
+          last: 13,
+          whole: true
+        }
       },
       {
         id: 'tt4230076',
@@ -171,6 +304,19 @@ export const UNIVERSE_DATA: UniverseDefinition[] = [
         title: 'Captain America: Civil War',
         year: '2016',
         released: '2016-04-27'
+      },
+      {
+        id: 'tt2364582',
+        type: 'series',
+        title: "Marvel's Agents of S.H.I.E.L.D.",
+        year: '2016',
+        released: '2016-05-10',
+        part: {
+          season: 3,
+          first: 20,
+          last: 22,
+          whole: false
+        }
       },
       {
         id: 'tt3480822',
@@ -198,7 +344,13 @@ export const UNIVERSE_DATA: UniverseDefinition[] = [
         type: 'series',
         title: "Marvel's The Punisher",
         year: '2017',
-        released: '2017-11-17'
+        released: '2017-11-17',
+        part: {
+          season: 1,
+          first: 1,
+          last: 13,
+          whole: true
+        }
       },
       {
         id: 'tt1211837',
@@ -206,6 +358,19 @@ export const UNIVERSE_DATA: UniverseDefinition[] = [
         title: 'Doctor Strange',
         year: '2016',
         released: '2016-10-20'
+      },
+      {
+        id: 'tt2364582',
+        type: 'series',
+        title: "Marvel's Agents of S.H.I.E.L.D.",
+        year: '2016',
+        released: '2016-09-20',
+        part: {
+          season: 4,
+          first: 1,
+          last: 22,
+          whole: true
+        }
       },
       {
         id: 'tt3501632',
@@ -226,14 +391,156 @@ export const UNIVERSE_DATA: UniverseDefinition[] = [
         type: 'series',
         title: "Marvel's Runaways",
         year: '2017',
-        released: '2017-11-21'
+        released: '2017-11-21',
+        part: {
+          season: 1,
+          first: 1,
+          last: 10,
+          whole: true
+        }
       },
       {
         id: 'tt5614844',
         type: 'series',
         title: "Marvel's Cloak & Dagger",
         year: '2018',
-        released: '2018-06-07'
+        released: '2018-06-07',
+        part: {
+          season: 1,
+          first: 1,
+          last: 10,
+          whole: true
+        }
+      },
+      {
+        id: 'tt1236246',
+        type: 'series',
+        title: "Marvel's Runaways",
+        year: '2018',
+        released: '2018-12-21',
+        part: {
+          season: 2,
+          first: 1,
+          last: 13,
+          whole: true
+        }
+      },
+      {
+        id: 'tt5614844',
+        type: 'series',
+        title: "Marvel's Cloak & Dagger",
+        year: '2019',
+        released: '2019-04-04',
+        part: {
+          season: 2,
+          first: 1,
+          last: 10,
+          whole: true
+        }
+      },
+      {
+        id: 'tt1236246',
+        type: 'series',
+        title: "Marvel's Runaways",
+        year: '2019',
+        released: '2019-12-13',
+        part: {
+          season: 3,
+          first: 1,
+          last: 10,
+          whole: true
+        }
+      },
+      {
+        id: 'tt2357547',
+        type: 'series',
+        title: "Marvel's Jessica Jones",
+        year: '2018',
+        released: '2018-03-08',
+        part: {
+          season: 2,
+          first: 1,
+          last: 13,
+          whole: true
+        }
+      },
+      {
+        id: 'tt3322314',
+        type: 'series',
+        title: "Marvel's Luke Cage",
+        year: '2018',
+        released: '2018-06-22',
+        part: {
+          season: 2,
+          first: 1,
+          last: 13,
+          whole: true
+        }
+      },
+      {
+        id: 'tt3322310',
+        type: 'series',
+        title: "Marvel's Iron Fist",
+        year: '2018',
+        released: '2018-09-07',
+        part: {
+          season: 2,
+          first: 1,
+          last: 10,
+          whole: true
+        }
+      },
+      {
+        id: 'tt3322312',
+        type: 'series',
+        title: "Marvel's Daredevil",
+        year: '2018',
+        released: '2018-10-19',
+        part: {
+          season: 3,
+          first: 1,
+          last: 13,
+          whole: true
+        }
+      },
+      {
+        id: 'tt5675620',
+        type: 'series',
+        title: "Marvel's The Punisher",
+        year: '2019',
+        released: '2019-01-18',
+        part: {
+          season: 2,
+          first: 1,
+          last: 13,
+          whole: true
+        }
+      },
+      {
+        id: 'tt2357547',
+        type: 'series',
+        title: "Marvel's Jessica Jones",
+        year: '2019',
+        released: '2019-06-14',
+        part: {
+          season: 3,
+          first: 1,
+          last: 13,
+          whole: true
+        }
+      },
+      {
+        id: 'tt2364582',
+        type: 'series',
+        title: "Marvel's Agents of S.H.I.E.L.D.",
+        year: '2017',
+        released: '2017-12-01',
+        part: {
+          season: 5,
+          first: 1,
+          last: 19,
+          whole: false
+        }
       },
       {
         id: 'tt5095030',
@@ -250,6 +557,45 @@ export const UNIVERSE_DATA: UniverseDefinition[] = [
         released: '2018-04-25'
       },
       {
+        id: 'tt2364582',
+        type: 'series',
+        title: "Marvel's Agents of S.H.I.E.L.D.",
+        year: '2018',
+        released: '2018-05-04',
+        part: {
+          season: 5,
+          first: 20,
+          last: 22,
+          whole: false
+        }
+      },
+      {
+        id: 'tt2364582',
+        type: 'series',
+        title: "Marvel's Agents of S.H.I.E.L.D.",
+        year: '2019',
+        released: '2019-05-10',
+        part: {
+          season: 6,
+          first: 1,
+          last: 13,
+          whole: true
+        }
+      },
+      {
+        id: 'tt2364582',
+        type: 'series',
+        title: "Marvel's Agents of S.H.I.E.L.D.",
+        year: '2020',
+        released: '2020-05-27',
+        part: {
+          season: 7,
+          first: 1,
+          last: 13,
+          whole: true
+        }
+      },
+      {
         id: 'tt4154796',
         type: 'movie',
         title: 'Avengers: Endgame',
@@ -261,14 +607,65 @@ export const UNIVERSE_DATA: UniverseDefinition[] = [
         type: 'series',
         title: 'Loki',
         year: '2021',
-        released: '2021-06-09'
+        released: '2021-06-09',
+        part: {
+          season: 1,
+          first: 1,
+          last: 6,
+          whole: true
+        }
+      },
+      {
+        id: 'tt9140554',
+        type: 'series',
+        title: 'Loki',
+        year: '2023',
+        released: '2023-10-05',
+        part: {
+          season: 2,
+          first: 1,
+          last: 6,
+          whole: true
+        }
       },
       {
         id: 'tt10168312',
         type: 'series',
         title: 'What If...?',
         year: '2021',
-        released: '2021-08-11'
+        released: '2021-08-11',
+        part: {
+          season: 1,
+          first: 1,
+          last: 9,
+          whole: true
+        }
+      },
+      {
+        id: 'tt10168312',
+        type: 'series',
+        title: 'What If...?',
+        year: '2023',
+        released: '2023-12-22',
+        part: {
+          season: 2,
+          first: 1,
+          last: 9,
+          whole: true
+        }
+      },
+      {
+        id: 'tt10168312',
+        type: 'series',
+        title: 'What If...?',
+        year: '2024',
+        released: '2024-12-22',
+        part: {
+          season: 3,
+          first: 1,
+          last: 8,
+          whole: true
+        }
       },
       {
         id: 'tt9140560',
@@ -429,7 +826,13 @@ export const UNIVERSE_DATA: UniverseDefinition[] = [
         type: 'series',
         title: 'Daredevil: Born Again',
         year: '2025',
-        released: '2025-03-04'
+        released: '2025-03-04',
+        part: {
+          season: 1,
+          first: 1,
+          last: 9,
+          whole: true
+        }
       },
       {
         id: 'tt14513804',
@@ -465,6 +868,19 @@ export const UNIVERSE_DATA: UniverseDefinition[] = [
         title: 'Wonder Man',
         year: '2026',
         released: '2026-01-27'
+      },
+      {
+        id: 'tt18923754',
+        type: 'series',
+        title: 'Daredevil: Born Again',
+        year: '2026',
+        released: '2026-03-24',
+        part: {
+          season: 2,
+          first: 1,
+          last: 8,
+          whole: true
+        }
       },
       {
         id: 'tt22084616',

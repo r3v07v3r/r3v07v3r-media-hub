@@ -7,11 +7,12 @@
 // still gets a card, built from the entry itself: an ordered list with a hole
 // where the 1985 cartoon should be is not an ordered list.
 
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import { useAppState } from '@renderer/context/AppStateContext'
 import { useCatalogByIds } from '@renderer/lib/mediaHub/useCatalogByIds'
 import type { MediaItem } from '@renderer/types'
+import type { HistoryEntry } from '@shared/media-hub/types'
 import { universeEntryToCatalogItem, type UniverseDefinition } from '@shared/media-hub/universes'
 
 export function useUniverseItems(
@@ -20,7 +21,8 @@ export function useUniverseItems(
   const { adaptCatalogItems, catalogKindStates } = useAppState()
 
   const entries = useMemo(() => universes.flatMap((universe) => universe.entries), [universes])
-  const ids = useMemo(() => entries.map((entry) => entry.id), [entries])
+  // A series split by season is listed once per season, and fetched once.
+  const ids = useMemo(() => [...new Set(entries.map((entry) => entry.id))], [entries])
 
   // Refetched when a kind's catalogue settles — on a fresh database this
   // can ask before anything has been indexed (see useCatalogByIds).
@@ -30,7 +32,10 @@ export function useUniverseItems(
   return useMemo(() => {
     const byId = new Map<string, MediaItem>()
     for (const item of items) byId.set(String(item.id), item)
-    const missing = entries.filter((entry) => !byId.has(entry.id))
+    const missing = entries.filter(
+      (entry, index) =>
+        !byId.has(entry.id) && entries.findIndex((other) => other.id === entry.id) === index
+    )
     // Through the same adapter as the indexed rows, so a stand-in card
     // still carries its watched, planned and not-interested state.
     for (const item of adaptCatalogItems(missing.map(universeEntryToCatalogItem))) {
@@ -38,4 +43,49 @@ export function useUniverseItems(
     }
     return byId
   }, [items, entries, adaptCatalogItems])
+}
+
+/**
+ * The watched episodes of every series these universes list a season at a
+ * time — what tells a season stop is done, which the show's own flags cannot
+ * (a show half watched has some seasons finished). Null until read, and not
+ * read at all when no universe here is split. Read again whenever watch
+ * status changes anywhere, as the detail page reads its own.
+ */
+export function useSeasonHistory(
+  universes: readonly UniverseDefinition[]
+): readonly HistoryEntry[] | null {
+  const { watchStatusVersion } = useAppState()
+  const [history, setHistory] = useState<readonly HistoryEntry[] | null>(null)
+  const splitIds = useMemo(
+    () =>
+      [
+        ...new Set(
+          universes.flatMap((universe) =>
+            universe.entries.filter((entry) => entry.part).map((entry) => entry.id)
+          )
+        )
+      ].join(' '),
+    [universes]
+  )
+
+  useEffect(() => {
+    const api = window.api?.mediaHub?.tracking
+    if (!splitIds || !api) return
+    const wanted = new Set(splitIds.split(' '))
+    let cancelled = false
+    api
+      .list()
+      .then((result) => {
+        if (!cancelled) setHistory(result.history.filter((row) => wanted.has(row.id)))
+      })
+      .catch(() => {
+        // Left as it was: a season stop then goes by the show's own flags.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [splitIds, watchStatusVersion])
+
+  return history
 }

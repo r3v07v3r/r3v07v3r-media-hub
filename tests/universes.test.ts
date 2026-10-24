@@ -16,10 +16,16 @@ import {
   findUniverse,
   parseTraktListLink,
   universeEntries,
+  universeEntryKey,
   universeEntryReleased,
   universeEntryToCatalogItem,
-  type UniverseDefinition
+  universePartLabel,
+  universePartProgress,
+  type UniverseDefinition,
+  type UniverseEntry,
+  type UniversePart
 } from '../src/shared/media-hub/universes'
+import type { HistoryEntry } from '../src/shared/media-hub/types'
 
 // ---- The shipped list ----------------------------------------------------
 
@@ -30,11 +36,14 @@ for (const universe of UNIVERSES) {
   assert.match(universe.id, /^[a-z0-9-]+$/, `${universe.id} is a route segment`)
   assert.ok(universe.name && universe.blurb, `${universe.id} has a name and a blurb`)
   assert.ok(universe.entries.length >= 2, `${universe.id} is more than one title`)
-  const ids = universe.entries.map((entry) => entry.id)
-  assert.equal(new Set(ids).size, ids.length, `${universe.id} lists no title twice`)
+  const keys = universe.entries.map(universeEntryKey)
+  assert.equal(new Set(keys).size, keys.length, `${universe.id} lists no title twice`)
   // Two cards with one name and one kind cannot be told apart — Cinemeta
   // calls both the 1966 and the 1973 series "Star Trek", hence the labels.
-  const names = universe.entries.map((entry) => `${entry.type} ${entry.title}`)
+  const names = universe.entries.map(
+    (entry) =>
+      `${entry.type} ${entry.title}${entry.part ? ` ${universePartLabel(entry.part)}` : ''}`
+  )
   assert.equal(new Set(names).size, names.length, `${universe.id} has no two titles named alike`)
   for (const entry of universe.entries) {
     const where = `${universe.id} ${entry.id}`
@@ -45,6 +54,34 @@ for (const universe of UNIVERSES) {
     if (entry.released) {
       assert.match(entry.released, /^\d{4}-\d{2}-\d{2}$/, `${where} has a whole date`)
       assert.equal(entry.released.slice(0, 4), entry.year, `${where}: date and year agree`)
+    }
+    if (entry.part) {
+      const { season, first, last } = entry.part
+      assert.equal(entry.type, 'series', `${where}: only a series has seasons`)
+      assert.ok(season >= 1 && first >= 1 && first <= last, `${where}: a real run of episodes`)
+    }
+  }
+  // A series split by season is split all the way: no whole-series card
+  // beside its own seasons, and its runs follow one another without a gap
+  // or an overlap, in the order the story is written.
+  const bySeries = new Map<string, UniverseEntry[]>()
+  for (const entry of universe.entries) {
+    bySeries.set(entry.id, [...(bySeries.get(entry.id) ?? []), entry])
+  }
+  for (const [id, stops] of bySeries) {
+    if (stops.length === 1 && !stops[0].part) continue
+    assert.ok(
+      stops.every((stop) => stop.part),
+      `${universe.id} ${id}: split, or listed once`
+    )
+    for (let index = 1; index < stops.length; index++) {
+      const before = stops[index - 1].part!
+      const after = stops[index].part!
+      const follows =
+        after.season === before.season
+          ? after.first === before.last + 1 && !before.whole && !after.whole
+          : after.season === before.season + 1 && after.first >= 1
+      assert.ok(follows, `${universe.id} ${id}: ${universeEntryKey(stops[index])} follows on`)
     }
   }
 }
@@ -69,6 +106,34 @@ assert.equal(universeEntries(marvel, 'story')[0].title, 'Captain America: The Fi
 assert.ok(
   marvel.entries.some((entry) => entry.type === 'series'),
   'a universe holds series as well as films'
+)
+
+// The point of splitting: Agents of S.H.I.E.L.D. turns with the films it
+// shares a story with, so each film sits between the two runs of the season
+// it lands in.
+const marvelStory = universeEntries(marvel, 'story')
+const place = (title: string, season?: number, first?: number): number =>
+  marvelStory.findIndex(
+    (entry) =>
+      entry.title === title &&
+      (season === undefined ||
+        (entry.part?.season === season && (first === undefined || entry.part.first === first)))
+  )
+const shield = "Marvel's Agents of S.H.I.E.L.D."
+for (const [film, season, after] of [
+  ['Captain America: The Winter Soldier', 1, 17],
+  ['Avengers: Age of Ultron', 2, 20],
+  ['Captain America: Civil War', 3, 20],
+  ['Avengers: Infinity War', 5, 20]
+] as const) {
+  const at = place(film)
+  assert.ok(place(shield, season, 1) < at, `S.H.I.E.L.D. season ${season} starts before ${film}`)
+  assert.ok(place(shield, season, after) > at, `and goes on from episode ${after} after it`)
+}
+assert.ok(place(shield, 7) < place('Avengers: Endgame'), 'the last season is before Endgame')
+assert.ok(
+  place("Marvel's Daredevil", 3) > place("Marvel's The Defenders"),
+  'a later Netflix season is after the team-up'
 )
 
 assert.equal(findUniverse('no-such-universe'), undefined)
@@ -103,6 +168,42 @@ assert.notEqual(
 // A universe with no story order has only one real order, whatever is asked.
 const unordered = { ...sample, hasStoryOrder: false }
 assert.deepEqual(ids('story', unordered), ids('release', unordered))
+
+// ---- Seasons ------------------------------------------------------------
+
+const seasonTwo: UniverseEntry & { part: UniversePart } = {
+  id: 'tt9',
+  type: 'series',
+  title: 'Show',
+  year: '2015',
+  released: '2015-05-05',
+  part: { season: 2, first: 20, last: 22, whole: false }
+}
+assert.equal(universeEntryKey(seasonTwo), 'tt9:2:20-22')
+assert.equal(universeEntryKey(sample.entries[0]), 'tt3', 'a whole title is keyed by its id alone')
+assert.equal(universePartLabel(seasonTwo.part), 'Season 2 · Episodes 20–22')
+assert.equal(universePartLabel({ season: 4, first: 1, last: 22, whole: true }), 'Season 4')
+assert.equal(
+  universePartLabel({ season: 1, first: 9, last: 9, whole: false }),
+  'Season 1 · Episode 9'
+)
+
+const seen = (season: number | null, episode: number | null, id = 'tt9'): HistoryEntry => ({
+  id,
+  type: 'series',
+  season,
+  episode,
+  watchedAt: null
+})
+const progress = universePartProgress(seasonTwo, [
+  seen(2, 20),
+  seen(2, 20), // watched twice is still one episode
+  seen(2, 19), // the run before the film
+  seen(3, 21), // the same number in another season
+  seen(2, 21, 'tt8'), // another show
+  seen(2, null)
+])
+assert.deepEqual(progress, { watched: 1, total: 3 })
 
 // ---- Out yet -------------------------------------------------------------
 

@@ -22,14 +22,18 @@ import { useAppState } from '@renderer/context/AppStateContext'
 import { resolveArtwork } from '@renderer/lib/artwork'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
 import { useCollections, type Collections } from '@renderer/lib/mediaHub/useCollections'
-import { useUniverseItems } from '@renderer/lib/mediaHub/useUniverseItems'
-import { getWatchStatus } from '@renderer/lib/mediaHub/watchStatus'
+import { useSeasonHistory, useUniverseItems } from '@renderer/lib/mediaHub/useUniverseItems'
+import { getWatchStatus, type WatchStatus } from '@renderer/lib/mediaHub/watchStatus'
 import type { ContinueWatchingItem, MediaItem } from '@renderer/types'
+import type { HistoryEntry } from '@shared/media-hub/types'
 import {
   addedCollectionId,
   parseTraktListLink,
   universeEntries,
+  universeEntryKey,
   universeEntryReleased,
+  universePartLabel,
+  universePartProgress,
   type CollectionCandidate,
   type UniverseEntry,
   type UniverseOrder
@@ -57,6 +61,39 @@ function isFinished(item: MediaItem | undefined, continueWatching: ContinueWatch
   if (!item) return false
   const { state } = getWatchStatus(item, continueWatching)
   return state === 'watched' || state === 'completed'
+}
+
+/**
+ * Where somebody is with one stop. A whole title goes by its own flags; a
+ * season stop by the episodes of that run in tracking history, or — before
+ * history has been read — finished only when the whole show is.
+ */
+function entryStatus(
+  entry: UniverseEntry,
+  item: MediaItem | undefined,
+  continueWatching: ContinueWatchingItem[],
+  history: readonly HistoryEntry[] | null
+): WatchStatus {
+  if (!entry.part || !item) {
+    return item ? getWatchStatus(item, continueWatching) : { state: 'unwatched' }
+  }
+  if (item.completed) return { state: 'completed', progressPercentage: 100 }
+  const { watched, total } = universePartProgress({ ...entry, part: entry.part }, history ?? [])
+  if (watched >= total) return { state: 'completed', progressPercentage: 100 }
+  if (watched > 0) {
+    return { state: 'in-progress', progressPercentage: Math.round((watched / total) * 100) }
+  }
+  return item.inMyList ? { state: 'planned' } : { state: 'unwatched' }
+}
+
+function entryFinished(
+  entry: UniverseEntry,
+  item: MediaItem | undefined,
+  continueWatching: ContinueWatchingItem[],
+  history: readonly HistoryEntry[] | null
+): boolean {
+  if (!entry.part) return isFinished(item, continueWatching)
+  return entryStatus(entry, item, continueWatching, history).state === 'completed'
 }
 
 function ProgressBar({ done, total }: { done: number; total: number }) {
@@ -232,6 +269,7 @@ export default function CollectionsPage() {
   const { continueWatching } = useAppState()
   const collections = useCollections()
   const items = useUniverseItems(collections.shown)
+  const history = useSeasonHistory(collections.shown)
   const [browsing, setBrowsing] = useState(false)
 
   const restore = (id: string): void => {
@@ -276,13 +314,14 @@ export default function CollectionsPage() {
         {collections.shown.map((universe) => {
           const released = universeEntries(universe, 'release')
           const done = released.filter((entry) =>
-            isFinished(items.get(entry.id), continueWatching)
+            entryFinished(entry, items.get(entry.id), continueWatching, history)
           ).length
           // The first three ever released: the faces of the thing, and the
-          // same three whatever has been watched since.
-          const faces = released
+          // same three whatever has been watched since. Three different
+          // titles, so a show's first two seasons are not two of them.
+          const faces = [...new Set(released.map((entry) => entry.id))]
             .slice(0, 3)
-            .map((entry) => items.get(entry.id))
+            .map((id) => items.get(id))
             .filter((item): item is MediaItem => Boolean(item))
           return (
             <li key={universe.id}>
@@ -309,7 +348,7 @@ export default function CollectionsPage() {
                   <span className={styles.tileCount}>
                     {done > 0
                       ? `${done} of ${released.length} watched`
-                      : `${released.length} titles`}
+                      : `${released.length} ${released.some((entry) => entry.part) ? 'stops' : 'titles'}`}
                   </span>
                   <ProgressBar done={done} total={released.length} />
                 </span>
@@ -369,6 +408,7 @@ export function CollectionPage() {
 
   const universes = useMemo(() => (universe ? [universe] : []), [universe])
   const items = useUniverseItems(universes)
+  const history = useSeasonHistory(universes)
 
   // An added list is only known once main has answered.
   if (!universe) return collections.loaded ? <Navigate to="/collections" replace /> : null
@@ -394,12 +434,13 @@ export function CollectionPage() {
   const entries = universeEntries(universe, order)
   const now = today()
 
-  const done = entries.filter((entry) => isFinished(items.get(entry.id), continueWatching)).length
+  const finished = (entry: UniverseEntry): boolean =>
+    entryFinished(entry, items.get(entry.id), continueWatching, history)
+  const done = entries.filter(finished).length
   // The first title that is out and not finished — a series part-way
   // through is exactly where to carry on, so it counts as next.
   const next: UniverseEntry | undefined = entries.find(
-    (entry) =>
-      universeEntryReleased(entry, now) && !isFinished(items.get(entry.id), continueWatching)
+    (entry) => universeEntryReleased(entry, now) && !finished(entry)
   )
   const nextItem = next ? items.get(next.id) : undefined
 
@@ -429,10 +470,11 @@ export function CollectionPage() {
           <button
             type="button"
             className={styles.next}
-            onClick={() => openDetail(nextItem, universe.name)}
+            onClick={() => openDetail(nextItem, universe.name, next?.part?.season)}
           >
             <Icon name="play" size={12} />
             {done > 0 ? 'Next' : 'Start with'}: {nextItem.title}
+            {next?.part && `, ${universePartLabel(next.part)}`}
           </button>
         )}
         {window.api?.mediaHub?.collections && (
@@ -475,13 +517,20 @@ export function CollectionPage() {
               : `Coming ${entry.year}`
           return (
             <MediaCard
-              key={entry.id}
+              key={universeEntryKey(entry)}
               media={item}
               // The place in the order, where a recommendation says why it
               // was picked: it is the reason this card is where it is.
               reason={`${index + 1} · ${when}`}
               showKind
               originLabel={universe.name}
+              part={
+                entry.part && {
+                  label: universePartLabel(entry.part),
+                  season: entry.part.season,
+                  status: entryStatus(entry, item, continueWatching, history)
+                }
+              }
             />
           )
         })}
@@ -489,8 +538,8 @@ export function CollectionPage() {
 
       {order === 'story' && !universe.source && (
         <p className={page.footnote}>
-          Story order places a series where it begins, so a show that runs alongside several films
-          is one stop rather than several.
+          Story order places a short series where it begins. A longer one is a stop per season, and
+          where a film lands part-way through a season, the season is split at that film.
         </p>
       )}
     </div>
