@@ -126,6 +126,7 @@ export function PlayerSessionRail({ open, onClose }: { open: boolean; onClose: (
   const [hostError, setHostError] = useState<string | null>(null)
   const [invite, setInvite] = useState<{ code: string; hostId: string } | null>(null)
   const [copied, setCopied] = useState(false)
+  const [settingControl, setSettingControl] = useState(false)
   const applyStatus = (next: PartyStatusResult): void => {
     setStatus(next)
     if (!next.inParty) setInvite(null)
@@ -201,6 +202,21 @@ export function PlayerSessionRail({ open, onClose }: { open: boolean; onClose: (
     }
   }
 
+  async function setMemberControl(allow: boolean): Promise<void> {
+    const api = window.api?.mediaHub?.party
+    if (!api || settingControl) return
+    setSettingControl(true)
+    try {
+      await api.setMemberControl(allow)
+      applyStatus(await api.status())
+    } catch {
+      // The checkbox stays bound to status, so a failed change simply
+      // leaves it showing what the party actually has.
+    } finally {
+      setSettingControl(false)
+    }
+  }
+
   async function copyInvite(): Promise<void> {
     if (!invite) return
     try {
@@ -251,6 +267,26 @@ export function PlayerSessionRail({ open, onClose }: { open: boolean; onClose: (
             ))}
             {members.length > 5 && <em>+{members.length - 5}</em>}
           </div>
+          {/* Mid-film is when the host wants to hand over the pause button,
+              and the main window's People tab cannot be reached without
+              hiding the film — so the switch lives here too. */}
+          {status?.role === 'host' ? (
+            <label className={styles.controlToggle}>
+              <input
+                type="checkbox"
+                checked={Boolean(status.allowMemberControl)}
+                disabled={settingControl}
+                onChange={(event) => void setMemberControl(event.target.checked)}
+              />
+              <span>Everyone can play, pause and seek</span>
+            </label>
+          ) : (
+            <p className={styles.controlNote}>
+              {status?.allowMemberControl
+                ? 'Everyone can play, pause and seek.'
+                : 'The host controls playback.'}
+            </p>
+          )}
           <div className={styles.messages} aria-live="polite">
             {messages.length === 0 ? (
               <p>
