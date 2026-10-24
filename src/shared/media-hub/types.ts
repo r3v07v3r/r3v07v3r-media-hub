@@ -1326,10 +1326,9 @@ export interface MediaHubPublicSettings {
   /** Anime4K shader pack: whether it is on disk, whether it is in the
    *  pipeline, and which mode — see shared/media-hub/anime4k.ts. */
   anime4k: Anime4kSettings
-  /** On by default: fetches and applies an OpenSubtitles match (in
-   *  `subtitleLanguage` below) automatically as soon as a title starts,
-   *  same as picking the first OpenSubtitles search result manually would
-   *  — see PlaybackOverlay.tsx's own "Always have subtitles" effect. */
+  /** On by default: once a title starts, turns on its subtitles in
+   *  `subtitleLanguage`, or fetches a provider match when the file has
+   *  none — see playbackSession.ts's settleLanguageShortfall. */
   autoSubtitlesEnabled: boolean
   /** On by default: reaching the end of an episode offers the next one on a
    *  post-play card and starts it when the countdown runs out (see
