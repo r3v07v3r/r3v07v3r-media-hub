@@ -374,6 +374,15 @@
   width: 13px;
   height: 13px;
 }
+/* One-click Not interested, beside the menu that also has it. Worn with
+   .moreButton, which supplies the shape and the hover reveal. */
+.moreButton.dislikeButton {
+  right: 42px;
+}
+.moreButton.dislikeButton[aria-pressed='true'] {
+  opacity: 1;
+  color: var(--accent-red, #ff6b6b);
+}
 
 .cardOverlay {
   position: absolute;
@@ -662,6 +671,31 @@
 
 .seeAll:hover {
   text-decoration: underline;
+}
+
+/* "Show me others" — takes the right-hand space See all used to, and See
+   all sits after it. */
+.showOthers {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-secondary);
+}
+.showOthers:hover:not(:disabled) {
+  color: var(--accent-cyan);
+}
+.showOthers:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+.showOthers + .seeAll {
+  margin-left: 0;
 }
 
 /* What a title IS, for lists that hold films, series and anime at once.

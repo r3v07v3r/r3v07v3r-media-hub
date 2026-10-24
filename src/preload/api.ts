@@ -585,6 +585,10 @@ export function createApi(transport: ApiTransport) {
       home: {
         personalized: (): Promise<HomePersonalizedResult> =>
           transport.invoke(MEDIA_HUB_CHANNELS.homePersonalized),
+        /** Send these suggestions to the back of the row for a few weeks,
+         *  then refetch personalized() to see what comes up instead. */
+        passOver: (ids: string[]): Promise<{ passed: number }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.recommendationsPassOver, { ids }),
         /** Fires when the background job has rebuilt the stored suggestion
          *  list. Carries no rows on purpose — the subscriber refetches
          *  through personalized() above, so there is one path to that data

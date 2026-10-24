@@ -13,6 +13,7 @@ import { ratingSourceFor } from '@renderer/components/detail/ratingSource'
 import type { PlannedServiceId } from '@shared/media-hub/types'
 import { kindOf } from '@renderer/components/mystuff/plannedFilterRules'
 import { mergedSeasonsLabel } from '@shared/media-hub/catalogFields'
+import { dislikedToast } from '@renderer/lib/mediaHub/statusToasts'
 
 const MATCH_CLASS: Record<string, string> = {
   excellent: styles.matchExcellent,
@@ -55,7 +56,8 @@ export function MediaCard({
    *  label for and would call Browse. */
   originLabel?: string
 }) {
-  const { plannedSources, myList, dislikedIds } = useAppState()
+  const { plannedSources, myList, dislikedIds, toggleDisliked, pushNotification, activeProfileId } =
+    useAppState()
   const { openDetail, startPartyPlayback, openContextMenu, continueWatching, resolvingMedia } =
     useAppState()
   const artwork = resolveArtwork(media)
@@ -160,6 +162,25 @@ export function MediaCard({
           ) : (
             <Icon name="play" />
           )}
+        </button>
+        <button
+          type="button"
+          className={`${styles.moreButton} ${styles.dislikeButton}`}
+          aria-pressed={disliked}
+          onClick={(e) => {
+            e.stopPropagation()
+            toggleDisliked(media)
+            // Same toast and Undo as the menu's item — see statusToasts.ts.
+            pushNotification(
+              dislikedToast(media, !disliked, activeProfileId, () => toggleDisliked(media, false))
+            )
+          }}
+          aria-label={
+            disliked ? `Remove dislike from ${media.title}` : `Not interested in ${media.title}`
+          }
+          title={disliked ? 'Remove dislike' : 'Not interested'}
+        >
+          <Icon name="thumbs-down" />
         </button>
         <button
           type="button"

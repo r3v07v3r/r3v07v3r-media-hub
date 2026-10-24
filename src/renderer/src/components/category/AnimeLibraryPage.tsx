@@ -32,6 +32,7 @@ import { CategoryFilterBar } from './CategoryFilterBar'
 import { TitleStatusButton } from '@renderer/components/media/TitleStatusButton'
 import { titleStatusOf } from '@renderer/lib/mediaHub/titleStatus'
 import { resolveLibrarySelection } from '@renderer/lib/mediaHub/librarySelection'
+import { passOverVisible } from '@renderer/lib/mediaHub/passOver'
 import styles from './AnimeLibraryPage.module.css'
 import { RatingBadge } from '@renderer/components/detail/RatingBadge'
 import { ratingSourceFor } from '@renderer/components/detail/ratingSource'
@@ -102,6 +103,9 @@ interface ShelfProps {
   onOpen: (media: MediaItem) => void
   emptyMessage: string
   collapseWhenEmpty?: boolean
+  /** Offers "Show me others" (lib/mediaHub/passOver.ts) and is called once
+   *  the tiles on screen have been passed over — the suggestion shelf only. */
+  onPassedOver?: () => void
 }
 
 function LibraryShelf({
@@ -112,10 +116,23 @@ function LibraryShelf({
   onSelect,
   onOpen,
   emptyMessage,
-  collapseWhenEmpty = false
+  collapseWhenEmpty = false,
+  onPassedOver
 }: ShelfProps) {
   const scroller = useRef<HTMLUListElement>(null)
   const isCollapsed = collapseWhenEmpty && items.length === 0
+  const [passing, setPassing] = useState(false)
+
+  async function showOthers() {
+    const el = scroller.current
+    if (!el || passing) return
+    setPassing(true)
+    const passed = await passOverVisible(el)
+    setPassing(false)
+    if (!passed) return
+    el.scrollLeft = 0
+    onPassedOver?.()
+  }
 
   function nudge(direction: -1 | 1) {
     scroller.current?.scrollBy({ left: direction * 460, behavior: 'smooth' })
@@ -134,6 +151,19 @@ function LibraryShelf({
         {items.length > 0 && (
           <div className={styles.shelfControls}>
             <span>{items.length} titles</span>
+            {onPassedOver && (
+              <button
+                type="button"
+                className={styles.shelfShowOthers}
+                onClick={() => void showOthers()}
+                disabled={passing}
+                aria-busy={passing}
+                title="Move these to the back of the row for a few weeks"
+              >
+                <Icon name="refresh" size={14} />
+                Show me others
+              </button>
+            )}
             <button type="button" onClick={() => nudge(-1)} aria-label={`Scroll ${title} left`}>
               <Icon name="chevron-left" size={16} />
             </button>
@@ -850,6 +880,8 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
     refreshCatalog,
     continueWatching,
     recommendations,
+    recommendationsByKind,
+    refreshHomeFeed,
     categorySearch,
     clearCategorySearch,
     mediaHubSettings,
@@ -1094,17 +1126,20 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
       )
       .slice(0, 18)
   }, [browseItems, filteredLibrary])
-  // Recommendations are sourced from the personalised home feed, then
-  // narrowed to the active library. Each category keeps its own relevant
-  // rail: movies on Movies, series on Series, and anime on Anime.
+  // Recommendations are sourced from the personalised home feed. Each
+  // category keeps its own relevant rail: movies on Movies, series on
+  // Series, and anime on Anime — drawn from the whole ranking for that kind
+  // (recommendationsByKind). Narrowing Home's mixed row instead left the
+  // Movies page four films on a mostly-anime evening, the same four for
+  // days. The narrowed row stays as the fallback until the feed answers.
   const recommended = useMemo(
     () =>
       uniqueItems(
-        recommendations
+        (recommendationsByKind[config.kind] ?? recommendations)
           .map((recommendation) => recommendation.media)
           .filter((media) => matchesCategoryKind(media, config.kind))
       ).slice(0, 18),
-    [recommendations, config.kind]
+    [recommendations, recommendationsByKind, config.kind]
   )
   // Seeds EverythingSection's reveal batch past wherever the previously-
   // focused tile falls, rounded up to a clean batch boundary, so a
@@ -1396,6 +1431,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
               onSelect={setSelection}
               onOpen={openDetail}
               emptyMessage="Watch a few titles and personalised recommendations will appear here."
+              onPassedOver={refreshHomeFeed}
             />
             <LibraryShelf
               title="Popular in your library"
