@@ -125,6 +125,10 @@ export function MediaCard({
         data-media-id={media.id}
         onClick={() => openDetail(media, originLabel)}
         onKeyDown={(e) => {
+          // Only a key pressed on the card itself. Enter on the play, Not
+          // interested or "..." button bubbles up here, and would open the
+          // title on top of that button's own action.
+          if (e.target !== e.currentTarget) return
           if (e.key === 'Enter') openDetail(media, originLabel)
         }}
         onContextMenu={handleContextMenu}
