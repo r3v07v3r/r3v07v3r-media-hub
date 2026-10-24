@@ -1160,6 +1160,16 @@ export interface PendingWatchStatusPush {
   remoteWatched: boolean
   /** Failed flush attempts so far — see PENDING_PUSH_MAX_ATTEMPTS. */
   attempts: number
+  /** Sent, and accepted by Simkl, but not yet SEEN to have taken: Simkl
+   *  answers 200 with nothing in `not_found` for a push it then ignores
+   *  (a film on the account's dropped list, a stub record it never files)
+   *  — so an accepted push is only done once a later read of the account
+   *  shows the value it sent. Until then the entry stays queued, which
+   *  keeps its title out of the review list, and the flush leaves it
+   *  alone; the next diff made from a fresh read either lets it go or
+   *  counts the push as a failed attempt and sends it again (see
+   *  reconcileQueue.ts's verifyPushed). */
+  pushed?: boolean
 }
 
 /** Outcome of one flush of that queue, pushed to the renderer so a sync

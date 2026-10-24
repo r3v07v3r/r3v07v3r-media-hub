@@ -72,3 +72,37 @@ export function isUpcomingEpisode(
   if (parseReleaseDate(episode.released)) return isFutureInstant(episode.released, now)
   return episode.upcoming === true
 }
+
+/**
+ * Why a title on a card or the Home hero must not offer Play yet, in the
+ * words to show instead — or null for one that is out.
+ *
+ * The full date rules when there is one ("Releases 12 Mar 2027", by
+ * isFutureRelease's calendar-day compare). Without one, a bare year ahead
+ * of this one is still proof enough ("Coming 2027"): the index carries
+ * only `year` for rows written before it learned release dates, and a
+ * title dated next year is not out whatever its day turns out to be. A
+ * source's own word for a title with no date at all — Kitsu lists an
+ * unaired anime as "upcoming" — is the last resort ("Coming soon").
+ *
+ * A title out earlier this year with no full date reads as out, which is
+ * the right default: offering Play on a film that released in March is
+ * ordinary, and the detail page, which fetches the full record, has the
+ * last word on the ones this cannot tell apart.
+ */
+export function titleUnreleased(
+  media: { releaseDate?: string; releaseYear?: number; status?: string },
+  now: number = Date.now()
+): string | null {
+  if (parseReleaseDate(media.releaseDate)) {
+    if (!isFutureRelease(media.releaseDate, now)) return null
+    const formatted = formatReleaseDate(media.releaseDate)
+    return formatted ? `Releases ${formatted}` : 'Not yet released'
+  }
+  if (media.releaseYear && media.releaseYear > new Date(now).getFullYear()) {
+    return `Coming ${media.releaseYear}`
+  }
+  const status = String(media.status || '').toLowerCase()
+  if (status === 'upcoming' || status === 'unreleased') return 'Coming soon'
+  return null
+}

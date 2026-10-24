@@ -741,3 +741,40 @@
   text-transform: uppercase;
   color: var(--text-secondary);
 }
+
+/* A title that is not out yet carries its date where the play button would
+   be, and carries it ALWAYS — not on hover, since "when" is the fact worth
+   reading at a glance — in place of a Play that could only fail (see
+   titleUnreleased in lib/mediaHub/releaseDate.ts). */
+.unreleasedChip {
+  position: absolute;
+  z-index: 2;
+  bottom: 14px;
+  right: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: #fff;
+  background: rgba(4, 8, 15, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  backdrop-filter: blur(6px);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.unreleasedChip svg {
+  width: 12px;
+  height: 12px;
+}
+@media (max-width: 1439px) {
+  .unreleasedChip {
+    bottom: 10px;
+    right: 10px;
+    padding: 4px 8px;
+    font-size: 10.5px;
+  }
+}

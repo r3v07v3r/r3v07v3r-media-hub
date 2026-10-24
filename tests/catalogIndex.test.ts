@@ -530,4 +530,20 @@ check('a later crawl that lists a search row takes it over', () => {
   db.close()
 })
 
+// --- release dates: kept, read back, and never erased by a dateless source ---
+
+check('a release date is stored, read back, and survives a source without one', () => {
+  const dbPath = tempDbPath()
+  const db = createDatabase(dbPath, TEST_PROFILE)
+  db.indexUpsert('movie', [item('tt1', { releaseDate: '2027-03-12' }), item('tt2')])
+  assert.equal(db.indexList('movie', 10)[0].releaseDate, '2027-03-12')
+  assert.equal('releaseDate' in db.indexList('movie', 10)[1], false, 'no date is no field')
+  // A later crawl from a source that carries no dates (the LAN title sync,
+  // an older cache) must not blank what a richer one wrote.
+  db.indexUpsert('movie', [item('tt1')])
+  assert.equal(raw(dbPath, 'tt1')?.release_date, '2027-03-12')
+  assert.equal(db.indexQuery({ kind: 'movie', limit: 10 }).items[0].releaseDate, '2027-03-12')
+  db.close()
+})
+
 console.log(`\n${pass} passed`)

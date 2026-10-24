@@ -213,3 +213,53 @@
     padding: 6px 22px 10px calc(22px + var(--nav-rail-width, 285px) * 0.8);
   }
 }
+
+/* ---------- No local model ----------
+   The assistant column holds the two Recommend buttons, which ask a local
+   Ollama; with none reachable they are not rendered at all (see
+   useOllamaAvailable), and the column they sat in goes with them — the
+   hero takes the full width rather than leaving 258px of nothing on the
+   left. One variant per breakpoint above, because this selector outranks
+   the breakpoints' own area maps. */
+.dashboard.noAssistant {
+  grid-template-columns: minmax(0, 1fr) 340px;
+  grid-template-areas:
+    'hero hero'
+    'picks status'
+    'mood mood';
+}
+@media (max-width: 1439px) {
+  .dashboard.noAssistant {
+    grid-template-columns: minmax(0, 1fr) 300px;
+  }
+}
+@media (max-width: 1099px) {
+  .dashboard.noAssistant {
+    grid-template-columns: 1fr;
+    grid-template-rows: repeat(4, auto);
+    grid-template-areas:
+      'hero'
+      'picks'
+      'continue'
+      'mood';
+  }
+}
+@media (max-width: 767px) {
+  .dashboard.noAssistant {
+    grid-template-areas:
+      'hero'
+      'continue'
+      'picks'
+      'mood';
+  }
+}
+@media (min-width: 1100px) and (max-height: 940px) {
+  .dashboard.noAssistant {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(200px, 1fr) auto auto;
+    grid-template-areas:
+      'hero'
+      'picks'
+      'mood';
+  }
+}

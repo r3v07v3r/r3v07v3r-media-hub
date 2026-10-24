@@ -541,6 +541,26 @@ const animeGroupLedger: Migration = {
   }
 }
 
+/**
+ * The title's full release date, when its source gave one (Cinemeta's
+ * `released`, Kitsu's `startDate` — see CatalogItem.releaseDate). The index
+ * carried only `year`, which cannot tell a film out next week from one out
+ * last spring, so a Home card for a title that is not out yet offered Play
+ * on a stream nothing could resolve; the detail page knew better only
+ * because it fetches the full record. Nullable and not backfilled: the
+ * next crawl writes it, and a row without one falls back to `year` (see
+ * titleUnreleased in the renderer).
+ */
+const indexReleaseDate: Migration = {
+  name: 'index-release-date',
+  apply(sql) {
+    // Tolerant of the column already being there: a database rolled back
+    // to an earlier version with this column left in place (the title-key
+    // backfill test does exactly that) must not fail to open over it.
+    addColumnIfMissing(sql, 'catalog_index', 'release_date', 'TEXT')
+  }
+}
+
 /** Ordered, and the order IS the version. Append only. */
 const MIGRATIONS: readonly Migration[] = [
   baseline,
@@ -549,7 +569,8 @@ const MIGRATIONS: readonly Migration[] = [
   airedEpisodes,
   demoGhostHistoryCleanup,
   titleSearchKey,
-  animeGroupLedger
+  animeGroupLedger,
+  indexReleaseDate
 ]
 
 /** How many migrations exist — a database at this version is fully current. */

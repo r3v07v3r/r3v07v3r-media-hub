@@ -662,3 +662,14 @@
     display: none;
   }
 }
+
+/* Watch Now for a title that is not out yet: the same pill, saying when,
+   with none of the come-and-press-me glow — it cannot be pressed. */
+.watchNowUnreleased,
+.watchNowUnreleased:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: none;
+  transform: none;
+  cursor: default;
+}
