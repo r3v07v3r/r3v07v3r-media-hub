@@ -79,6 +79,7 @@ import type {
   ReconcileCheckResult,
   ReconcileResolution,
   ReconcileResolveResult,
+  LanCacheAppEvent,
   LibraryChangedEvent,
   ReconcileSyncReport,
   ReleaseNotesResult,
@@ -392,6 +393,9 @@ export function createApi(transport: ApiTransport) {
         pairStatus: (): Promise<{
           state: 'none' | 'pending' | 'approved'
           name?: string
+          /** The stored address, so a panel can follow a join or a move the
+           *  main process made on its own without searching the network. */
+          url?: string
           error?: string
         }> => transport.invoke(MEDIA_HUB_CHANNELS.lanCachePairStatus),
         claim: (): Promise<{ ok: boolean; message: string }> =>
@@ -428,7 +432,12 @@ export function createApi(transport: ApiTransport) {
         removeItem: (payload: { infoHash: string }): Promise<{ ok: boolean; message?: string }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.lanCacheRemoveItem, payload),
         cancelJob: (payload: { contentKey: string }): Promise<{ ok: boolean; message?: string }> =>
-          transport.invoke(MEDIA_HUB_CHANNELS.lanCacheCancelJob, payload)
+          transport.invoke(MEDIA_HUB_CHANNELS.lanCacheCancelJob, payload),
+        /** What the main process did about the cache server on its own:
+         *  found and asked to join one, followed one to a new address, was
+         *  approved, or (administrator only) another device is asking. */
+        onEvent: (onEvent: (event: LanCacheAppEvent) => void): (() => void) =>
+          subscribe<LanCacheAppEvent>(MEDIA_HUB_CHANNELS.lanCacheEvent, onEvent)
       },
 
       torbox: {

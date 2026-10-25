@@ -293,6 +293,30 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       return
     }
 
+    // A pending device taking its own request back: the app's Cancel, and a
+    // launch-time request that lost a race with a join made by hand. Without
+    // it every such request stayed in the administrator's queue, holding one
+    // of the eight pending slots, until somebody denied it.
+    //
+    // PENDING ONLY, and only the caller's own: a pending token authorises
+    // nothing, so it can hold no credential and no job, and there is nothing
+    // to clean up beyond the record. Leaving once approved is the admin's
+    // Remove, which also withdraws the device's key and cancels its jobs.
+    if (route === 'POST /api/pair/withdraw') {
+      const device = pairing.findByToken(bearerToken(req))
+      if (!device) {
+        json(res, 401, { error: 'Unknown device.' })
+        return
+      }
+      if (isApproved(device)) {
+        json(res, 409, { error: 'This device has already been let in.' })
+        return
+      }
+      await pairing.removeDevice(deviceIdForToken(device.token))
+      json(res, 200, { withdrawn: true })
+      return
+    }
+
     // --- /stream: token in query (mpv cannot send headers) -----------------
     const streamMatch = /^\/stream\/([a-f0-9]{40})$/.exec(url.pathname)
     if (streamMatch && (req.method === 'GET' || req.method === 'HEAD')) {

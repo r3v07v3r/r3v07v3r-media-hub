@@ -188,6 +188,27 @@ export function CachingSection() {
     })
   }, [api, refreshStatus, refreshMyItems])
 
+  // The main process joins, follows and is approved on its own (the launch
+  // search, its timer, the background approval wait), and this panel stays
+  // mounted across navigation. Without listening it kept whatever it read on
+  // mount: the unpaired controls after an automatic join, with no Cancel or
+  // Leave, and an Ask to join that would make a second request.
+  useEffect(() => {
+    if (!api) return
+    return api.onEvent((event) => {
+      if (event.kind === 'join-request') {
+        void refreshDevices()
+        return
+      }
+      void (async () => {
+        const pair = await api.pairStatus()
+        setPairState(pair.state)
+        setPairedUrl(pair.state === 'none' ? null : (pair.url ?? null))
+        if (pair.state === 'approved') await Promise.all([refreshStatus(), refreshMyItems()])
+      })()
+    })
+  }, [api, refreshStatus, refreshMyItems, refreshDevices])
+
   // Waiting for approval: ask, slowly, until the answer changes. The main
   // process is what flips the stored connection to approved, so this only
   // has to observe it.

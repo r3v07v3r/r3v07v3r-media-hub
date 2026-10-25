@@ -459,6 +459,21 @@ export interface LibraryChangedEvent {
   sources: string[]
 }
 
+/**
+ * What the main process tells the renderer about the cache server on its
+ * own, with nobody having asked: the launch-time search found one and asked
+ * to join ('asked'), or was let straight in ('joined'); the server moved to
+ * a new address and the stored one was updated ('moved'); approval arrived
+ * for a request this device made ('approved'); or, on the administrator's
+ * device, another device is asking to join ('join-request').
+ */
+export type LanCacheAppEvent =
+  | { kind: 'asked'; serverName: string }
+  | { kind: 'joined'; serverName: string }
+  | { kind: 'approved'; serverName: string }
+  | { kind: 'moved'; serverName: string; url: string }
+  | { kind: 'join-request'; id: string; deviceName: string; serverName: string }
+
 export interface CacheSourceRef {
   source: StreamSource
   /** torbox */
