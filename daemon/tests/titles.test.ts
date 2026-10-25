@@ -333,7 +333,7 @@ async function main(): Promise<void> {
     assert.deepEqual(reborn.listSince('movie', 0, 10).rows, rows)
   })
 
-  await check('a page read during a retried load is not cached as the whole index', async () => {
+  await check('a page asked for during a retried load is refused, not served partial', async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-titles-'))
     const file = path.join(root, 'titles.ndjson')
     await fsp.mkdir(file)
@@ -344,9 +344,9 @@ async function main(): Promise<void> {
     await seed.load()
     await seed.upsert('series', [{ rank: 0, item: item('tt-show', { type: 'series' }) }])
 
-    // A movie write retries the load; a series page is served meanwhile.
+    // A movie write retries the load; a series page is asked for meanwhile.
     const writing = store.upsert('movie', [{ rank: 0, item: item('tt-film') }])
-    store.listSince('series', 0, 10)
+    assert.throws(() => store.listSince('series', 0, 10), /still loading/)
     await writing
     assert.equal(store.counts().series, 1)
     assert.deepEqual(
@@ -354,6 +354,38 @@ async function main(): Promise<void> {
       ['tt-show'],
       'the series page reflects the finished load'
     )
+  })
+
+  await check('no sync watermark can come from a half-read index', async () => {
+    // A compacted file is in map order, not seq order: seq 10 can come
+    // before seq 1. A page served between the two would say "caught up to
+    // 10" and the client would never ask for seq 1.
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-titles-'))
+    const lines = [
+      { seq: 10, kind: 'movie', rank: 0, item: item('tt-late') },
+      // Padding so the two rows land in different read chunks.
+      ...Array.from({ length: 600 }, (_, i) => ({
+        seq: 100 + i,
+        kind: 'series',
+        rank: i,
+        item: item(`tt-pad${i}`, { type: 'series', description: 'x'.repeat(2000) })
+      })),
+      { seq: 1, kind: 'movie', rank: 1, item: item('tt-early') }
+    ]
+    await fsp.writeFile(
+      path.join(root, 'titles.ndjson'),
+      lines.map((line) => JSON.stringify(line)).join('\n') + '\n'
+    )
+    const store = createTitleStore(root)
+    const loading = store.load()
+    assert.throws(() => store.listSince('movie', 0, 10), /still loading/)
+    await loading
+    const page = store.listSince('movie', 0, 10)
+    assert.deepEqual(
+      page.rows.map((row) => row.item.id),
+      ['tt-early', 'tt-late']
+    )
+    assert.equal(page.nextSince, 10)
   })
 
   await check('a torn tail at boot on a full disk is still closed off later', async () => {

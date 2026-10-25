@@ -262,9 +262,7 @@ export function createTitleStore(
     let rows = sortedCache.get(kind)
     if (!rows) {
       rows = [...(byKind.get(kind)?.values() ?? [])].sort((a, b) => a.seq - b.seq)
-      // Not cached while the file is still being read (or could not be):
-      // the index is partial, and a cached partial view would outlive it.
-      if (loaded) sortedCache.set(kind, rows)
+      sortedCache.set(kind, rows)
     }
     return rows
   }
@@ -291,29 +289,47 @@ export function createTitleStore(
    *  first write when that load did not finish. */
   async function reload(): Promise<void> {
     loaded = false
-    for (const map of byKind.values()) map.clear()
-    sortedCache.clear()
-    seqCounter = 0
-    lineCount = 0
-    fileSize = 0
+    // Built on the side and published in one step. Rows in a compacted file
+    // are not in seq order, so a half-read index can hold seq 10 without
+    // seq 1; a sync page served from it would hand a client a watermark past
+    // rows not yet read, and the client keeps that watermark for good.
+    const fresh = new Map<MediaKind, Map<string, RowRef>>(KINDS.map((kind) => [kind, new Map()]))
+    const read = await loadRows(fresh)
+    for (const kind of KINDS) byKind.set(kind, fresh.get(kind) ?? new Map())
+    seqCounter = read.maxSeq
+    lineCount = read.lines
+    fileSize = read.size
     tailUnknown = false
-    await loadRows()
-    loaded = true
-    // A page served while the read was in flight may have cached a partial
-    // view of a kind this reload did not otherwise touch.
     sortedCache.clear()
+    loaded = true
+    // A file that ends mid-line (a crash during append) would glue the next
+    // appended row onto that fragment. Close it off first. Marked before and
+    // cleared only on success: if this append fails (a full disk at boot),
+    // the next write must still close the line off.
+    if (fileSize && read.lastByte !== 0x0a) {
+      tailUnknown = true
+      await appendFile(ndjsonPath, '\n')
+      fileSize += 1
+      tailUnknown = false
+    }
   }
 
-  /** Streams the file, indexing each line by its byte position. Only one
-   *  chunk and one line are ever held at a time. */
-  async function loadRows(): Promise<void> {
+  /** Streams the file into `target`, indexing each line by its byte
+   *  position. Only one chunk and one line are ever held at a time. */
+  async function loadRows(
+    target: Map<MediaKind, Map<string, RowRef>>
+  ): Promise<{ maxSeq: number; lines: number; size: number; lastByte: number }> {
+    let maxSeq = 0
+    let lines = 0
     let handle: fsp.FileHandle
     try {
       handle = await fsp.open(ndjsonPath, 'r')
     } catch (error) {
       // No file is a first run. Any other failure is a file that is there
       // and could not be read, and must not pass for an empty one.
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return { maxSeq, lines, size: 0, lastByte: 0x0a }
+      }
       throw error
     }
     let position = 0
@@ -321,11 +337,11 @@ export function createTitleStore(
     let lastByte = 0x0a
     const index = (line: Buffer, offset: number): void => {
       if (!line.length) return
-      lineCount += 1
+      lines += 1
       try {
         const row = JSON.parse(line.toString('utf8')) as DaemonTitleRow
         if (!row || typeof row.seq !== 'number' || !row.item?.id) return
-        const map = byKind.get(row.kind)
+        const map = target.get(row.kind)
         if (!map) return
         map.set(String(row.item.id), {
           seq: row.seq,
@@ -334,7 +350,7 @@ export function createTitleStore(
           offset,
           length: line.length
         })
-        if (row.seq > seqCounter) seqCounter = row.seq
+        if (row.seq > maxSeq) maxSeq = row.seq
       } catch {
         // A torn tail line from a crash loses that one change; the next
         // crawl re-detects it.
@@ -363,30 +379,21 @@ export function createTitleStore(
     } finally {
       await handle.close()
     }
-    fileSize = position
-    // A file that ends mid-line (a crash during append) would glue the next
-    // appended row onto that fragment. Close it off first.
-    if (fileSize && lastByte !== 0x0a) {
-      // Marked first and cleared only on success: if this append fails (a
-      // full disk at boot), the next write must still close the line off.
-      tailUnknown = true
-      await appendFile(ndjsonPath, '\n')
-      fileSize += 1
-      tailUnknown = false
-    }
+    return { maxSeq, lines, size: position, lastByte }
   }
 
   return {
     upsert(kind, entries) {
       return serialized(async () => {
-        const map = byKind.get(kind)
-        if (!map) return 0
         try {
           if (!loaded) await reload()
           await settleTail()
         } catch {
           return 0 // Still cannot tell where the file ends: write nothing.
         }
+        // Looked up after any reload, which replaces the maps.
+        const map = byKind.get(kind)
+        if (!map) return 0
         const changed: Array<{ id: string; ref: RowRef; line: string }> = []
         let offset = fileSize
         for (const entry of entries) {
@@ -443,6 +450,11 @@ export function createTitleStore(
     },
 
     listSince(kind, since, limit) {
+      // Refused, not answered from what is there: a page from an index that
+      // is not fully read can carry a watermark past rows it does not have
+      // yet (see reload). The route answers 500, which the app's title sync
+      // treats as "no rows this time" and asks again next pass.
+      if (!loaded) throw new Error('The title index is still loading.')
       const rows = sorted(kind)
       // Rows are seq-ascending; binary search for the first > since.
       let lo = 0
