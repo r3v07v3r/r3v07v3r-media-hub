@@ -206,24 +206,30 @@ export function createTitleStore(
   async function compactIfBloated(): Promise<void> {
     if (lineCount <= liveCount() * 2 + COMPACT_SLACK_LINES) return
     const tmp = `${ndjsonPath}.tmp`
-    const source = await fsp.open(ndjsonPath, 'r')
-    const target = await fsp.open(tmp, 'w')
     const moved = new Map<RowRef, number>()
     let written = 0
+    const source = await fsp.open(ndjsonPath, 'r')
     try {
-      for (const map of byKind.values()) {
-        for (const ref of map.values()) {
-          const line = Buffer.alloc(ref.length + 1)
-          await readFully(source, line.subarray(0, ref.length), ref.offset)
-          line[ref.length] = 0x0a
-          await writeFully(target, line, written)
-          moved.set(ref, written)
-          written += line.length
+      // Opened inside the source's cleanup: a target that cannot be opened
+      // (the tmp path taken) would otherwise leak the source handle, once
+      // per changed upsert, since every one of them retries compaction.
+      const target = await fsp.open(tmp, 'w')
+      try {
+        for (const map of byKind.values()) {
+          for (const ref of map.values()) {
+            const line = Buffer.alloc(ref.length + 1)
+            await readFully(source, line.subarray(0, ref.length), ref.offset)
+            line[ref.length] = 0x0a
+            await writeFully(target, line, written)
+            moved.set(ref, written)
+            written += line.length
+          }
         }
+      } finally {
+        await target.close()
       }
     } finally {
       await source.close()
-      await target.close()
     }
     // Synchronous from here: no request can run between the file changing
     // and the offsets that describe it changing.

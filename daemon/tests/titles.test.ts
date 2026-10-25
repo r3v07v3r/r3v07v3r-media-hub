@@ -356,6 +356,38 @@ async function main(): Promise<void> {
     )
   })
 
+  await check('a compaction that cannot open its temp file leaks no handle', async () => {
+    const { store, root } = await tempStore()
+    // The tmp path is taken by a directory, so every compaction fails to
+    // open its target, and every changed upsert past the line retries.
+    await fsp.mkdir(path.join(root, 'titles.ndjson.tmp'))
+    const open = fsp.open
+    let live = 0
+    fsp.open = (async (...args: Parameters<typeof open>) => {
+      const handle = await open(...args)
+      live += 1
+      const close = handle.close.bind(handle)
+      handle.close = async () => {
+        live -= 1
+        return close()
+      }
+      return handle
+    }) as typeof open
+    try {
+      const ids = Array.from({ length: 40 }, (_, i) => `tt${i}`)
+      for (let round = 0; round < 40; round++) {
+        await store.upsert(
+          'movie',
+          ids.map((id, rank) => ({ rank, item: item(id, { title: `${id} v${round}` }) }))
+        )
+      }
+    } finally {
+      fsp.open = open
+    }
+    assert.equal(live, 0, 'every handle opened was closed')
+    assert.equal(store.listSince('movie', 0, 100).rows.length, 40, 'and the store still serves')
+  })
+
   await check('no sync watermark can come from a half-read index', async () => {
     // A compacted file is in map order, not seq order: seq 10 can come
     // before seq 1. A page served between the two would say "caught up to
