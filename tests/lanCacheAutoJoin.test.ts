@@ -226,6 +226,97 @@ async function main(): Promise<void> {
       assert.equal(lan.isLanCacheConnected(), false, 'still uses nothing')
     })
 
+    const pendingOnServer = async (): Promise<number> => {
+      const res = await fetch(`${daemon.url}/api/admin/devices`, {
+        headers: { Authorization: `Bearer ${ownerToken}` }
+      })
+      const body = (await res.json()) as { devices: Array<{ status: string }> }
+      return body.devices.filter((device) => device.status === 'pending').length
+    }
+
+    await check('the launch search sends nothing once a join by hand has landed', async () => {
+      asOwner()
+      const before = await pendingOnServer()
+      const result = await lan.askToJoin(daemon.url, { onlyIfUnpaired: true })
+      assert.equal(result.ok, false)
+      assert.equal(await pendingOnServer(), before, 'no request was made at all')
+    })
+
+    await check(
+      'a launch request that loses the race to a join by hand is taken back',
+      async () => {
+        // A proxy in front of the daemon that completes a "manual" join while
+        // the automatic POST /api/pair is in flight.
+        const proxy = http.createServer((req, res) => {
+          if (req.method === 'POST' && req.url === '/api/pair') asOwner()
+          const upstream = http.request(
+            {
+              host: '127.0.0.1',
+              port: daemon.port,
+              path: req.url,
+              method: req.method,
+              headers: req.headers
+            },
+            (answer) => {
+              res.writeHead(answer.statusCode ?? 502, answer.headers)
+              answer.pipe(res)
+            }
+          )
+          req.pipe(upstream)
+        })
+        await new Promise<void>((resolve) => proxy.listen(0, '127.0.0.1', resolve))
+        const proxyUrl = `http://127.0.0.1:${(proxy.address() as AddressInfo).port}`
+        try {
+          const before = await pendingOnServer()
+          store.clearLanCacheConnection()
+          assert.equal(await lan.runLanCacheAutoConnect(found(proxyUrl)), 'nothing-found')
+          assert.equal(store.getLanCacheConnection()?.token, ownerToken, 'the manual join stands')
+          assert.equal(await pendingOnServer(), before, 'and the orphan request is gone')
+        } finally {
+          proxy.closeAllConnections()
+          await new Promise<void>((resolve) => proxy.close(() => resolve()))
+        }
+      }
+    )
+
+    await check('withdraw takes back only a pending request, and only its own', async () => {
+      const ask = async (): Promise<string> =>
+        (
+          (await (
+            await fetch(`${daemon.url}/api/pair`, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ deviceName: 'withdrawing' })
+            })
+          ).json()) as { token: string }
+        ).token
+      const withdraw = (token: string): Promise<Response> =>
+        fetch(`${daemon.url}/api/pair/withdraw`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` }
+        })
+      const before = await pendingOnServer()
+      const token = await ask()
+      assert.equal(await pendingOnServer(), before + 1)
+      assert.equal((await withdraw(token)).status, 200)
+      assert.equal(await pendingOnServer(), before, 'removed from the queue')
+      assert.equal((await withdraw(token)).status, 401, 'and unknown afterwards')
+      assert.equal((await withdraw('0'.repeat(64))).status, 401, 'a stranger removes nothing')
+      assert.equal((await withdraw(ownerToken)).status, 409, 'an approved device is not removed')
+    })
+
+    await check('Cancel while waiting takes the request back', async () => {
+      // The unpair IPC's pending branch, through the same helper: ask, then
+      // cancel as the Caching section's Cancel does.
+      const before = await pendingOnServer()
+      store.clearLanCacheConnection()
+      store.setLanCacheAutoJoin(true)
+      assert.equal(await lan.runLanCacheAutoConnect(found()), 'asked')
+      assert.equal(await pendingOnServer(), before + 1)
+      assert.equal(await lan.cancelLanCacheRequest(), true)
+      assert.equal(await pendingOnServer(), before)
+    })
+
     await check('Leave switches the launch search off until joining by hand', async () => {
       store.clearLanCacheConnection()
       store.setLanCacheAutoJoin(false)

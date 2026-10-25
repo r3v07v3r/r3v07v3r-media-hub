@@ -337,6 +337,34 @@ export interface JoinResult {
   serverName?: string
 }
 
+/**
+ * Takes back a request that is still waiting, best-effort. A daemon from
+ * before POST /api/pair/withdraw answers 404, and one that has already let
+ * the device in answers 409; either way the entry stays for the
+ * administrator to remove, which is how it always was.
+ */
+async function withdrawRequest(url: string, token: string): Promise<boolean> {
+  try {
+    await fetchJson(
+      `${url}/api/pair/withdraw`,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
+      { lane: 'lancache', label: 'cache server', timeoutMs: ADDRESS_CHECK_TIMEOUT_MS }
+    )
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Cancel while waiting: takes the stored request out of the
+ *  administrator's queue rather than leaving it for them to deny. Does not
+ *  forget the connection; the caller does that. */
+export async function cancelLanCacheRequest(): Promise<boolean> {
+  const waiting = getLanCacheConnection()
+  if (!waiting?.pending) return false
+  return withdrawRequest(waiting.url, waiting.token)
+}
+
 export async function askToJoin(
   rawUrl: string,
   options: {
@@ -353,6 +381,11 @@ export async function askToJoin(
     .trim()
     .replace(/\/+$/, '')
   if (!/^https?:\/\//.test(url)) return { ok: false, message: 'Enter the server URL.' }
+  const alreadyPaired: JoinResult = { ok: false, message: 'Already connected to a cache server.' }
+  // Checked before anything is sent: every POST /api/pair creates a device
+  // on the server, so a request that is going to be thrown away must not be
+  // made at all.
+  if (options.onlyIfUnpaired && getLanCacheConnection()) return alreadyPaired
   try {
     // Identity check first: refuse to ask to join something
     // that is not an r3-cache daemon at all.
@@ -364,6 +397,7 @@ export async function askToJoin(
     if (ping.product !== 'r3-cache') {
       return { ok: false, message: 'That server is not an r3-cache daemon.' }
     }
+    if (options.onlyIfUnpaired && getLanCacheConnection()) return alreadyPaired
     const paired = await fetchJson<LanCachePairResponse>(
       `${url}/api/pair`,
       {
@@ -387,7 +421,10 @@ export async function askToJoin(
       }
     }
     if (options.onlyIfUnpaired && getLanCacheConnection()) {
-      return { ok: false, message: 'Already connected to a cache server.' }
+      // A join made by hand won while this POST was in flight. Take the
+      // request back so it does not sit in the administrator's queue.
+      await withdrawRequest(url, paired.token)
+      return alreadyPaired
     }
     const serverName = paired.serverName ?? ping.serverName
     const pending = paired.status === 'pending'
@@ -717,6 +754,8 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ torboxToken: '' })
       }).catch(() => {})
+    } else {
+      await cancelLanCacheRequest()
     }
     clearLanCacheConnection()
     // Or the launch search would find the same server and ask again.

@@ -112,8 +112,10 @@ administrator who chose **Leave**:
    restart is let in at once.
 
 If the app answers "Too many devices are waiting to join", wait a minute and
-ask again. If it still says so, eight requests are already waiting (every
-**Cancel** leaves its request behind on the server), and with the
+ask again. If it still says so, eight requests are already waiting
+(**Cancel** takes its request back when the server answers at that moment,
+but one cancelled while the server was away, or on a daemon older than
+`POST /api/pair/withdraw`, stays behind), and with the
 administrator gone nobody can deny them. Delete the entries with
 `"status":"pending"` from `auth.json` in the data directory, then restart
 the daemon as in step 2 and ask once more. The daemon reads `auth.json` only
