@@ -100,7 +100,19 @@ function itemHash(item: CatalogItem): string {
   return crypto.createHash('sha1').update(JSON.stringify(item)).digest('base64')
 }
 
-export function createTitleStore(dataDir: string): TitleStore {
+export function createTitleStore(
+  dataDir: string,
+  /** Test seam: how lines are appended and the file cut back. A real
+   *  append can write part of its data and then fail (a full disk), which
+   *  is the case the tail handling exists for. */
+  options: {
+    appendFile?: (file: string, data: string) => Promise<void>
+    truncate?: (file: string, size: number) => Promise<void>
+  } = {}
+): TitleStore {
+  const appendFile =
+    options.appendFile ?? ((file: string, data: string) => fsp.appendFile(file, data))
+  const truncate = options.truncate ?? ((file: string, size: number) => fsp.truncate(file, size))
   const ndjsonPath = path.join(dataDir, 'titles.ndjson')
   const metaPath = path.join(dataDir, 'titles-meta.json')
 
@@ -113,6 +125,9 @@ export function createTitleStore(dataDir: string): TitleStore {
   let lineCount = 0
   /** Where the next appended line starts. */
   let fileSize = 0
+  /** Set when an append failed and the file could not be cut back to
+   *  fileSize: the file may now end in part of a line, past fileSize. */
+  let tailUnknown = false
   const refreshedAt: Partial<Record<MediaKind, number>> = {}
 
   // Every write (append, compaction) runs one at a time: each one decides
@@ -168,6 +183,21 @@ export function createTitleStore(dataDir: string): TitleStore {
     for (const [ref, offset] of moved) ref.offset = offset
     fileSize = written
     lineCount = moved.size
+  }
+
+  /** After an append failed and could not be cut back: learn where the file
+   *  really ends, and close off any fragment so the next line starts clean
+   *  (the fragment is a torn line, skipped on load). */
+  async function settleTail(): Promise<void> {
+    if (!tailUnknown) return
+    const { size } = await fsp.stat(ndjsonPath)
+    if (size > fileSize) {
+      await appendFile(ndjsonPath, '\n')
+      fileSize = size + 1
+    } else {
+      fileSize = size
+    }
+    tailUnknown = false
   }
 
   function sorted(kind: MediaKind): RowRef[] {
@@ -263,6 +293,11 @@ export function createTitleStore(dataDir: string): TitleStore {
       return serialized(async () => {
         const map = byKind.get(kind)
         if (!map) return 0
+        try {
+          await settleTail()
+        } catch {
+          return 0 // Still cannot tell where the file ends: write nothing.
+        }
         const changed: Array<{ id: string; ref: RowRef; line: string }> = []
         let offset = fileSize
         for (const entry of entries) {
@@ -290,11 +325,19 @@ export function createTitleStore(dataDir: string): TitleStore {
         }
         if (!changed.length) return 0
         try {
-          await fsp.appendFile(ndjsonPath, changed.map((entry) => entry.line).join('\n') + '\n')
+          await appendFile(ndjsonPath, changed.map((entry) => entry.line).join('\n') + '\n')
         } catch {
-          // Nothing was written, so nothing is indexed: the rows live on
-          // disk now, and an index entry pointing past the end of the file
-          // would serve garbage. The next crawl re-detects the delta.
+          // Nothing is indexed: the rows live on disk now, and an entry
+          // pointing at bytes that never landed would serve garbage. The
+          // next crawl re-detects the delta. But the append may have written
+          // PART of its data before failing, so the file is cut back to
+          // where it ended; otherwise every later row would land after the
+          // fragment and be indexed at the wrong place.
+          try {
+            await truncate(ndjsonPath, fileSize)
+          } catch {
+            tailUnknown = true
+          }
           return 0
         }
         for (const entry of changed) map.set(entry.id, entry.ref)

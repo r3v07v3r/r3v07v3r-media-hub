@@ -228,6 +228,53 @@ async function main(): Promise<void> {
     assert.deepEqual(reborn.listSince('anime', 0, 100).rows, anime)
   })
 
+  // A full disk: the append writes part of its data, then fails. Both ways
+  // out (cutting the file back, and when even that fails, learning where it
+  // ends on the next write) must leave later rows readable.
+  for (const truncateWorks of [true, false]) {
+    await check(
+      `a half-written append leaves later rows readable (truncate ${truncateWorks ? 'works' : 'fails'})`,
+      async () => {
+        const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-titles-'))
+        let failNext = false
+        const store = createTitleStore(root, {
+          appendFile: async (file, data) => {
+            if (failNext) {
+              failNext = false
+              await fsp.appendFile(file, data.slice(0, 17))
+              throw Object.assign(new Error('no space left'), { code: 'ENOSPC' })
+            }
+            await fsp.appendFile(file, data)
+          },
+          truncate: async (file, size) => {
+            if (!truncateWorks) throw new Error('truncate refused')
+            await fsp.truncate(file, size)
+          }
+        })
+        await store.load()
+        await store.upsert('movie', [{ rank: 0, item: item('tt1') }])
+        failNext = true
+        assert.equal(await store.upsert('movie', [{ rank: 1, item: item('tt2') }]), 0)
+        assert.equal(await store.upsert('movie', [{ rank: 2, item: item('tt3') }]), 1)
+        assert.deepEqual(
+          store.listSince('movie', 0, 10).rows.map((row) => row.item.id),
+          ['tt1', 'tt3'],
+          'rows after the failure read back'
+        )
+        const reborn = createTitleStore(root)
+        await reborn.load()
+        assert.deepEqual(
+          reborn
+            .listSince('movie', 0, 10)
+            .rows.map((row) => row.item.id)
+            .sort(),
+          ['tt1', 'tt3'],
+          'and after a reload'
+        )
+      }
+    )
+  }
+
   // --- the crawler: refresh discipline -----------------------------------
 
   await check('refresh coalesces: one started, joiners join, cooldown throttles', async () => {
