@@ -262,7 +262,9 @@ export function createTitleStore(
     let rows = sortedCache.get(kind)
     if (!rows) {
       rows = [...(byKind.get(kind)?.values() ?? [])].sort((a, b) => a.seq - b.seq)
-      sortedCache.set(kind, rows)
+      // Not cached while the file is still being read (or could not be):
+      // the index is partial, and a cached partial view would outlive it.
+      if (loaded) sortedCache.set(kind, rows)
     }
     return rows
   }
@@ -297,6 +299,9 @@ export function createTitleStore(
     tailUnknown = false
     await loadRows()
     loaded = true
+    // A page served while the read was in flight may have cached a partial
+    // view of a kind this reload did not otherwise touch.
+    sortedCache.clear()
   }
 
   /** Streams the file, indexing each line by its byte position. Only one
