@@ -307,6 +307,32 @@ async function main(): Promise<void> {
     )
   })
 
+  await check('a load that failed is retried before anything is appended', async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-titles-'))
+    const file = path.join(root, 'titles.ndjson')
+    // Unreadable at boot: a directory where the file should be stands in for
+    // EIO, and is an error on every platform rather than "no file yet".
+    await fsp.mkdir(file)
+    const store = createTitleStore(root)
+    await store.load()
+    // I/O recovers, and the file turns out to hold an older row.
+    await fsp.rmdir(file)
+    const old = createTitleStore(root)
+    await old.load()
+    await old.upsert('movie', [{ rank: 0, item: item('tt-old') }])
+
+    assert.equal(await store.upsert('movie', [{ rank: 1, item: item('tt-new') }]), 1)
+    const rows = store.listSince('movie', 0, 10).rows
+    assert.deepEqual(
+      rows.map((row) => row.item.id),
+      ['tt-old', 'tt-new'],
+      'the new row is indexed where it landed, after the rows the file held'
+    )
+    const reborn = createTitleStore(root)
+    await reborn.load()
+    assert.deepEqual(reborn.listSince('movie', 0, 10).rows, rows)
+  })
+
   await check('a torn tail at boot on a full disk is still closed off later', async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-titles-'))
     const first = createTitleStore(root)

@@ -172,6 +172,10 @@ export function createTitleStore(
   /** Set when an append failed and the file could not be cut back to
    *  fileSize: the file may now end in part of a line, past fileSize. */
   let tailUnknown = false
+  /** False until the file has been read to the end. While false, nothing
+   *  knows where the file ends, so nothing may be appended: a write would
+   *  land at the real end and be indexed from a position that is not it. */
+  let loaded = false
   const refreshedAt: Partial<Record<MediaKind, number>> = {}
 
   // Every write (append, compaction) runs one at a time: each one decides
@@ -281,14 +285,31 @@ export function createTitleStore(
     }
   }
 
+  /** Reads the file into a clean index. Run at load, and again before the
+   *  first write when that load did not finish. */
+  async function reload(): Promise<void> {
+    loaded = false
+    for (const map of byKind.values()) map.clear()
+    sortedCache.clear()
+    seqCounter = 0
+    lineCount = 0
+    fileSize = 0
+    tailUnknown = false
+    await loadRows()
+    loaded = true
+  }
+
   /** Streams the file, indexing each line by its byte position. Only one
    *  chunk and one line are ever held at a time. */
   async function loadRows(): Promise<void> {
     let handle: fsp.FileHandle
     try {
       handle = await fsp.open(ndjsonPath, 'r')
-    } catch {
-      return // First run.
+    } catch (error) {
+      // No file is a first run. Any other failure is a file that is there
+      // and could not be read, and must not pass for an empty one.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw error
     }
     let position = 0
     let carry = Buffer.alloc(0)
@@ -356,6 +377,7 @@ export function createTitleStore(
         const map = byKind.get(kind)
         if (!map) return 0
         try {
+          if (!loaded) await reload()
           await settleTail()
         } catch {
           return 0 // Still cannot tell where the file ends: write nothing.
@@ -466,10 +488,11 @@ export function createTitleStore(
         // First run.
       }
       await serialized(async () => {
-        await loadRows()
+        await reload()
         await compactIfBloated()
       }).catch(() => {
-        // An unreadable index starts empty; the next crawl rebuilds it.
+        // An index that could not be read serves what it has; the next write
+        // retries the read before it appends anything (see `loaded`).
       })
     }
   }
