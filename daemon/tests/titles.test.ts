@@ -281,6 +281,49 @@ async function main(): Promise<void> {
     )
   }
 
+  await check(
+    'whole rows left by a failed batch are indexed before anything moves on',
+    async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-titles-'))
+      let failNext = false
+      const store = createTitleStore(root, {
+        appendFile: async (file, data) => {
+          if (failNext) {
+            failNext = false
+            // The first row of the batch lands whole, plus part of the second.
+            const first = data.indexOf('\n') + 1
+            await fsp.appendFile(file, data.slice(0, first + 9))
+            throw Object.assign(new Error('no space left'), { code: 'ENOSPC' })
+          }
+          await fsp.appendFile(file, data)
+        },
+        truncate: async () => {
+          throw new Error('truncate refused')
+        }
+      })
+      await store.load()
+      await store.upsert('movie', [{ rank: 0, item: item('tt1') }])
+      failNext = true
+      assert.equal(
+        await store.upsert('movie', [
+          { rank: 1, item: item('tt2') },
+          { rank: 2, item: item('tt-lost') }
+        ]),
+        0
+      )
+      assert.equal(await store.upsert('movie', [{ rank: 3, item: item('tt3') }]), 1)
+      const page = store.listSince('movie', 0, 10)
+      assert.deepEqual(
+        page.rows.map((row) => row.item.id),
+        ['tt1', 'tt2', 'tt3'],
+        'the surviving row is served, in seq order, before the watermark passes it'
+      )
+      const reborn = createTitleStore(root)
+      await reborn.load()
+      assert.deepEqual(reborn.listSince('movie', 0, 10), page, 'and a restart agrees')
+    }
+  )
+
   await check('short writes and reads are finished, not taken for whole ones', async () => {
     // A handle that moves at most 3 bytes per call and says so.
     const disk = Buffer.alloc(64)

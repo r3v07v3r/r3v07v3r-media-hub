@@ -445,7 +445,15 @@ export function createTitleStore(
           try {
             await truncate(ndjsonPath, fileSize)
           } catch {
-            tailUnknown = true
+            // Could not cut it back, so the file may now hold whole rows
+            // the index does not know, as well as a fragment. Fixing the
+            // offset alone would let later rows (and the watermarks clients
+            // keep) pass those by for good. The index is no longer the file:
+            // sync pages are refused and the file is read again from the
+            // top, which indexes what survived and closes off the fragment.
+            // Queued behind this write; a later write retries it if it fails.
+            loaded = false
+            void serialized(reload).catch(() => {})
           }
           return 0
         }
