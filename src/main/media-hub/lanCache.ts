@@ -372,20 +372,22 @@ export async function askToJoin(
      *  fetch overnight with no app running. Never implied, so the launch
      *  search never sets it. */
     shareTorboxToken?: boolean
-    /** For the launch search: give up rather than replace a connection a
-     *  person made while the search was running. */
-    onlyIfUnpaired?: boolean
+    /** For the launch search: whether the join is still wanted. Asked
+     *  before each request and again once the server has answered, since a
+     *  person may join by hand, or press Leave, while the search runs. */
+    stillWanted?: () => boolean
   } = {}
 ): Promise<JoinResult> {
   const url = String(rawUrl || '')
     .trim()
     .replace(/\/+$/, '')
   if (!/^https?:\/\//.test(url)) return { ok: false, message: 'Enter the server URL.' }
-  const alreadyPaired: JoinResult = { ok: false, message: 'Already connected to a cache server.' }
+  const unwanted: JoinResult = { ok: false, message: 'No longer looking for a cache server.' }
+  const wanted = (): boolean => options.stillWanted?.() ?? true
   // Checked before anything is sent: every POST /api/pair creates a device
   // on the server, so a request that is going to be thrown away must not be
   // made at all.
-  if (options.onlyIfUnpaired && getLanCacheConnection()) return alreadyPaired
+  if (!wanted()) return unwanted
   try {
     // Identity check first: refuse to ask to join something
     // that is not an r3-cache daemon at all.
@@ -397,7 +399,7 @@ export async function askToJoin(
     if (ping.product !== 'r3-cache') {
       return { ok: false, message: 'That server is not an r3-cache daemon.' }
     }
-    if (options.onlyIfUnpaired && getLanCacheConnection()) return alreadyPaired
+    if (!wanted()) return unwanted
     const paired = await fetchJson<LanCachePairResponse>(
       `${url}/api/pair`,
       {
@@ -420,11 +422,13 @@ export async function askToJoin(
         message: 'The cache server is not taking requests right now. Try again shortly.'
       }
     }
-    if (options.onlyIfUnpaired && getLanCacheConnection()) {
-      // A join made by hand won while this POST was in flight. Take the
-      // request back so it does not sit in the administrator's queue.
+    if (!wanted()) {
+      // A join made by hand, or a Leave, won while this POST was in flight.
+      // Take the request back so it does not sit in the administrator's
+      // queue. (A server in open join has already let it in, and that entry
+      // stays for the administrator to remove.)
       await withdrawRequest(url, paired.token)
-      return alreadyPaired
+      return unwanted
     }
     const serverName = paired.serverName ?? ping.serverName
     const pending = paired.status === 'pending'
@@ -504,15 +508,21 @@ const AUTO_CONNECT_DELAY_MS = 5_000
 type TokenCheck = 'known' | 'unknown' | 'unreachable'
 
 /** Whether a server at this address knows this device's token. 401 means a
- *  server answered and does not; anything else failing means nobody did. */
+ *  server answered and does not; anything else failing means nobody did.
+ *
+ *  'known' needs a real pairing-status answer, not just a 200: the old
+ *  address may now belong to some other web service with a catch-all page
+ *  (httpClient tolerates a body that is not JSON), and taking that for the
+ *  daemon would hold the connection on a dead address forever. */
 async function checkToken(url: string, token: string): Promise<TokenCheck> {
   try {
-    await fetchJson(
+    const answer = await fetchJson<{ status?: unknown } | null>(
       `${url}/api/pair/status`,
       { headers: { Authorization: `Bearer ${token}` } },
       { lane: 'lancache', label: 'cache server', timeoutMs: ADDRESS_CHECK_TIMEOUT_MS }
     )
-    return 'known'
+    const status = answer && typeof answer === 'object' ? answer.status : undefined
+    return status === 'approved' || status === 'pending' ? 'known' : 'unreachable'
   } catch (error) {
     return (error as HttpError).status === 401 ? 'unknown' : 'unreachable'
   }
@@ -578,7 +588,10 @@ export async function runLanCacheAutoConnect(
   if (!isLanCacheAutoJoinOn()) return 'off'
   const found = await discover()
   for (const server of found) {
-    const result = await askToJoin(server.url, { onlyIfUnpaired: true })
+    const result = await askToJoin(server.url, {
+      // Re-asked after the search: Leave may have been pressed meanwhile.
+      stillWanted: () => !getLanCacheConnection() && isLanCacheAutoJoinOn()
+    })
     if (!result.ok) continue
     const serverName = result.serverName || server.name
     emit({ kind: result.pending ? 'asked' : 'joined', serverName })

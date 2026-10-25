@@ -237,7 +237,9 @@ async function main(): Promise<void> {
     await check('the launch search sends nothing once a join by hand has landed', async () => {
       asOwner()
       const before = await pendingOnServer()
-      const result = await lan.askToJoin(daemon.url, { onlyIfUnpaired: true })
+      const result = await lan.askToJoin(daemon.url, {
+        stillWanted: () => !store.getLanCacheConnection()
+      })
       assert.equal(result.ok, false)
       assert.equal(await pendingOnServer(), before, 'no request was made at all')
     })
@@ -330,6 +332,47 @@ async function main(): Promise<void> {
       store.setLanCacheAutoJoin(true)
       assert.equal(store.isLanCacheAutoJoinOn(), true)
     })
+
+    await check('Leave pressed while the launch search runs is not undone by it', async () => {
+      const before = await pendingOnServer()
+      store.clearLanCacheConnection()
+      store.setLanCacheAutoJoin(true)
+      // The person joins by hand and then presses Leave while discovery is
+      // still out: by the time it returns, auto-join is off again.
+      const outcome = await lan.runLanCacheAutoConnect(async () => {
+        store.setLanCacheAutoJoin(false)
+        return found()()
+      })
+      assert.equal(outcome, 'nothing-found')
+      assert.equal(store.getLanCacheConnection(), undefined, 'stays left')
+      assert.equal(await pendingOnServer(), before, 'and asked nobody')
+      store.setLanCacheAutoJoin(true)
+    })
+
+    await check(
+      'a web page now living at the old address is not taken for the daemon',
+      async () => {
+        // Any path, 200, HTML: the catch-all page of whatever got the IP.
+        const squatter = http.createServer((_req, res) => {
+          res.setHeader('content-type', 'text/html')
+          res.end('<html><body>Smart switch</body></html>')
+        })
+        await new Promise<void>((resolve) => squatter.listen(0, '127.0.0.1', resolve))
+        try {
+          asOwner()
+          const port = (squatter.address() as AddressInfo).port
+          store.setLanCacheConnection({
+            ...store.getLanCacheConnection()!,
+            url: `http://127.0.0.1:${port}`
+          })
+          assert.equal(await lan.keepLanCacheAddressCurrent(found()), 'moved')
+          assert.equal(store.getLanCacheConnection()?.url, daemon.url)
+        } finally {
+          squatter.closeAllConnections()
+          await new Promise<void>((resolve) => squatter.close(() => resolve()))
+        }
+      }
+    )
 
     await check('a server that moved is followed, and keeps its token', async () => {
       asOwner()
