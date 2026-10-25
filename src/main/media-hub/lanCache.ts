@@ -805,9 +805,15 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
       // the background wait promoted.
       const state = await promoteIfApproved()
       syncApprovalPolling()
-      return { state, name: getLanCacheConnection()?.name ?? connection.name }
+      const latest = getLanCacheConnection()
+      return { state, name: latest?.name ?? connection.name, url: latest?.url ?? connection.url }
     } catch (error) {
-      return { state: 'pending' as const, name: connection.name, error: (error as Error).message }
+      return {
+        state: 'pending' as const,
+        name: connection.name,
+        url: connection.url,
+        error: (error as Error).message
+      }
     }
   })
 

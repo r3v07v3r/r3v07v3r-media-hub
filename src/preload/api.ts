@@ -393,6 +393,9 @@ export function createApi(transport: ApiTransport) {
         pairStatus: (): Promise<{
           state: 'none' | 'pending' | 'approved'
           name?: string
+          /** The stored address, so a panel can follow a join or a move the
+           *  main process made on its own without searching the network. */
+          url?: string
           error?: string
         }> => transport.invoke(MEDIA_HUB_CHANNELS.lanCachePairStatus),
         claim: (): Promise<{ ok: boolean; message: string }> =>
