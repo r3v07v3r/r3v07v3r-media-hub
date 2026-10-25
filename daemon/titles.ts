@@ -401,12 +401,17 @@ export function createTitleStore(
         const map = byKind.get(kind)
         if (!map) return 0
         const changed: Array<{ id: string; ref: RowRef; line: string }> = []
+        // What this batch has already decided per id. The live map is only
+        // updated after the append lands, so a page repeating an id must be
+        // compared against its own earlier copy, not the stored one: stored
+        // A, then B, then A again in one batch has to end on A.
+        const pending = new Map<string, RowRef>()
         let offset = fileSize
         for (const entry of entries) {
           const id = String(entry.item?.id || '')
           if (!id) continue
           const hash = itemHash(entry.item)
-          const current = map.get(id)
+          const current = pending.get(id) ?? map.get(id)
           if (current) {
             const contentSame = current.hash === hash
             const rankClose = Math.abs(current.rank - entry.rank) <= RANK_DRIFT_SLACK
@@ -422,7 +427,9 @@ export function createTitleStore(
           }
           const line = JSON.stringify(row)
           const length = Buffer.byteLength(line)
-          changed.push({ id, line, ref: { seq: row.seq, rank: row.rank, hash, offset, length } })
+          const ref: RowRef = { seq: row.seq, rank: row.rank, hash, offset, length }
+          changed.push({ id, line, ref })
+          pending.set(id, ref)
           offset += length + 1
         }
         if (!changed.length) return 0

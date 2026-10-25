@@ -388,6 +388,20 @@ async function main(): Promise<void> {
     assert.equal(store.listSince('movie', 0, 100).rows.length, 40, 'and the store still serves')
   })
 
+  await check('an id repeated within one batch ends on its last copy', async () => {
+    const { store, root } = await tempStore()
+    await store.upsert('movie', [{ rank: 0, item: item('tt1', { title: 'A' }) }])
+    // Upstream pages are passed straight through and can repeat an id.
+    await store.upsert('movie', [
+      { rank: 0, item: item('tt1', { title: 'B' }) },
+      { rank: 0, item: item('tt1', { title: 'A' }) }
+    ])
+    assert.equal(store.listSince('movie', 0, 10).rows[0].item.title, 'A')
+    const reborn = createTitleStore(root)
+    await reborn.load()
+    assert.equal(reborn.listSince('movie', 0, 10).rows[0].item.title, 'A', 'and after a reload')
+  })
+
   await check('no sync watermark can come from a half-read index', async () => {
     // A compacted file is in map order, not seq order: seq 10 can come
     // before seq 1. A page served between the two would say "caught up to
