@@ -38,7 +38,7 @@ import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import { notifyLibraryChanged, sendToRenderer } from './rendererBridge'
 import { indexTitleIfMissing, planDeepScanBatch } from './deepScanRules'
 import { sanitizeDaemonTitleRow } from '../../shared/lancache/titleSync'
-import { fetchJson } from './httpClient'
+import { fetchJson, type FetchScheduling, type HttpError } from './httpClient'
 import { logError } from './logger'
 import { getDatabase } from './dbState'
 import { handle } from './ipcGuard'
@@ -89,9 +89,37 @@ import { contentRating } from './contentRating'
 import { watchRegion } from './watchProviders'
 import { metaCacheKey } from './titleNames'
 
-const catalogUrls: Record<'movie' | 'series', string> = {
-  movie: 'https://v3-cinemeta.strem.io/catalog/movie/top.json',
-  series: 'https://v3-cinemeta.strem.io/catalog/series/top.json'
+/**
+ * Cinemeta answers on two hosts with the same ids. v3 first, as it always
+ * was; cinemeta-live is asked only when v3 could not be reached at all.
+ * Not hypothetical: Cloudflare's family resolver (1.1.1.3) answers v3 with
+ * 0.0.0.0 while letting cinemeta-live through, and every series then lost
+ * its episode list to the no-episodes stand-in in resolveMetadata. A host
+ * that ANSWERED (a 404, a 500) is not retried — the other serves the same
+ * data and would say the same. cinemeta-live redirects catalog paths to
+ * cinemeta-catalogs.strem.io, and search back to v3, so search gains
+ * nothing from the second host; everything else does.
+ */
+const CINEMETA_HOSTS = ['https://v3-cinemeta.strem.io', 'https://cinemeta-live.strem.io'] as const
+let cinemetaFallbackLogged = false
+
+async function cinemetaJson<T>(path: string, scheduling: FetchScheduling): Promise<T> {
+  try {
+    return await fetchJson<T>(`${CINEMETA_HOSTS[0]}${path}`, {}, scheduling)
+  } catch (error) {
+    if ((error as HttpError).status) throw error
+    // Once per run: a blocked host fails every page of every sweep.
+    if (!cinemetaFallbackLogged) {
+      cinemetaFallbackLogged = true
+      logError('cinemeta:fallback-host', error)
+    }
+    return fetchJson<T>(`${CINEMETA_HOSTS[1]}${path}`, {}, scheduling)
+  }
+}
+
+const catalogPaths: Record<'movie' | 'series', string> = {
+  movie: '/catalog/movie/top.json',
+  series: '/catalog/series/top.json'
 }
 
 /**
@@ -359,7 +387,7 @@ async function simklCatalog(
  * deep via the Stremio addon protocol's `skip=` pagination.
  *
  * Page 0 is deliberately the exact URL this file has always used as its
- * Simkl-failed fallback (catalogUrls), not a `skip=0` variant of it — so
+ * Simkl-failed fallback (catalogPaths), not a `skip=0` variant of it — so
  * the one request whose shape is already proven in production stays
  * byte-identical, and only the additional pages use the paginated form.
  *
@@ -371,20 +399,17 @@ async function cinemetaPages(
   kind: Exclude<MediaKind, 'anime'>,
   priority: TaskPriority
 ): Promise<CatalogItem[][]> {
-  const urls = [catalogUrls[kind]]
+  const paths = [catalogPaths[kind]]
   for (let page = 1; page <= CINEMETA_EXTRA_PAGES; page++) {
-    urls.push(
-      `https://v3-cinemeta.strem.io/catalog/${kind}/top/skip=${page * CINEMETA_PAGE_SIZE}.json`
-    )
+    paths.push(`/catalog/${kind}/top/skip=${page * CINEMETA_PAGE_SIZE}.json`)
   }
   return Promise.all(
-    urls.map(async (url, index) => {
+    paths.map(async (path, index) => {
       try {
-        const result = await fetchJson<{ metas?: RawApiPayload[] }>(
-          url,
-          {},
-          { priority, label: `${kind} catalog (page ${index + 1})` }
-        )
+        const result = await cinemetaJson<{ metas?: RawApiPayload[] }>(path, {
+          priority,
+          label: `${kind} catalog (page ${index + 1})`
+        })
         // `lightweight`: a crawl path, so the per-episode prose Cinemeta
         // ships with every series meta is dropped and only the episode
         // POSITIONS are kept — see normalizeMeta. Nothing reads that prose
@@ -859,16 +884,18 @@ async function resolveMetadata(
         attributes: { ...result.data?.attributes, genres }
       })
     } else {
-      const result = await fetchJson<{ meta?: RawApiPayload }>(
-        `https://v3-cinemeta.strem.io/meta/${type}/${encodeURIComponent(resolvedId)}.json`,
-        {},
+      const result = await cinemetaJson<{ meta?: RawApiPayload }>(
+        `/meta/${type}/${encodeURIComponent(resolvedId)}.json`,
         { priority, label: `${type} details` }
       )
       item = normalizeMeta(result.meta || {}, type)
     }
   } catch (primaryError) {
     // Whatever stands in below is a stand-in — see DEGRADED_META_TTL_MS.
+    // Logged: a title with no episodes and nothing in the log was all
+    // there was to go on when a DNS filter blocked Cinemeta.
     degraded = true
+    logError('meta:primary', primaryError)
     const source = (
       db.getCache<CatalogItem[]>(`catalog:v2:${type}`, { allowExpired: true }) || []
     ).find((x) => String(x.id) === String(resolvedId))
@@ -1094,9 +1121,8 @@ async function cinemetaSearch(
   kind: Exclude<MediaKind, 'anime'>,
   query: string
 ): Promise<CatalogItem[]> {
-  const result = await fetchJson<{ metas?: RawApiPayload[] }>(
-    `https://v3-cinemeta.strem.io/catalog/${kind}/top/search=${encodeURIComponent(query)}.json`,
-    {},
+  const result = await cinemetaJson<{ metas?: RawApiPayload[] }>(
+    `/catalog/${kind}/top/search=${encodeURIComponent(query)}.json`,
     { priority: 'interactive', label: `${kind} search`, timeoutMs: SEARCH_TIMEOUT_MS }
   )
   // The poster comes back as delivered: a search hit's art is on IMDb's
@@ -1508,9 +1534,8 @@ async function cinemetaPageAt(
   priority: TaskPriority
 ): Promise<CatalogItem[] | null> {
   try {
-    const result = await fetchJson<{ metas?: RawApiPayload[] }>(
-      `https://v3-cinemeta.strem.io/catalog/${kind}/top/skip=${skip}.json`,
-      {},
+    const result = await cinemetaJson<{ metas?: RawApiPayload[] }>(
+      `/catalog/${kind}/top/skip=${skip}.json`,
       { priority, label: `${kind} deep scan (skip ${skip})` }
     )
     return (result.metas || []).map((x) => normalizeMeta(x, kind, true))
