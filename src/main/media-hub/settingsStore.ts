@@ -157,6 +157,12 @@ export interface MediaHubRawSettings {
   lanCacheUrl?: string
   lanCacheName?: string
   lanCacheToken?: string
+  /** Set to false, and only ever to false, when the person pressed Leave.
+   *  Absent means the app may find a cache server on its own network at
+   *  launch and ask to join it. Without the flag Leave would undo itself on
+   *  the next start, exactly as Ollama's Disconnect would (see
+   *  ollamaAutoDetect). Asking to join by hand turns it back on. */
+  lanCacheAutoJoin?: boolean
   /** Bound on the in-memory buffer, in MB. Clamped by
    *  streamCache.ts's memoryCacheMaxBytes; ignored on disk. */
   memoryCacheMaxMb?: number
@@ -400,6 +406,18 @@ export function setLanCacheConnection(connection: LanCacheConnection): void {
   else delete settings.lanCachePending
   if (connection.shareTorbox) settings.lanCacheShareTorbox = true
   else delete settings.lanCacheShareTorbox
+  writeSettings(settings)
+}
+
+/** Whether launch may look for a cache server and ask to join it. */
+export function isLanCacheAutoJoinOn(): boolean {
+  return readSettings().lanCacheAutoJoin !== false
+}
+
+export function setLanCacheAutoJoin(on: boolean): void {
+  const settings = readSettings()
+  if (on) delete settings.lanCacheAutoJoin
+  else settings.lanCacheAutoJoin = false
   writeSettings(settings)
 }
 

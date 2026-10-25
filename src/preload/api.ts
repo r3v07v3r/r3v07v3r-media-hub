@@ -79,6 +79,7 @@ import type {
   ReconcileCheckResult,
   ReconcileResolution,
   ReconcileResolveResult,
+  LanCacheAppEvent,
   LibraryChangedEvent,
   ReconcileSyncReport,
   ReleaseNotesResult,
@@ -428,7 +429,12 @@ export function createApi(transport: ApiTransport) {
         removeItem: (payload: { infoHash: string }): Promise<{ ok: boolean; message?: string }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.lanCacheRemoveItem, payload),
         cancelJob: (payload: { contentKey: string }): Promise<{ ok: boolean; message?: string }> =>
-          transport.invoke(MEDIA_HUB_CHANNELS.lanCacheCancelJob, payload)
+          transport.invoke(MEDIA_HUB_CHANNELS.lanCacheCancelJob, payload),
+        /** What the main process did about the cache server on its own:
+         *  found and asked to join one, followed one to a new address, was
+         *  approved, or (administrator only) another device is asking. */
+        onEvent: (onEvent: (event: LanCacheAppEvent) => void): (() => void) =>
+          subscribe<LanCacheAppEvent>(MEDIA_HUB_CHANNELS.lanCacheEvent, onEvent)
       },
 
       torbox: {

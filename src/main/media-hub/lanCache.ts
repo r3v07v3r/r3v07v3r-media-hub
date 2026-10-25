@@ -12,6 +12,7 @@ import type {
   LanCacheCatalogResponse,
   LanCacheTitlesRefreshResponse,
   LanCacheTitlesResponse,
+  LanCacheDevice,
   LanCacheDevicesResponse,
   LanCacheOwnItem,
   LanCachePairResponse,
@@ -20,18 +21,22 @@ import type {
   LanCacheJobPayload,
   LanCacheStatusResponse
 } from '../../shared/lancache/protocol'
-import type { StreamCandidate } from '../../shared/media-hub/types'
+import type { LanCacheAppEvent, StreamCandidate } from '../../shared/media-hub/types'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
-import { fetchJson } from './httpClient'
+import { electronModule } from './electronModule'
+import { fetchJson, type HttpError } from './httpClient'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
+import { sendToRenderer } from './rendererBridge'
 import {
   clearLanCacheConnection,
   getLanCacheConnection,
   getTorBoxToken,
+  isLanCacheAutoJoinOn,
+  setLanCacheAutoJoin,
   setLanCacheConnection
 } from './settingsStore'
-import { discoverLanCaches } from './lanCacheDiscovery'
+import { findLanCaches, type DiscoveredLanCache } from './lanCacheDiscovery'
 
 /** The update route answers only once the server has checked its release
  *  feed and staged the bundle, so it is not a sub-second call. Three
@@ -247,7 +252,7 @@ let approvalTimer: NodeJS.Timeout | null = null
  * renderer's own poll both come through here, so the two cannot promote a
  * connection differently.
  */
-async function promoteIfApproved(): Promise<'none' | 'pending' | 'approved'> {
+export async function promoteIfApproved(): Promise<'none' | 'pending' | 'approved'> {
   const connection = getLanCacheConnection()
   if (!connection) return 'none'
   if (!connection.pending) return 'approved'
@@ -270,6 +275,9 @@ async function promoteIfApproved(): Promise<'none' | 'pending' | 'approved'> {
   // the trusted-host list is refreshed HERE — the moment that now carries
   // the authority pairing used to.
   refreshTrustedHostsRef?.()
+  // Said out loud: the request may have been made by the launch-time search
+  // hours ago, with no panel open to see the answer arrive.
+  emit({ kind: 'approved', serverName: answer.serverName ?? connection.name })
 
   // And the opt-in the person made when they asked, which could not be
   // honoured then because a pending token authorises nothing. Sent once;
@@ -314,6 +322,342 @@ function syncApprovalPolling(): void {
  *  from a timer, outside any IPC call that could carry it. */
 let refreshTrustedHostsRef: (() => void) | null = null
 
+function emit(event: LanCacheAppEvent): void {
+  sendToRenderer(MEDIA_HUB_CHANNELS.lanCacheEvent, event)
+}
+
+// ---------------------------------------------------------------------------
+// Asking to join — the one path every join takes, whether a person pressed
+// Ask to join or the launch-time search found a server on its own.
+
+export interface JoinResult {
+  ok: boolean
+  message: string
+  pending?: boolean
+  serverName?: string
+}
+
+export async function askToJoin(
+  rawUrl: string,
+  options: {
+    /** The explicit opt-in: copy the TorBox token to the daemon so it can
+     *  fetch overnight with no app running. Never implied, so the launch
+     *  search never sets it. */
+    shareTorboxToken?: boolean
+    /** For the launch search: give up rather than replace a connection a
+     *  person made while the search was running. */
+    onlyIfUnpaired?: boolean
+  } = {}
+): Promise<JoinResult> {
+  const url = String(rawUrl || '')
+    .trim()
+    .replace(/\/+$/, '')
+  if (!/^https?:\/\//.test(url)) return { ok: false, message: 'Enter the server URL.' }
+  try {
+    // Identity check first: refuse to ask to join something
+    // that is not an r3-cache daemon at all.
+    const ping = await fetchJson<LanCachePingResponse>(
+      `${url}/api/ping`,
+      {},
+      { lane: 'lancache', label: 'cache server' }
+    )
+    if (ping.product !== 'r3-cache') {
+      return { ok: false, message: 'That server is not an r3-cache daemon.' }
+    }
+    const paired = await fetchJson<LanCachePairResponse>(
+      `${url}/api/pair`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // The device NAME is sent either way: it is what the server's
+        // administrator sees in the approval list, so an unnamed
+        // request is one nobody can sensibly say yes to.
+        body: JSON.stringify({ deviceName: os.hostname() })
+      },
+      { lane: 'lancache', label: 'cache server' }
+    )
+    if (!paired.token) {
+      // The daemon refuses a request when too many devices are already
+      // waiting, or when they are arriving too fast. Both are temporary
+      // and neither is about this device, so the wording says to try
+      // again rather than suggesting something is wrong here.
+      return {
+        ok: false,
+        message: 'The cache server is not taking requests right now. Try again shortly.'
+      }
+    }
+    if (options.onlyIfUnpaired && getLanCacheConnection()) {
+      return { ok: false, message: 'Already connected to a cache server.' }
+    }
+    const serverName = paired.serverName ?? ping.serverName
+    const pending = paired.status === 'pending'
+    setLanCacheConnection({
+      url,
+      name: serverName,
+      token: paired.token,
+      ...(pending ? { pending: true } : {}),
+      // The opt-in is KEPT rather than acted on while pending: a pending
+      // token authorises nothing, so posting the credential now would
+      // simply be refused. promoteIfApproved sends it the moment
+      // approval lands.
+      ...(pending && options.shareTorboxToken ? { shareTorbox: true } : {})
+    })
+    if (pending) {
+      // Nothing is granted yet — not the trusted-host entry, and not the
+      // TorBox copy below. Both wait for approval, which is the point of
+      // asking. The wait itself belongs to the main process, so it runs
+      // whether or not any panel is open to watch it.
+      syncApprovalPolling()
+      return {
+        ok: true,
+        pending: true,
+        serverName,
+        message: `Waiting for ${serverName ?? 'the cache server'}'s administrator to approve this device.`
+      }
+    }
+    // Pairing is what grants the player access to this LAN host.
+    refreshTrustedHostsRef?.()
+
+    if (options.shareTorboxToken) {
+      const torboxToken = getTorBoxToken()
+      if (torboxToken) {
+        await request('/api/credentials', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ torboxToken })
+        }).catch((error) => logError('lancache:credentials', error))
+      }
+    }
+    return { ok: true, serverName, message: `Paired with ${serverName ?? 'the cache server'}.` }
+  } catch (error) {
+    return { ok: false, message: (error as Error).message }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Finding the server without anyone typing an address.
+//
+// The address used to be typed by hand and then trusted forever, so a
+// server whose DHCP lease moved it (r3-host went .237 -> .234 -> .243 in a
+// month) silently took the whole cache tier with it. Two jobs fix that, both
+// run at launch and then on a slow timer:
+//
+//   - no server yet: search the network and ask to join the first one that
+//     answers. Open join lets this device straight in; otherwise the request
+//     waits for the administrator, whose own app is told (see
+//     checkJoinRequests below). Leave turns this off until the person asks
+//     to join by hand again, or Leave would undo itself on the next start.
+//   - a server already: if it no longer answers where it was, search for it
+//     elsewhere and move the stored address.
+//
+// A typed address is still the override. It is never replaced while it
+// answers, only when it has stopped answering and the same server has been
+// found somewhere else.
+
+/** How long the stored address gets before it counts as gone. Same budget as
+ *  the play-time lookup: a server on this network answers in milliseconds. */
+const ADDRESS_CHECK_TIMEOUT_MS = LAN_LOOKUP_TIMEOUT_MS
+/** The slow timer. The address only moves when a lease does, and a fresh
+ *  install is found at launch, so there is nothing to gain from asking often. */
+const AUTO_CONNECT_INTERVAL_MS = 30 * 60 * 1000
+/** Left after launch before the first search, so it never competes with the
+ *  app becoming usable. */
+const AUTO_CONNECT_DELAY_MS = 5_000
+
+type TokenCheck = 'known' | 'unknown' | 'unreachable'
+
+/** Whether a server at this address knows this device's token. 401 means a
+ *  server answered and does not; anything else failing means nobody did. */
+async function checkToken(url: string, token: string): Promise<TokenCheck> {
+  try {
+    await fetchJson(
+      `${url}/api/pair/status`,
+      { headers: { Authorization: `Bearer ${token}` } },
+      { lane: 'lancache', label: 'cache server', timeoutMs: ADDRESS_CHECK_TIMEOUT_MS }
+    )
+    return 'known'
+  } catch (error) {
+    return (error as HttpError).status === 401 ? 'unknown' : 'unreachable'
+  }
+}
+
+/** Compared the way the daemon's mDNS announcer spells its instance label
+ *  (daemon/mdns.ts's safeLabel), since an mDNS hit carries that label and a
+ *  ping carries the raw name: "r3-host.lan" announces as "r3-host-lan". */
+function sameName(a: string, b: string): boolean {
+  const label = (name: string): string =>
+    name
+      .replace(/[^a-zA-Z0-9-]/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .toLowerCase()
+  return label(a) === label(b)
+}
+
+export type AddressCheck = 'none' | 'current' | 'moved' | 'lost'
+
+/**
+ * Keeps the stored address pointing at the server this device joined.
+ *
+ * A candidate is accepted only when it carries the stored server's NAME and
+ * then recognises this device's token, so the move lands on the same server
+ * rather than on whatever answered first. The name test comes first so the
+ * token is offered only to a server that already claims to be this one, not
+ * to every daemon on the network. That is hygiene, not a proof: a host on
+ * the LAN could copy the name, and the token already crosses the LAN in the
+ * clear on every request, so this adds nothing a LAN attacker lacks today.
+ */
+export async function keepLanCacheAddressCurrent(
+  discover: () => Promise<DiscoveredLanCache[]>
+): Promise<AddressCheck> {
+  const connection = getLanCacheConnection()
+  if (!connection) return 'none'
+  if ((await checkToken(connection.url, connection.token)) === 'known') return 'current'
+
+  const found = await discover()
+  for (const server of found) {
+    if (server.url === connection.url) continue
+    if (connection.name && !sameName(server.name, connection.name)) continue
+    if ((await checkToken(server.url, connection.token)) !== 'known') continue
+    // Re-read: the person may have left, or joined another server, while
+    // the search ran. Only the connection that was searched for is moved.
+    const latest = getLanCacheConnection()
+    if (!latest || latest.token !== connection.token) return 'none'
+    setLanCacheConnection({ ...latest, url: server.url })
+    refreshTrustedHostsRef?.()
+    emit({ kind: 'moved', serverName: latest.name || server.name, url: server.url })
+    return 'moved'
+  }
+  return 'lost'
+}
+
+/**
+ * One launch-time (or timer) pass: move a server that has moved, or find
+ * and ask to join one when there is none and Leave has not switched that off.
+ */
+export async function runLanCacheAutoConnect(
+  discover: () => Promise<DiscoveredLanCache[]> = () => findLanCaches()
+): Promise<AddressCheck | 'asked' | 'joined' | 'off' | 'nothing-found'> {
+  if (getLanCacheConnection()) return keepLanCacheAddressCurrent(discover)
+  if (!isLanCacheAutoJoinOn()) return 'off'
+  const found = await discover()
+  for (const server of found) {
+    const result = await askToJoin(server.url, { onlyIfUnpaired: true })
+    if (!result.ok) continue
+    const serverName = result.serverName || server.name
+    emit({ kind: result.pending ? 'asked' : 'joined', serverName })
+    return result.pending ? 'asked' : 'joined'
+  }
+  return 'nothing-found'
+}
+
+let autoConnectRunning = false
+
+/** Guarded so the timer and a slow launch pass never overlap. */
+function autoConnectPass(discover?: () => Promise<DiscoveredLanCache[]>): void {
+  if (autoConnectRunning) return
+  autoConnectRunning = true
+  void runLanCacheAutoConnect(discover)
+    .catch((error) => logError('lancache:auto-connect', error))
+    .finally(() => {
+      autoConnectRunning = false
+    })
+}
+
+// ---------------------------------------------------------------------------
+// The administrator's side: somebody is asking to join.
+//
+// The daemon already queues the request and the Caching section already
+// lists it with Approve and Deny. What was missing is being TOLD: the
+// administrator only found out by opening that section. So the
+// administrator's app polls the device list and raises each new request
+// once, as a toast with Allow and Deny (and a desktop notification when the
+// window is not in front, since the request can arrive at any time).
+
+/** How often the administrator's app looks. Requests are rare and a person
+ *  is standing at the other device waiting, so this leans towards prompt. */
+const JOIN_REQUEST_POLL_MS = 20_000
+/** A device that is not the administrator gets 403 here. Asking again every
+ *  twenty seconds would be a request nobody needs, so a refusal is believed
+ *  for this long (the role changes by claim, which is rare). */
+const NOT_ADMIN_BACKOFF_MS = 10 * 60 * 1000
+
+/** Raised once each per run. A request still waiting at the next launch is
+ *  raised again, which is the reminder somebody would want. */
+const raisedJoinRequests = new Set<string>()
+/** The 403 back-off, kept with the token it was learned from: a refusal says
+ *  nothing about a different connection, or about this one after it claims. */
+let notAdmin: { token: string; until: number } | null = null
+
+/**
+ * New join requests this device should raise, if it administers the server.
+ * Each one is returned once; an empty list for anything else (not the
+ * administrator, not connected, server away).
+ */
+export async function checkJoinRequests(now = Date.now()): Promise<LanCacheDevice[]> {
+  const connection = getLanCacheConnection()
+  if (!connection || connection.pending) return []
+  if (notAdmin && notAdmin.token === connection.token && now < notAdmin.until) return []
+  let answer: LanCacheDevicesResponse
+  try {
+    answer = await request<LanCacheDevicesResponse>(
+      '/api/admin/devices',
+      {},
+      ADDRESS_CHECK_TIMEOUT_MS
+    )
+  } catch (error) {
+    if ((error as HttpError).status === 403) {
+      notAdmin = { token: connection.token, until: now + NOT_ADMIN_BACKOFF_MS }
+    }
+    return []
+  }
+  notAdmin = null
+  const fresh = answer.devices.filter(
+    (device) => device.status === 'pending' && !raisedJoinRequests.has(device.id)
+  )
+  for (const device of fresh) raisedJoinRequests.add(device.id)
+  return fresh
+}
+
+/** A desktop notification, only when the app is not what somebody is looking
+ *  at — in front, the toast already says it. Clicking brings the app forward,
+ *  where the toast's Allow and Deny are. */
+function notifyDesktop(title: string, body: string): void {
+  try {
+    const { BrowserWindow, Notification } = electronModule()
+    if (!Notification.isSupported()) return
+    if (BrowserWindow.getAllWindows().some((window) => window.isFocused())) return
+    const notification = new Notification({ title, body })
+    notification.on('click', () => {
+      const window = BrowserWindow.getAllWindows()[0]
+      if (!window) return
+      if (window.isMinimized()) window.restore()
+      window.show()
+      window.focus()
+    })
+    notification.show()
+  } catch {
+    // Not inside Electron (the headless backend): the toast is all there is.
+  }
+}
+
+async function raiseJoinRequests(): Promise<void> {
+  const fresh = await checkJoinRequests()
+  const serverName = getLanCacheConnection()?.name || 'the cache server'
+  for (const device of fresh) {
+    emit({ kind: 'join-request', id: device.id, deviceName: device.deviceName, serverName })
+    notifyDesktop(
+      'A device wants to use your cache server',
+      `${device.deviceName} on your network is asking to use ${serverName}. Open R3 Media Hub to allow or deny it.`
+    )
+  }
+}
+
+/** Test seam: forget what has been raised and any 403 back-off. */
+export function resetJoinRequestState(): void {
+  raisedJoinRequests.clear()
+  notAdmin = null
+}
+
 // ---------------------------------------------------------------------------
 // IPC: discovery, pairing, status — the Settings pane's surface.
 
@@ -338,94 +682,32 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
   // startup rather than only after somebody opens the panel again.
   syncApprovalPolling()
 
+  // Find (or follow) the cache server without anyone typing an address. The
+  // launch pass may probe the subnet; the timer's passes use mDNS alone, so a
+  // laptop away from home is not asking a café's network every half hour.
+  setTimeout(() => autoConnectPass(), AUTO_CONNECT_DELAY_MS).unref?.()
+  setInterval(
+    () => autoConnectPass(() => findLanCaches({ probe: 'never' })),
+    AUTO_CONNECT_INTERVAL_MS
+  ).unref?.()
+  setInterval(() => {
+    void raiseJoinRequests().catch((error) => logError('lancache:join-requests', error))
+  }, JOIN_REQUEST_POLL_MS).unref?.()
+
   handle(MEDIA_HUB_CHANNELS.lanCacheDiscover, async () => {
-    const found = await discoverLanCaches()
+    const found = await findLanCaches()
     return { daemons: found, paired: getLanCacheConnection()?.url ?? null }
   })
 
-  handle<PairPayload, { ok: boolean; message: string; pending?: boolean }>(
-    MEDIA_HUB_CHANNELS.lanCachePair,
-    async (_event, payload) => {
-      const url = String(payload?.url || '')
-        .trim()
-        .replace(/\/+$/, '')
-      if (!/^https?:\/\//.test(url)) return { ok: false, message: 'Enter the server URL.' }
-      try {
-        // Identity check first: refuse to ask to join something
-        // that is not an r3-cache daemon at all.
-        const ping = await fetchJson<LanCachePingResponse>(
-          `${url}/api/ping`,
-          {},
-          { lane: 'lancache', label: 'cache server' }
-        )
-        if (ping.product !== 'r3-cache') {
-          return { ok: false, message: 'That server is not an r3-cache daemon.' }
-        }
-        const paired = await fetchJson<LanCachePairResponse>(
-          `${url}/api/pair`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            // The device NAME is sent either way: it is what the server's
-            // administrator sees in the approval list, so an unnamed
-            // request is one nobody can sensibly say yes to.
-            body: JSON.stringify({ deviceName: os.hostname() })
-          },
-          { lane: 'lancache', label: 'cache server' }
-        )
-        if (!paired.token) {
-          // The daemon refuses a request when too many devices are already
-          // waiting, or when they are arriving too fast. Both are temporary
-          // and neither is about this device, so the wording says to try
-          // again rather than suggesting something is wrong here.
-          return {
-            ok: false,
-            message: 'The cache server is not taking requests right now. Try again shortly.'
-          }
-        }
-        const pending = paired.status === 'pending'
-        setLanCacheConnection({
-          url,
-          name: paired.serverName ?? ping.serverName,
-          token: paired.token,
-          ...(pending ? { pending: true } : {}),
-          // The opt-in is KEPT rather than acted on while pending: a pending
-          // token authorises nothing, so posting the credential now would
-          // simply be refused. promoteIfApproved sends it the moment
-          // approval lands.
-          ...(pending && payload?.shareTorboxToken ? { shareTorbox: true } : {})
-        })
-        if (pending) {
-          // Nothing is granted yet — not the trusted-host entry, and not the
-          // TorBox copy below. Both wait for approval, which is the point of
-          // asking. The wait itself belongs to the main process, so it runs
-          // whether or not any panel is open to watch it.
-          syncApprovalPolling()
-          return {
-            ok: true,
-            pending: true,
-            message: `Waiting for ${paired.serverName ?? 'the cache server'}'s administrator to approve this device.`
-          }
-        }
-        // Pairing is what grants the player access to this LAN host.
-        refreshTrustedHosts()
-
-        if (payload?.shareTorboxToken) {
-          const torboxToken = getTorBoxToken()
-          if (torboxToken) {
-            await request('/api/credentials', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ torboxToken })
-            }).catch((error) => logError('lancache:credentials', error))
-          }
-        }
-        return { ok: true, message: `Paired with ${paired.serverName ?? 'the cache server'}.` }
-      } catch (error) {
-        return { ok: false, message: (error as Error).message }
-      }
-    }
-  )
+  handle<PairPayload, JoinResult>(MEDIA_HUB_CHANNELS.lanCachePair, async (_event, payload) => {
+    const result = await askToJoin(String(payload?.url || ''), {
+      shareTorboxToken: payload?.shareTorboxToken === true
+    })
+    // Asking by hand is the person saying they want a cache server again,
+    // so a Leave that switched the launch search off is undone here.
+    if (result.ok) setLanCacheAutoJoin(true)
+    return result
+  })
 
   handle(MEDIA_HUB_CHANNELS.lanCacheUnpair, async () => {
     // Best-effort credential revocation on the daemon before forgetting it.
@@ -437,6 +719,8 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
       }).catch(() => {})
     }
     clearLanCacheConnection()
+    // Or the launch search would find the same server and ask again.
+    setLanCacheAutoJoin(false)
     refreshTrustedHosts()
     // Nothing left to wait for.
     syncApprovalPolling()
@@ -479,6 +763,8 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
     if (!isLanCacheConnected()) return { ok: false, message: 'No cache server is paired.' }
     try {
       await request('/api/admin/claim', { method: 'POST' })
+      // Administrator now: start looking for join requests at once.
+      notAdmin = null
       return { ok: true, message: 'You administer this cache server.' }
     } catch (error) {
       return { ok: false, message: (error as Error).message }

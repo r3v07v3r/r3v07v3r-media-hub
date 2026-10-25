@@ -6,12 +6,21 @@ and what they plan to watch from TorBox ahead of time onto a machine on
 your network, then serves them to the app over the LAN, so a slow internet
 connection is paid once overnight instead of at play time.
 
-Zero-config: run it, then join it from the app. The app finds the daemon
-by itself over mDNS (a manual address field covers networks that filter
-multicast); open the control centre, choose **Caching**, pick the server
-and **Ask to join**. There is no pairing code. The first device to claim
-the server becomes its administrator and approves everyone else from
-their own app, or lets anyone on the network join without asking.
+Zero-config: run it, then start the app. A few seconds after launch the app
+looks for the daemon over mDNS, falls back to asking every address on its
+own subnet for `/api/ping` on port 8945 when multicast is filtered, and asks
+to join the first one it finds. Nobody types an address, and nothing is tied
+to a particular range. The first device to claim the server becomes its
+administrator. Every later request raises a toast in the administrator's app
+("… wants to use r3-host. Allow it?") with **Allow** and **Deny**, plus a
+desktop notification when the app is not in front; with open join switched
+on, devices are let in with no prompt. If the server's address changes, the
+app finds the same server again (same name, and it still recognises this
+device's token) and updates the stored address. **Leave** stops the launch
+search until you join by hand again. The manual address field under
+**Control centre → Caching** is still there as an override; a typed address
+is replaced only once it has stopped answering and the same server has been
+found elsewhere. There is no pairing code.
 
 Every title the daemon downloads leaves on its own: it expires after an idle
 TTL (14 days, refreshed by playing) or a hard maximum age (30 days, deferred

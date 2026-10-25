@@ -46,6 +46,8 @@ export const MEDIA_HUB_CHANNELS = {
   lanCachePair: 'mediahub:lancache:pair',
   lanCacheUnpair: 'mediahub:lancache:unpair',
   lanCacheStatus: 'mediahub:lancache:status',
+  /** Push event: see LanCacheAppEvent. */
+  lanCacheEvent: 'mediahub:lancache:event',
   /** Poll while a pairing request waits for the server's administrator. */
   lanCachePairStatus: 'mediahub:lancache:pair-status',
   /** Take Super Admin of an unclaimed cache server. */

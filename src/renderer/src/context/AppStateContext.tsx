@@ -1236,6 +1236,56 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     })
   }, [pushNotification])
 
+  // The cache server, found or followed by the main process on its own (see
+  // lanCache.ts's runLanCacheAutoConnect), and, on the administrator's
+  // device, another device asking to join. The request waits on the server
+  // whatever happens to this toast: dismissing it leaves the answer to the
+  // Caching section of the control centre.
+  useEffect(() => {
+    const lanCache = window.api?.mediaHub?.lanCache
+    return lanCache?.onEvent((event) => {
+      if (event.kind === 'join-request') {
+        const answer = (action: 'approve' | 'deny'): void => {
+          void lanCache
+            .deviceAction({ id: event.id, action })
+            .then((result) => {
+              pushNotification(
+                result.ok
+                  ? {
+                      tone: 'success',
+                      message:
+                        action === 'approve'
+                          ? `${event.deviceName} can now use ${event.serverName}.`
+                          : `${event.deviceName} was turned away.`
+                    }
+                  : {
+                      tone: 'error',
+                      message: result.message || 'The cache server did not take that answer.'
+                    }
+              )
+            })
+            .catch(() => {})
+        }
+        pushNotification({
+          tone: 'info',
+          message: `${event.deviceName} on your network wants to use ${event.serverName}. Allow it?`,
+          action: { label: 'Allow', run: () => answer('approve') },
+          secondaryAction: { label: 'Deny', run: () => answer('deny') }
+        })
+        return
+      }
+      const message =
+        event.kind === 'asked'
+          ? `Found ${event.serverName} on your network and asked to use it. Its administrator has to allow this device.`
+          : event.kind === 'joined'
+            ? `Found ${event.serverName} on your network and joined it.`
+            : event.kind === 'approved'
+              ? `${event.serverName} let this device in.`
+              : `${event.serverName} moved to ${event.url}. Following it there.`
+      pushNotification({ tone: event.kind === 'asked' ? 'info' : 'success', message })
+    })
+  }, [pushNotification])
+
   // Watch-status reconciliation — see tracking.ts's own header comment on
   // why this only ever runs occasionally and never on the critical path
   // of opening the app: fired once, a few seconds after mount, so it
