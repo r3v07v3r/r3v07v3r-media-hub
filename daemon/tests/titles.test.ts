@@ -156,6 +156,78 @@ async function main(): Promise<void> {
     assert.equal(next.rows[0].item.id, 'tt3')
   })
 
+  // --- rows live on disk: offsets must survive everything that moves them --
+
+  await check('compaction rewrites the file and every row still reads back', async () => {
+    const { store, root } = await tempStore()
+    const ids = Array.from({ length: 40 }, (_, i) => `tt${i}`)
+    // Enough re-issues of the same 40 rows to cross the compaction line
+    // (more than twice the live rows plus COMPACT_SLACK_LINES).
+    for (let round = 0; round < 30; round++) {
+      await store.upsert(
+        'movie',
+        ids.map((id, rank) => ({ rank, item: item(id, { title: `${id} v${round}` }) }))
+      )
+    }
+    const lines = (await fsp.readFile(path.join(root, 'titles.ndjson'), 'utf8'))
+      .split('\n')
+      .filter(Boolean)
+    assert.ok(lines.length < 30 * 40, `compacted (${lines.length} lines)`)
+    const page = store.listSince('movie', 0, 100)
+    assert.equal(page.rows.length, 40)
+    for (const row of page.rows) assert.equal(row.item.title, `${row.item.id} v29`)
+
+    const reborn = createTitleStore(root)
+    await reborn.load()
+    assert.deepEqual(reborn.listSince('movie', 0, 100), page, 'and after a reload')
+  })
+
+  await check('a torn last line is dropped and the next append is not glued to it', async () => {
+    const { store, root } = await tempStore()
+    await store.upsert('movie', [{ rank: 0, item: item('tt1') }])
+    await fsp.appendFile(path.join(root, 'titles.ndjson'), '{"seq":99,"kind":"mo')
+    const reborn = createTitleStore(root)
+    await reborn.load()
+    assert.equal(reborn.counts().movie, 1, 'the fragment is not a row')
+    await reborn.upsert('movie', [{ rank: 1, item: item('tt2') }])
+    const again = createTitleStore(root)
+    await again.load()
+    assert.deepEqual(
+      again
+        .listSince('movie', 0, 10)
+        .rows.map((row) => row.item.id)
+        .sort(),
+      ['tt1', 'tt2'],
+      'the row appended after the fragment survives a reload'
+    )
+  })
+
+  await check('two crawls appending at once do not overlap their rows', async () => {
+    const { store, root } = await tempStore()
+    await Promise.all([
+      store.upsert(
+        'movie',
+        Array.from({ length: 50 }, (_, i) => ({ rank: i, item: item(`tt${i}`) }))
+      ),
+      store.upsert(
+        'anime',
+        Array.from({ length: 50 }, (_, i) => ({
+          rank: i,
+          item: item(`kitsu:${i}`, { type: 'anime', title: 'ア'.repeat(i) })
+        }))
+      )
+    ])
+    const movies = store.listSince('movie', 0, 100).rows
+    const anime = store.listSince('anime', 0, 100).rows
+    assert.equal(movies.length, 50)
+    assert.equal(anime.length, 50)
+    // Multi-byte titles: offsets are bytes, not characters.
+    for (const row of anime) assert.equal(row.item.title, 'ア'.repeat(Number(row.rank)))
+    const reborn = createTitleStore(root)
+    await reborn.load()
+    assert.deepEqual(reborn.listSince('anime', 0, 100).rows, anime)
+  })
+
   // --- the crawler: refresh discipline -----------------------------------
 
   await check('refresh coalesces: one started, joiners join, cooldown throttles', async () => {

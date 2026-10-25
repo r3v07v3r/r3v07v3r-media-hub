@@ -17,6 +17,8 @@
 // updated (with a fresh seq) only when it moved far enough to matter to
 // a "trending" sort — see RANK_DRIFT_SLACK.
 
+import crypto from 'node:crypto'
+import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 
@@ -65,8 +67,37 @@ const KINDS: MediaKind[] = ['movie', 'series', 'anime']
  *  as there are live rows (plus slack for small stores), compact it. */
 const COMPACT_SLACK_LINES = 1000
 
-function sameItem(a: CatalogItem, b: CatalogItem): boolean {
-  return JSON.stringify(a) === JSON.stringify(b)
+/** Read size while loading. Big enough that the file is a few dozen reads,
+ *  small enough that the buffer is a rounding error next to the index. */
+const LOAD_CHUNK_BYTES = 1 << 20
+
+// MEMORY. The rows themselves stay on disk; memory holds one small
+// reference per title (seq, rank, a content hash, and where its line is in
+// the file). This is not an optimisation for its own sake. The catalog is
+// tens of thousands of rows and ~90 MB of JSON, and the daemon runs under
+// a 512 MB cgroup on a box whose real job is something else, where Node
+// sizes its heap to about half of that. Holding every row parsed (and
+// loading by reading the whole file into one string and splitting it,
+// which is two more full copies) ran out of heap three seconds into boot,
+// so every build carrying the title tier crashed, was marked bad by the
+// launcher, and r3-host fell back to its builtin build from August.
+//
+// A page of /api/titles reads its rows from disk: at most 500 short reads
+// of a file the OS has cached, which is cheaper than it sounds and far
+// cheaper than the alternative.
+interface RowRef {
+  seq: number
+  rank: number
+  /** Hash of the item's JSON: what "unchanged" is decided by, without
+   *  keeping the item. */
+  hash: string
+  /** Byte position and length of this row's line, newline excluded. */
+  offset: number
+  length: number
+}
+
+function itemHash(item: CatalogItem): string {
+  return crypto.createHash('sha1').update(JSON.stringify(item)).digest('base64')
 }
 
 export function createTitleStore(dataDir: string): TitleStore {
@@ -75,14 +106,24 @@ export function createTitleStore(dataDir: string): TitleStore {
 
   // kind -> id -> row. Later lines win on load, which is what append-on-
   // change means.
-  const byKind = new Map<MediaKind, Map<string, DaemonTitleRow>>(
-    KINDS.map((kind) => [kind, new Map()])
-  )
+  const byKind = new Map<MediaKind, Map<string, RowRef>>(KINDS.map((kind) => [kind, new Map()]))
   // Sorted-by-seq view per kind, rebuilt lazily — invalidated on upsert.
-  const sortedCache = new Map<MediaKind, DaemonTitleRow[]>()
+  const sortedCache = new Map<MediaKind, RowRef[]>()
   let seqCounter = 0
   let lineCount = 0
+  /** Where the next appended line starts. */
+  let fileSize = 0
   const refreshedAt: Partial<Record<MediaKind, number>> = {}
+
+  // Every write (append, compaction) runs one at a time: each one decides
+  // byte offsets from fileSize, and two crawls appending at once would
+  // otherwise record overlapping positions.
+  let writeChain: Promise<unknown> = Promise.resolve()
+  function serialized<T>(task: () => Promise<T>): Promise<T> {
+    const run = writeChain.then(task, task)
+    writeChain = run.catch(() => {})
+    return run
+  }
 
   async function persistMeta(): Promise<void> {
     const tmp = `${metaPath}.tmp`
@@ -96,19 +137,40 @@ export function createTitleStore(dataDir: string): TitleStore {
     return n
   }
 
+  /** Rewrites the file with live rows only, a row at a time. The old file
+   *  and the old offsets stay valid until the synchronous swap at the end,
+   *  so a page served while this runs reads consistent rows. */
   async function compactIfBloated(): Promise<void> {
     if (lineCount <= liveCount() * 2 + COMPACT_SLACK_LINES) return
-    const lines: string[] = []
-    for (const map of byKind.values()) {
-      for (const row of map.values()) lines.push(JSON.stringify(row))
-    }
     const tmp = `${ndjsonPath}.tmp`
-    await fsp.writeFile(tmp, lines.length ? lines.join('\n') + '\n' : '')
-    await fsp.rename(tmp, ndjsonPath)
-    lineCount = lines.length
+    const source = await fsp.open(ndjsonPath, 'r')
+    const target = await fsp.open(tmp, 'w')
+    const moved = new Map<RowRef, number>()
+    let written = 0
+    try {
+      for (const map of byKind.values()) {
+        for (const ref of map.values()) {
+          const line = Buffer.alloc(ref.length + 1)
+          await source.read(line, 0, ref.length, ref.offset)
+          line[ref.length] = 0x0a
+          await target.write(line, 0, line.length, written)
+          moved.set(ref, written)
+          written += line.length
+        }
+      }
+    } finally {
+      await source.close()
+      await target.close()
+    }
+    // Synchronous from here: no request can run between the file changing
+    // and the offsets that describe it changing.
+    fs.renameSync(tmp, ndjsonPath)
+    for (const [ref, offset] of moved) ref.offset = offset
+    fileSize = written
+    lineCount = moved.size
   }
 
-  function sorted(kind: MediaKind): DaemonTitleRow[] {
+  function sorted(kind: MediaKind): RowRef[] {
     let rows = sortedCache.get(kind)
     if (!rows) {
       rows = [...(byKind.get(kind)?.values() ?? [])].sort((a, b) => a.seq - b.seq)
@@ -117,52 +179,135 @@ export function createTitleStore(dataDir: string): TitleStore {
     return rows
   }
 
+  function readRows(refs: RowRef[]): DaemonTitleRow[] {
+    if (!refs.length) return []
+    const fd = fs.openSync(ndjsonPath, 'r')
+    try {
+      return refs.map((ref) => {
+        const buffer = Buffer.alloc(ref.length)
+        fs.readSync(fd, buffer, 0, ref.length, ref.offset)
+        return JSON.parse(buffer.toString('utf8')) as DaemonTitleRow
+      })
+    } finally {
+      fs.closeSync(fd)
+    }
+  }
+
+  /** Streams the file, indexing each line by its byte position. Only one
+   *  chunk and one line are ever held at a time. */
+  async function loadRows(): Promise<void> {
+    let handle: fsp.FileHandle
+    try {
+      handle = await fsp.open(ndjsonPath, 'r')
+    } catch {
+      return // First run.
+    }
+    let position = 0
+    let carry = Buffer.alloc(0)
+    let lastByte = 0x0a
+    const index = (line: Buffer, offset: number): void => {
+      if (!line.length) return
+      lineCount += 1
+      try {
+        const row = JSON.parse(line.toString('utf8')) as DaemonTitleRow
+        if (!row || typeof row.seq !== 'number' || !row.item?.id) return
+        const map = byKind.get(row.kind)
+        if (!map) return
+        map.set(String(row.item.id), {
+          seq: row.seq,
+          rank: row.rank,
+          hash: itemHash(row.item),
+          offset,
+          length: line.length
+        })
+        if (row.seq > seqCounter) seqCounter = row.seq
+      } catch {
+        // A torn tail line from a crash loses that one change; the next
+        // crawl re-detects it.
+      }
+    }
+    try {
+      const chunk = Buffer.alloc(LOAD_CHUNK_BYTES)
+      for (;;) {
+        const { bytesRead } = await handle.read(chunk, 0, chunk.length, position)
+        if (!bytesRead) break
+        const data = carry.length
+          ? Buffer.concat([carry, chunk.subarray(0, bytesRead)])
+          : chunk.subarray(0, bytesRead)
+        const dataStart = position - carry.length
+        let lineStart = 0
+        for (let at = data.indexOf(0x0a); at !== -1; at = data.indexOf(0x0a, at + 1)) {
+          index(data.subarray(lineStart, at), dataStart + lineStart)
+          lineStart = at + 1
+        }
+        // Copied: the chunk buffer is reused by the next read.
+        carry = Buffer.from(data.subarray(lineStart))
+        lastByte = data[data.length - 1]
+        position += bytesRead
+      }
+      index(carry, position - carry.length)
+    } finally {
+      await handle.close()
+    }
+    fileSize = position
+    // A file that ends mid-line (a crash during append) would glue the next
+    // appended row onto that fragment. Close it off first.
+    if (fileSize && lastByte !== 0x0a) {
+      await fsp.appendFile(ndjsonPath, '\n')
+      fileSize += 1
+    }
+  }
+
   return {
-    async upsert(kind, entries) {
-      const map = byKind.get(kind)
-      if (!map) return 0
-      const changedLines: string[] = []
-      for (const entry of entries) {
-        const id = String(entry.item?.id || '')
-        if (!id) continue
-        const current = map.get(id)
-        if (current) {
-          const contentSame = sameItem(current.item, entry.item)
-          const rankClose = Math.abs(current.rank - entry.rank) <= RANK_DRIFT_SLACK
-          if (contentSame && rankClose) continue
-          // Content changed, or the title genuinely moved: new seq so
-          // watermarked clients hear about it.
-          const row: DaemonTitleRow = {
-            seq: ++seqCounter,
-            kind,
-            rank: contentSame && rankClose ? current.rank : entry.rank,
-            item: entry.item
+    upsert(kind, entries) {
+      return serialized(async () => {
+        const map = byKind.get(kind)
+        if (!map) return 0
+        const changed: Array<{ id: string; ref: RowRef; line: string }> = []
+        let offset = fileSize
+        for (const entry of entries) {
+          const id = String(entry.item?.id || '')
+          if (!id) continue
+          const hash = itemHash(entry.item)
+          const current = map.get(id)
+          if (current) {
+            const contentSame = current.hash === hash
+            const rankClose = Math.abs(current.rank - entry.rank) <= RANK_DRIFT_SLACK
+            if (contentSame && rankClose) continue
           }
-          map.set(id, row)
-          changedLines.push(JSON.stringify(row))
-        } else {
+          // New, content changed, or the title genuinely moved: new seq so
+          // watermarked clients hear about it.
           const row: DaemonTitleRow = {
             seq: ++seqCounter,
             kind,
             rank: entry.rank,
             item: entry.item
           }
-          map.set(id, row)
-          changedLines.push(JSON.stringify(row))
+          const line = JSON.stringify(row)
+          const length = Buffer.byteLength(line)
+          changed.push({ id, line, ref: { seq: row.seq, rank: row.rank, hash, offset, length } })
+          offset += length + 1
         }
-      }
-      if (changedLines.length) {
+        if (!changed.length) return 0
+        try {
+          await fsp.appendFile(ndjsonPath, changed.map((entry) => entry.line).join('\n') + '\n')
+        } catch {
+          // Nothing was written, so nothing is indexed: the rows live on
+          // disk now, and an index entry pointing past the end of the file
+          // would serve garbage. The next crawl re-detects the delta.
+          return 0
+        }
+        for (const entry of changed) map.set(entry.id, entry.ref)
+        fileSize = offset
+        lineCount += changed.length
         sortedCache.delete(kind)
         try {
-          await fsp.appendFile(ndjsonPath, changedLines.join('\n') + '\n')
-          lineCount += changedLines.length
           await compactIfBloated()
         } catch {
-          // Disk trouble loses durability, not correctness: the in-memory
-          // store still serves, and the next crawl re-detects the delta.
+          // Compaction is housekeeping: the appended file is still correct.
         }
-      }
-      return changedLines.length
+        return changed.length
+      })
     },
 
     listSince(kind, since, limit) {
@@ -177,7 +322,7 @@ export function createTitleStore(dataDir: string): TitleStore {
       }
       const page = rows.slice(lo, lo + limit)
       return {
-        rows: page,
+        rows: readRows(page),
         nextSince: page.length ? page[page.length - 1].seq : since,
         more: lo + limit < rows.length,
         total: rows.length
@@ -215,27 +360,12 @@ export function createTitleStore(dataDir: string): TitleStore {
       } catch {
         // First run.
       }
-      try {
-        const text = await fsp.readFile(ndjsonPath, 'utf8')
-        for (const line of text.split('\n')) {
-          if (!line.trim()) continue
-          lineCount += 1
-          try {
-            const row = JSON.parse(line) as DaemonTitleRow
-            if (!row || typeof row.seq !== 'number' || !row.item?.id) continue
-            const map = byKind.get(row.kind)
-            if (!map) continue
-            map.set(String(row.item.id), row)
-            if (row.seq > seqCounter) seqCounter = row.seq
-          } catch {
-            // A torn tail line from a crash loses that one change; the next
-            // crawl re-detects it.
-          }
-        }
+      await serialized(async () => {
+        await loadRows()
         await compactIfBloated()
-      } catch {
-        // First run.
-      }
+      }).catch(() => {
+        // An unreadable index starts empty; the next crawl rebuilds it.
+      })
     }
   }
 }
