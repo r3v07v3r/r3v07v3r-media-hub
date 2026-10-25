@@ -96,6 +96,50 @@ interface RowRef {
   length: number
 }
 
+/** The part of a file handle the loops below need, so a test can hand them
+ *  one that reads or writes short. */
+interface PositionalHandle {
+  read(
+    buffer: Buffer,
+    offset: number,
+    length: number,
+    position: number
+  ): Promise<{ bytesRead: number }>
+  write(
+    buffer: Buffer,
+    offset: number,
+    length: number,
+    position: number
+  ): Promise<{ bytesWritten: number }>
+}
+
+/** A read or write may move fewer bytes than asked and still succeed.
+ *  Taking that for the whole buffer would drop the rest of a row silently,
+ *  and during compaction the file it lands in replaces the intact one. */
+export async function readFully(
+  handle: Pick<PositionalHandle, 'read'>,
+  buffer: Buffer,
+  position: number
+): Promise<void> {
+  for (let done = 0; done < buffer.length;) {
+    const { bytesRead } = await handle.read(buffer, done, buffer.length - done, position + done)
+    if (bytesRead <= 0) throw new Error('titles.ndjson ended inside a row')
+    done += bytesRead
+  }
+}
+
+export async function writeFully(
+  handle: Pick<PositionalHandle, 'write'>,
+  buffer: Buffer,
+  position: number
+): Promise<void> {
+  for (let done = 0; done < buffer.length;) {
+    const { bytesWritten } = await handle.write(buffer, done, buffer.length - done, position + done)
+    if (bytesWritten <= 0) throw new Error('could not write titles.ndjson')
+    done += bytesWritten
+  }
+}
+
 function itemHash(item: CatalogItem): string {
   return crypto.createHash('sha1').update(JSON.stringify(item)).digest('base64')
 }
@@ -166,9 +210,9 @@ export function createTitleStore(
       for (const map of byKind.values()) {
         for (const ref of map.values()) {
           const line = Buffer.alloc(ref.length + 1)
-          await source.read(line, 0, ref.length, ref.offset)
+          await readFully(source, line.subarray(0, ref.length), ref.offset)
           line[ref.length] = 0x0a
-          await target.write(line, 0, line.length, written)
+          await writeFully(target, line, written)
           moved.set(ref, written)
           written += line.length
         }
@@ -190,13 +234,23 @@ export function createTitleStore(
    *  (the fragment is a torn line, skipped on load). */
   async function settleTail(): Promise<void> {
     if (!tailUnknown) return
-    const { size } = await fsp.stat(ndjsonPath)
-    if (size > fileSize) {
-      await appendFile(ndjsonPath, '\n')
-      fileSize = size + 1
-    } else {
-      fileSize = size
+    let { size } = await fsp.stat(ndjsonPath)
+    // Decided by the last byte, not by the size: a torn line found at load
+    // sits INSIDE the size this store already knows.
+    if (size > 0) {
+      const last = Buffer.alloc(1)
+      const handle = await fsp.open(ndjsonPath, 'r')
+      try {
+        await readFully(handle, last, size - 1)
+      } finally {
+        await handle.close()
+      }
+      if (last[0] !== 0x0a) {
+        await appendFile(ndjsonPath, '\n')
+        size += 1
+      }
     }
+    fileSize = size
     tailUnknown = false
   }
 
@@ -215,7 +269,11 @@ export function createTitleStore(
     try {
       return refs.map((ref) => {
         const buffer = Buffer.alloc(ref.length)
-        fs.readSync(fd, buffer, 0, ref.length, ref.offset)
+        for (let done = 0; done < ref.length;) {
+          const read = fs.readSync(fd, buffer, done, ref.length - done, ref.offset + done)
+          if (read <= 0) throw new Error('titles.ndjson ended inside a row')
+          done += read
+        }
         return JSON.parse(buffer.toString('utf8')) as DaemonTitleRow
       })
     } finally {
@@ -283,8 +341,12 @@ export function createTitleStore(
     // A file that ends mid-line (a crash during append) would glue the next
     // appended row onto that fragment. Close it off first.
     if (fileSize && lastByte !== 0x0a) {
-      await fsp.appendFile(ndjsonPath, '\n')
+      // Marked first and cleared only on success: if this append fails (a
+      // full disk at boot), the next write must still close the line off.
+      tailUnknown = true
+      await appendFile(ndjsonPath, '\n')
       fileSize += 1
+      tailUnknown = false
     }
   }
 

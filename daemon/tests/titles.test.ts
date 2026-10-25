@@ -17,7 +17,13 @@ import { createPairing, deviceIdForToken } from '../pairing'
 import { createDaemonServer } from '../server'
 import { createItemStore } from '../storage'
 import { createTitleCrawler, REFRESH_COOLDOWN_MS } from '../titleCrawler'
-import { createTitleStore, RANK_DRIFT_SLACK, type TitleStore } from '../titles'
+import {
+  createTitleStore,
+  RANK_DRIFT_SLACK,
+  readFully,
+  writeFully,
+  type TitleStore
+} from '../titles'
 
 let pass = 0
 const failures: string[] = []
@@ -274,6 +280,62 @@ async function main(): Promise<void> {
       }
     )
   }
+
+  await check('short writes and reads are finished, not taken for whole ones', async () => {
+    // A handle that moves at most 3 bytes per call and says so.
+    const disk = Buffer.alloc(64)
+    const stingy = {
+      async write(buffer: Buffer, offset: number, length: number, position: number) {
+        const n = Math.min(3, length)
+        buffer.copy(disk, position, offset, offset + n)
+        return { bytesWritten: n }
+      },
+      async read(buffer: Buffer, offset: number, length: number, position: number) {
+        const n = Math.min(3, length)
+        disk.copy(buffer, offset, position, position + n)
+        return { bytesRead: n }
+      }
+    }
+    const line = Buffer.from('{"seq":1,"id":"tt1"}\n')
+    await writeFully(stingy, line, 5)
+    const back = Buffer.alloc(line.length)
+    await readFully(stingy, back, 5)
+    assert.equal(back.toString(), line.toString())
+    await assert.rejects(
+      writeFully({ write: async () => ({ bytesWritten: 0 }) }, line, 0),
+      'a write that makes no progress is an error, not a loop'
+    )
+  })
+
+  await check('a torn tail at boot on a full disk is still closed off later', async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-titles-'))
+    const first = createTitleStore(root)
+    await first.load()
+    await first.upsert('movie', [{ rank: 0, item: item('tt1') }])
+    await fsp.appendFile(path.join(root, 'titles.ndjson'), '{"seq":7,"kind":"mo')
+
+    let full = true
+    const store = createTitleStore(root, {
+      appendFile: async (file, data) => {
+        if (full) throw Object.assign(new Error('no space left'), { code: 'ENOSPC' })
+        await fsp.appendFile(file, data)
+      }
+    })
+    await store.load()
+    full = false
+    assert.equal(await store.upsert('movie', [{ rank: 1, item: item('tt2') }]), 1)
+
+    const reborn = createTitleStore(root)
+    await reborn.load()
+    assert.deepEqual(
+      reborn
+        .listSince('movie', 0, 10)
+        .rows.map((row) => row.item.id)
+        .sort(),
+      ['tt1', 'tt2'],
+      'the row written after the full disk is not glued to the fragment'
+    )
+  })
 
   // --- the crawler: refresh discipline -----------------------------------
 
