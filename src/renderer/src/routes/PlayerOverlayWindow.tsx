@@ -84,6 +84,10 @@ const EMPTY_CHAPTERS: PlayerChapter[] = []
  *  first seconds is "I overshot", a press later is "take me back to the
  *  top of this one". */
 const CHAPTER_RESTART_SECONDS = 5
+/** With no credits marked for an episode (no chapters, no Aniskip entry), the
+ *  Up next card goes up this far from the end instead of on the last frame —
+ *  which people who close the player as the credits roll never reach. */
+const UP_NEXT_FALLBACK_SECONDS = 60
 /** Scrub previews are bucketed so hovering along the bar reuses frames instead
  *  of asking for one per pixel — each is a separate short-lived process. */
 const THUMBNAIL_BUCKET_SECONDS = 5
@@ -159,6 +163,9 @@ function PlayerControls() {
   // advancing on its own, and having it resume the moment the pointer leaves
   // would be the countdown they were trying to escape.
   const [countdownCancelledFor, setCountdownCancelledFor] = useState<string | null>(null)
+  // Which episode's end-of-episode Up next card was waved off with Keep
+  // watching. Keyed like the countdown, so the next episode offers it again.
+  const [upNextDismissedFor, setUpNextDismissedFor] = useState<string | null>(null)
   // A wall-clock deadline, or 'episode' for "stop when this file ends".
   const [sleep, setSleep] = useState<{ at: number } | 'episode' | null>(null)
   const [sleepRemaining, setSleepRemaining] = useState(0)
@@ -994,19 +1001,22 @@ function PlayerControls() {
   // menu say "Searching…" rather than showing the last episode's list.
   const currentSubtitleResults = subtitleResults?.key === mediaKey ? subtitleResults.results : null
 
+  // Anime reads the Aniskip fetch above; everything else reads the
+  // chapter-derived memo — see both sources' own comments for why they are
+  // never both populated for the same title. Only counted while it still
+  // belongs to the episode being played — the fetch for the next one is in
+  // flight for a moment after it starts.
+  const activeSkipTimes = media?.kind === 'anime' ? skipTimes : chapterSkipTimes
+  const currentSkipTimes = activeSkipTimes?.key === mediaKey ? activeSkipTimes : null
+
   const skipWindow = ((): { kind: 'intro' | 'credits'; label: string; end: number } | null => {
     // Nothing left to skip to once the file has ended. Credits that run to
     // the last frame leave the playhead inside their window for good
     // (--keep-open holds it there), and the button used to sit under the
     // post-play card offering a seek to where the playhead already was.
     if (state.eofReached === true) return null
-    // Anime reads the Aniskip fetch above; everything else reads the
-    // chapter-derived memo — see both sources' own comments for why they
-    // are never both populated for the same title.
-    const active = media?.kind === 'anime' ? skipTimes : chapterSkipTimes
-    // Only surfaced while it still belongs to the episode being played — the
-    // fetch for the next one is in flight for a moment after it starts.
-    if (active?.key !== mediaKey) return null
+    const active = currentSkipTimes
+    if (!active) return null
     const inWindow = (w?: { start: number; end: number }): boolean =>
       Boolean(w && timePos >= w.start && timePos < w.end)
     if (inWindow(active?.intro)) {
@@ -1025,7 +1035,18 @@ function PlayerControls() {
   // With no next episode to offer (a film, a finale, autoplay switched off)
   // there is no card, and the button stands alone the way Skip intro does.
   const creditsSkip = skipWindow?.kind === 'credits' && !locked ? skipWindow : null
-  const cardNext = autoplay ?? (creditsSkip ? upNext : null)
+  // Most TV releases carry no chapters, so there is no credits window to
+  // raise the card on, and it used to wait for the file's very last frame.
+  // The final minute stands in for the credits then. Not on anything short
+  // enough for that minute to be a real part of it.
+  const nearEndUnmarked =
+    !currentSkipTimes?.credits &&
+    state.eofReached !== true &&
+    duration > UP_NEXT_FALLBACK_SECONDS * 5 &&
+    timePos >= duration - UP_NEXT_FALLBACK_SECONDS &&
+    upNextKey !== null &&
+    upNextDismissedFor !== upNextKey
+  const cardNext = autoplay ?? (creditsSkip || nearEndUnmarked ? upNext : null)
 
   // --- Scrub-bar thumbnail previews ----------------------------------------
   const thumbnailCache = useRef(new Map<string, string | null>())
@@ -1303,17 +1324,24 @@ function PlayerControls() {
               >
                 Stop
               </button>
+            ) : creditsSkip ? (
+              <button
+                key="skip"
+                type="button"
+                className={styles.postPlaySecondary}
+                onClick={() => seekTo(creditsSkip.end)}
+              >
+                {creditsSkip.label}
+              </button>
             ) : (
-              creditsSkip && (
-                <button
-                  key="skip"
-                  type="button"
-                  className={styles.postPlaySecondary}
-                  onClick={() => seekTo(creditsSkip.end)}
-                >
-                  {creditsSkip.label}
-                </button>
-              )
+              <button
+                key="dismiss"
+                type="button"
+                className={styles.postPlaySecondary}
+                onClick={() => setUpNextDismissedFor(upNextKey)}
+              >
+                Keep watching
+              </button>
             )}
           </div>
         </div>
