@@ -1,6 +1,7 @@
 'use client'
 
 import type { CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
+import { useOllamaAvailable } from '@renderer/lib/mediaHub/useOllamaAvailable'
 import { RecommendationActions } from './RecommendationActions'
 import styles from './CompactAIAssistant.module.css'
 
@@ -22,8 +23,15 @@ interface CompactAIAssistantProps {
  * window — see CompactAIAssistant.module.css's own media queries, which
  * mirror useDashboardLayoutMode's STACKED_QUERY/COMPACT_QUERY), so there
  * is no JS layout-mode branching left to do here.
+ *
+ * Drawn only while a local model is actually reachable (useOllamaAvailable):
+ * the buttons ask Ollama, and two buttons whose only possible outcome is
+ * "couldn't reach the server" are not an offer. The dashboard asks the same
+ * question to hand the hero this column — see HomeDashboard.
  */
 export function CompactAIAssistant({ kinds }: CompactAIAssistantProps = {}) {
+  const available = useOllamaAvailable()
+  if (!available) return null
   return (
     <div className={styles.panel} aria-label="Discover something to watch">
       <RecommendationActions kinds={kinds} />

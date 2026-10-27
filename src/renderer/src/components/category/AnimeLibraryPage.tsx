@@ -27,7 +27,7 @@ import { episodeToStart, episodeWatchKey } from '@shared/media-hub/nextEpisode'
 import { ANIME_CONFIG, type CategoryConfig } from '@renderer/lib/mediaHub/categoryConfig'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
 import { useBatchReveal } from '@renderer/lib/mediaHub/useBatchReveal'
-import { formatReleaseDate, isFutureRelease } from '@renderer/lib/mediaHub/releaseDate'
+import { titleUnreleased } from '@renderer/lib/mediaHub/releaseDate'
 import { CategoryFilterBar } from './CategoryFilterBar'
 import { TitleStatusButton } from '@renderer/components/media/TitleStatusButton'
 import { titleStatusOf } from '@renderer/lib/mediaHub/titleStatus'
@@ -617,11 +617,17 @@ function LibraryDetails({ media, config }: { media: MediaItem | null; config: Ca
   // rottenTomatoesRating's identical guard just above) — is the one place
   // it actually exists; media.releaseDate is kept only as a fallback for
   // the moment before that fetch resolves.
-  const isMovie = media.mediaKind === 'movie' || media.mediaType === 'movie'
-  const detailReleaseDate = detail?.id === media.id ? detail.item.releaseDate : undefined
-  const releaseDateForGate = detailReleaseDate ?? media.releaseDate
-  const unreleasedDate =
-    isMovie && isFutureRelease(releaseDateForGate) ? releaseDateForGate : undefined
+  // Not only a film's date any more: a season dated next year, or one its
+  // source lists as unreleased, is not out whatever kind it is (seen live:
+  // "Delicious in Dungeon Season 2 — 2027 · Unreleased" with Play now
+  // enabled beside it). The episode-level gate — which episode is next,
+  // and whether THAT has aired — still belongs to the detail page.
+  const fromDetail = detail?.id === media.id ? detail.item : undefined
+  const unreleased = titleUnreleased({
+    releaseDate: fromDetail?.releaseDate ?? media.releaseDate,
+    releaseYear: media.releaseYear,
+    status: fromDetail?.status ?? media.status
+  })
 
   return (
     <aside className={`${styles.details} glass-panel`} aria-label={`${media.title} details`}>
@@ -759,14 +765,14 @@ function LibraryDetails({ media, config }: { media: MediaItem | null; config: Ca
               type="button"
               className={styles.primaryAction}
               onClick={() => startPartyPlayback(media)}
-              disabled={isResolving || !!unreleasedDate}
-              aria-disabled={!!unreleasedDate}
+              disabled={isResolving || !!unreleased}
+              aria-disabled={!!unreleased}
             >
-              <Icon name={unreleasedDate ? 'clock' : 'play'} size={15} />
+              <Icon name={unreleased ? 'clock' : 'play'} size={15} />
               {isResolving
                 ? 'Preparing…'
-                : unreleasedDate
-                  ? `Releases ${formatReleaseDate(unreleasedDate) ?? ''}`
+                : unreleased
+                  ? unreleased
                   : episodic && nextUp
                     ? `Play S${nextUp.season} E${nextUp.episode}`
                     : 'Play now'}
