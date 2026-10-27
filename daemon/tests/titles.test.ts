@@ -17,7 +17,13 @@ import { createPairing, deviceIdForToken } from '../pairing'
 import { createDaemonServer } from '../server'
 import { createItemStore } from '../storage'
 import { createTitleCrawler, REFRESH_COOLDOWN_MS } from '../titleCrawler'
-import { createTitleStore, RANK_DRIFT_SLACK, type TitleStore } from '../titles'
+import {
+  createTitleStore,
+  RANK_DRIFT_SLACK,
+  readFully,
+  writeFully,
+  type TitleStore
+} from '../titles'
 
 let pass = 0
 const failures: string[] = []
@@ -154,6 +160,351 @@ async function main(): Promise<void> {
     const next = reborn.listSince('movie', before.nextSince, 10)
     assert.equal(next.rows.length, 1)
     assert.equal(next.rows[0].item.id, 'tt3')
+  })
+
+  // --- rows live on disk: offsets must survive everything that moves them --
+
+  await check('compaction rewrites the file and every row still reads back', async () => {
+    const { store, root } = await tempStore()
+    const ids = Array.from({ length: 40 }, (_, i) => `tt${i}`)
+    // Enough re-issues of the same 40 rows to cross the compaction line
+    // (more than twice the live rows plus COMPACT_SLACK_LINES).
+    for (let round = 0; round < 30; round++) {
+      await store.upsert(
+        'movie',
+        ids.map((id, rank) => ({ rank, item: item(id, { title: `${id} v${round}` }) }))
+      )
+    }
+    const lines = (await fsp.readFile(path.join(root, 'titles.ndjson'), 'utf8'))
+      .split('\n')
+      .filter(Boolean)
+    assert.ok(lines.length < 30 * 40, `compacted (${lines.length} lines)`)
+    const page = store.listSince('movie', 0, 100)
+    assert.equal(page.rows.length, 40)
+    for (const row of page.rows) assert.equal(row.item.title, `${row.item.id} v29`)
+
+    const reborn = createTitleStore(root)
+    await reborn.load()
+    assert.deepEqual(reborn.listSince('movie', 0, 100), page, 'and after a reload')
+  })
+
+  await check('a torn last line is dropped and the next append is not glued to it', async () => {
+    const { store, root } = await tempStore()
+    await store.upsert('movie', [{ rank: 0, item: item('tt1') }])
+    await fsp.appendFile(path.join(root, 'titles.ndjson'), '{"seq":99,"kind":"mo')
+    const reborn = createTitleStore(root)
+    await reborn.load()
+    assert.equal(reborn.counts().movie, 1, 'the fragment is not a row')
+    await reborn.upsert('movie', [{ rank: 1, item: item('tt2') }])
+    const again = createTitleStore(root)
+    await again.load()
+    assert.deepEqual(
+      again
+        .listSince('movie', 0, 10)
+        .rows.map((row) => row.item.id)
+        .sort(),
+      ['tt1', 'tt2'],
+      'the row appended after the fragment survives a reload'
+    )
+  })
+
+  await check('two crawls appending at once do not overlap their rows', async () => {
+    const { store, root } = await tempStore()
+    await Promise.all([
+      store.upsert(
+        'movie',
+        Array.from({ length: 50 }, (_, i) => ({ rank: i, item: item(`tt${i}`) }))
+      ),
+      store.upsert(
+        'anime',
+        Array.from({ length: 50 }, (_, i) => ({
+          rank: i,
+          item: item(`kitsu:${i}`, { type: 'anime', title: 'ア'.repeat(i) })
+        }))
+      )
+    ])
+    const movies = store.listSince('movie', 0, 100).rows
+    const anime = store.listSince('anime', 0, 100).rows
+    assert.equal(movies.length, 50)
+    assert.equal(anime.length, 50)
+    // Multi-byte titles: offsets are bytes, not characters.
+    for (const row of anime) assert.equal(row.item.title, 'ア'.repeat(Number(row.rank)))
+    const reborn = createTitleStore(root)
+    await reborn.load()
+    assert.deepEqual(reborn.listSince('anime', 0, 100).rows, anime)
+  })
+
+  // A full disk: the append writes part of its data, then fails. Both ways
+  // out (cutting the file back, and when even that fails, learning where it
+  // ends on the next write) must leave later rows readable.
+  for (const truncateWorks of [true, false]) {
+    await check(
+      `a half-written append leaves later rows readable (truncate ${truncateWorks ? 'works' : 'fails'})`,
+      async () => {
+        const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-titles-'))
+        let failNext = false
+        const store = createTitleStore(root, {
+          appendFile: async (file, data) => {
+            if (failNext) {
+              failNext = false
+              await fsp.appendFile(file, data.slice(0, 17))
+              throw Object.assign(new Error('no space left'), { code: 'ENOSPC' })
+            }
+            await fsp.appendFile(file, data)
+          },
+          truncate: async (file, size) => {
+            if (!truncateWorks) throw new Error('truncate refused')
+            await fsp.truncate(file, size)
+          }
+        })
+        await store.load()
+        await store.upsert('movie', [{ rank: 0, item: item('tt1') }])
+        failNext = true
+        assert.equal(await store.upsert('movie', [{ rank: 1, item: item('tt2') }]), 0)
+        assert.equal(await store.upsert('movie', [{ rank: 2, item: item('tt3') }]), 1)
+        assert.deepEqual(
+          store.listSince('movie', 0, 10).rows.map((row) => row.item.id),
+          ['tt1', 'tt3'],
+          'rows after the failure read back'
+        )
+        const reborn = createTitleStore(root)
+        await reborn.load()
+        assert.deepEqual(
+          reborn
+            .listSince('movie', 0, 10)
+            .rows.map((row) => row.item.id)
+            .sort(),
+          ['tt1', 'tt3'],
+          'and after a reload'
+        )
+      }
+    )
+  }
+
+  await check(
+    'whole rows left by a failed batch are indexed before anything moves on',
+    async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-titles-'))
+      let failNext = false
+      const store = createTitleStore(root, {
+        appendFile: async (file, data) => {
+          if (failNext) {
+            failNext = false
+            // The first row of the batch lands whole, plus part of the second.
+            const first = data.indexOf('\n') + 1
+            await fsp.appendFile(file, data.slice(0, first + 9))
+            throw Object.assign(new Error('no space left'), { code: 'ENOSPC' })
+          }
+          await fsp.appendFile(file, data)
+        },
+        truncate: async () => {
+          throw new Error('truncate refused')
+        }
+      })
+      await store.load()
+      await store.upsert('movie', [{ rank: 0, item: item('tt1') }])
+      failNext = true
+      assert.equal(
+        await store.upsert('movie', [
+          { rank: 1, item: item('tt2') },
+          { rank: 2, item: item('tt-lost') }
+        ]),
+        0
+      )
+      assert.equal(await store.upsert('movie', [{ rank: 3, item: item('tt3') }]), 1)
+      const page = store.listSince('movie', 0, 10)
+      assert.deepEqual(
+        page.rows.map((row) => row.item.id),
+        ['tt1', 'tt2', 'tt3'],
+        'the surviving row is served, in seq order, before the watermark passes it'
+      )
+      const reborn = createTitleStore(root)
+      await reborn.load()
+      assert.deepEqual(reborn.listSince('movie', 0, 10), page, 'and a restart agrees')
+    }
+  )
+
+  await check('short writes and reads are finished, not taken for whole ones', async () => {
+    // A handle that moves at most 3 bytes per call and says so.
+    const disk = Buffer.alloc(64)
+    const stingy = {
+      async write(buffer: Buffer, offset: number, length: number, position: number) {
+        const n = Math.min(3, length)
+        buffer.copy(disk, position, offset, offset + n)
+        return { bytesWritten: n }
+      },
+      async read(buffer: Buffer, offset: number, length: number, position: number) {
+        const n = Math.min(3, length)
+        disk.copy(buffer, offset, position, position + n)
+        return { bytesRead: n }
+      }
+    }
+    const line = Buffer.from('{"seq":1,"id":"tt1"}\n')
+    await writeFully(stingy, line, 5)
+    const back = Buffer.alloc(line.length)
+    await readFully(stingy, back, 5)
+    assert.equal(back.toString(), line.toString())
+    await assert.rejects(
+      writeFully({ write: async () => ({ bytesWritten: 0 }) }, line, 0),
+      'a write that makes no progress is an error, not a loop'
+    )
+  })
+
+  await check('a load that failed is retried before anything is appended', async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-titles-'))
+    const file = path.join(root, 'titles.ndjson')
+    // Unreadable at boot: a directory where the file should be stands in for
+    // EIO, and is an error on every platform rather than "no file yet".
+    await fsp.mkdir(file)
+    const store = createTitleStore(root)
+    await store.load()
+    // I/O recovers, and the file turns out to hold an older row.
+    await fsp.rmdir(file)
+    const old = createTitleStore(root)
+    await old.load()
+    await old.upsert('movie', [{ rank: 0, item: item('tt-old') }])
+
+    assert.equal(await store.upsert('movie', [{ rank: 1, item: item('tt-new') }]), 1)
+    const rows = store.listSince('movie', 0, 10).rows
+    assert.deepEqual(
+      rows.map((row) => row.item.id),
+      ['tt-old', 'tt-new'],
+      'the new row is indexed where it landed, after the rows the file held'
+    )
+    const reborn = createTitleStore(root)
+    await reborn.load()
+    assert.deepEqual(reborn.listSince('movie', 0, 10).rows, rows)
+  })
+
+  await check('a page asked for during a retried load is refused, not served partial', async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-titles-'))
+    const file = path.join(root, 'titles.ndjson')
+    await fsp.mkdir(file)
+    const store = createTitleStore(root)
+    await store.load()
+    await fsp.rmdir(file)
+    const seed = createTitleStore(root)
+    await seed.load()
+    await seed.upsert('series', [{ rank: 0, item: item('tt-show', { type: 'series' }) }])
+
+    // A movie write retries the load; a series page is asked for meanwhile.
+    const writing = store.upsert('movie', [{ rank: 0, item: item('tt-film') }])
+    assert.throws(() => store.listSince('series', 0, 10), /still loading/)
+    await writing
+    assert.equal(store.counts().series, 1)
+    assert.deepEqual(
+      store.listSince('series', 0, 10).rows.map((row) => row.item.id),
+      ['tt-show'],
+      'the series page reflects the finished load'
+    )
+  })
+
+  await check('a compaction that cannot open its temp file leaks no handle', async () => {
+    const { store, root } = await tempStore()
+    // The tmp path is taken by a directory, so every compaction fails to
+    // open its target, and every changed upsert past the line retries.
+    await fsp.mkdir(path.join(root, 'titles.ndjson.tmp'))
+    const open = fsp.open
+    let live = 0
+    fsp.open = (async (...args: Parameters<typeof open>) => {
+      const handle = await open(...args)
+      live += 1
+      const close = handle.close.bind(handle)
+      handle.close = async () => {
+        live -= 1
+        return close()
+      }
+      return handle
+    }) as typeof open
+    try {
+      const ids = Array.from({ length: 40 }, (_, i) => `tt${i}`)
+      for (let round = 0; round < 40; round++) {
+        await store.upsert(
+          'movie',
+          ids.map((id, rank) => ({ rank, item: item(id, { title: `${id} v${round}` }) }))
+        )
+      }
+    } finally {
+      fsp.open = open
+    }
+    assert.equal(live, 0, 'every handle opened was closed')
+    assert.equal(store.listSince('movie', 0, 100).rows.length, 40, 'and the store still serves')
+  })
+
+  await check('an id repeated within one batch ends on its last copy', async () => {
+    const { store, root } = await tempStore()
+    await store.upsert('movie', [{ rank: 0, item: item('tt1', { title: 'A' }) }])
+    // Upstream pages are passed straight through and can repeat an id.
+    await store.upsert('movie', [
+      { rank: 0, item: item('tt1', { title: 'B' }) },
+      { rank: 0, item: item('tt1', { title: 'A' }) }
+    ])
+    assert.equal(store.listSince('movie', 0, 10).rows[0].item.title, 'A')
+    const reborn = createTitleStore(root)
+    await reborn.load()
+    assert.equal(reborn.listSince('movie', 0, 10).rows[0].item.title, 'A', 'and after a reload')
+  })
+
+  await check('no sync watermark can come from a half-read index', async () => {
+    // A compacted file is in map order, not seq order: seq 10 can come
+    // before seq 1. A page served between the two would say "caught up to
+    // 10" and the client would never ask for seq 1.
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-titles-'))
+    const lines = [
+      { seq: 10, kind: 'movie', rank: 0, item: item('tt-late') },
+      // Padding so the two rows land in different read chunks.
+      ...Array.from({ length: 600 }, (_, i) => ({
+        seq: 100 + i,
+        kind: 'series',
+        rank: i,
+        item: item(`tt-pad${i}`, { type: 'series', description: 'x'.repeat(2000) })
+      })),
+      { seq: 1, kind: 'movie', rank: 1, item: item('tt-early') }
+    ]
+    await fsp.writeFile(
+      path.join(root, 'titles.ndjson'),
+      lines.map((line) => JSON.stringify(line)).join('\n') + '\n'
+    )
+    const store = createTitleStore(root)
+    const loading = store.load()
+    assert.throws(() => store.listSince('movie', 0, 10), /still loading/)
+    await loading
+    const page = store.listSince('movie', 0, 10)
+    assert.deepEqual(
+      page.rows.map((row) => row.item.id),
+      ['tt-early', 'tt-late']
+    )
+    assert.equal(page.nextSince, 10)
+  })
+
+  await check('a torn tail at boot on a full disk is still closed off later', async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-titles-'))
+    const first = createTitleStore(root)
+    await first.load()
+    await first.upsert('movie', [{ rank: 0, item: item('tt1') }])
+    await fsp.appendFile(path.join(root, 'titles.ndjson'), '{"seq":7,"kind":"mo')
+
+    let full = true
+    const store = createTitleStore(root, {
+      appendFile: async (file, data) => {
+        if (full) throw Object.assign(new Error('no space left'), { code: 'ENOSPC' })
+        await fsp.appendFile(file, data)
+      }
+    })
+    await store.load()
+    full = false
+    assert.equal(await store.upsert('movie', [{ rank: 1, item: item('tt2') }]), 1)
+
+    const reborn = createTitleStore(root)
+    await reborn.load()
+    assert.deepEqual(
+      reborn
+        .listSince('movie', 0, 10)
+        .rows.map((row) => row.item.id)
+        .sort(),
+      ['tt1', 'tt2'],
+      'the row written after the full disk is not glued to the fragment'
+    )
   })
 
   // --- the crawler: refresh discipline -----------------------------------
