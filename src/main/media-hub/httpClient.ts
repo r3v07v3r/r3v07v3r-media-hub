@@ -43,7 +43,7 @@ interface JsonErrorBody {
   success?: boolean
 }
 
-interface FetchScheduling {
+export interface FetchScheduling {
   /**
    * Which tier this request belongs to — see taskScheduler.ts.
    *
