@@ -73,7 +73,8 @@ import {
   playbackLanguages,
   takeHeldLanguageSettle,
   preparePlayback,
-  settleLanguageShortfall
+  settleLanguageShortfall,
+  stopPlayback
 } from './playbackSession'
 import {
   languageTryOrder,
@@ -474,6 +475,19 @@ function lastStreamKey(type: string, id: string): string {
   return `laststream:v1:${type}:${id}`
 }
 
+/** Copies of one episode the person said were wrong — a different episode,
+ *  a recap, a mislabelled file — keyed by sourceKey. Per episode, not per
+ *  release: a season pack that put the wrong file under episode 1 may still
+ *  be right for episode 2. Kept as long as anything else remembered about a
+ *  copy, so a replay weeks later does not hand the same one back. */
+function rejectedCopiesKey(type: string, id: string): string {
+  return `rejected:v1:${type}:${id}`
+}
+
+function rejectedCopies(type: string, id: string): Set<string> {
+  return new Set(getDatabase().getCache<string[]>(rejectedCopiesKey(type, id)) ?? [])
+}
+
 /** Registers app:bootstrap, torbox:connect/disconnect, stream:resolve and play:stream. */
 export function registerTorBoxIpc(): void {
   handle<undefined, BootstrapResult>(MEDIA_HUB_CHANNELS.bootstrap, async () => {
@@ -558,8 +572,18 @@ export function registerTorBoxIpc(): void {
       // Judged per copy, not per episode — an English copy opened once says
       // nothing about the Japanese one a shortcut hands back now.
       const findings = languageFindings(type, id)
+      // A copy the person turned away is treated like one without the audio
+      // everywhere below — it never ends the search — and is then dropped
+      // from the answer altogether (see withoutRejected).
+      const rejected = rejectedCopies(type, id)
+      const isRejected = (stream: StreamCandidate): boolean => rejected.has(sourceKey(stream))
       const knownToLack = (stream: StreamCandidate | null | undefined): boolean =>
-        Boolean(stream && findings[sourceKey(stream)]?.audio === false)
+        Boolean(stream && (findings[sourceKey(stream)]?.audio === false || isRejected(stream)))
+      const withoutRejected = (result: StreamResolveResult): StreamResolveResult => {
+        if (!rejected.size || !result.streams.some(isRejected)) return result
+        const streams = result.streams.filter((stream) => !isRejected(stream))
+        return { ...result, streams, best: streams[0] ?? null }
+      }
 
       // The group memo is not part of the key, on purpose: it changes
       // whenever another episode of the show plays from a different group,
@@ -626,9 +650,9 @@ export function registerTorBoxIpc(): void {
       const fresh = payload.fresh === true || knownToLack(answer?.result.best)
       if (answer && (!fresh || (!auth && !mediaServer))) {
         if (answer.remember) db.putCache(key, answer.result, 60 * 60 * 1000)
-        return { ...answer.result, shortcut: true }
+        return withoutRejected({ ...answer.result, shortcut: true })
       }
-      const shortcut = answer?.result.streams ?? []
+      const shortcut = (answer?.result.streams ?? []).filter((stream) => !isRejected(stream))
 
       const search = async (): Promise<StreamResolveResult> => {
         // Both credential-free tiers have missed, so from here on a source
@@ -938,10 +962,10 @@ export function registerTorBoxIpc(): void {
         }
       }
 
-      if (!shortcut.length) return search()
+      if (!shortcut.length) return withoutRejected(await search())
       let found: StreamResolveResult
       try {
-        found = await search()
+        found = withoutRejected(await search())
       } catch {
         return { streams: shortcut, best: shortcut[0], shortcut: true }
       }
@@ -959,7 +983,35 @@ export function registerTorBoxIpc(): void {
   handle<PlayStreamPayload, PlaybackResult>(MEDIA_HUB_CHANNELS.playStream, (_e, payload) =>
     playWithLanguageFallback(payload)
   )
+
+  // "Wrong copy": the copy in the player is not the episode it claims to be.
+  // Remembered against this episode so no tier hands it back — not this
+  // disk, not the hour-cached answer, not the copy that played last — and
+  // its bytes are deleted, since they are not this episode's. The renderer
+  // then resolves again with `fresh` and plays whatever else there is.
+  handle<undefined, { ok: boolean }>(MEDIA_HUB_CHANNELS.streamRejectCurrent, async () => {
+    const opened = lastOpened
+    if (!opened || activeStreamUrl() !== opened.result.url) return { ok: false }
+    const { type, resolveId, stream } = opened.payload
+    const copy = sourceKey(stream)
+    if (!type || !resolveId || !copy) return { ok: false }
+    const db = getDatabase()
+    const rejected = rejectedCopies(type, resolveId)
+    rejected.add(copy)
+    db.putCache(rejectedCopiesKey(type, resolveId), [...rejected], REJECTED_COPY_TTL_MS)
+    const remembered = db.getCache<StreamCandidate>(lastStreamKey(type, resolveId))
+    if (remembered && sourceKey(remembered) === copy) db.deleteCache(lastStreamKey(type, resolveId))
+    lastOpened = null
+    await stopPlayback(true)
+    return { ok: true }
+  })
 }
+
+/** How long a rejected copy stays rejected — long enough that it is never
+ *  met again in practice, short enough that a copy fixed upstream (a
+ *  re-pack under the same hash is rare, but a media-server item can be
+ *  replaced in place) is eventually given another chance. */
+const REJECTED_COPY_TTL_MS = 365 * 24 * 60 * 60 * 1000
 
 /**
  * play:stream: opens the ranked pick, and when it lacks the wanted audio,
@@ -974,13 +1026,13 @@ export function registerTorBoxIpc(): void {
  */
 /** The copy play:stream last opened, and what opening it returned — see
  *  playWithLanguageFallback's retry check. */
-let lastOpened: { key: string; result: PlaybackResult } | null = null
+let lastOpened: { key: string; result: PlaybackResult; payload: PlayStreamPayload } | null = null
 
 /** playCandidate, noting what it opened. */
 async function openCandidate(payload: PlayStreamPayload): Promise<PlaybackResult> {
   lastOpened = null
   const result = await playCandidate(payload)
-  lastOpened = { key: sourceKey(payload.stream), result }
+  lastOpened = { key: sourceKey(payload.stream), result, payload }
   return result
 }
 

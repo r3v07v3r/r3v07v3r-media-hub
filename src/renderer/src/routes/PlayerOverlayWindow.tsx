@@ -1951,6 +1951,20 @@ function PlayerControls() {
                   </span>
                 </button>
 
+                <div className={styles.menuHeading}>This copy</div>
+                <button
+                  type="button"
+                  className={styles.menuItem}
+                  disabled={party.following}
+                  onClick={() => ui({ type: 'different-copy' })}
+                >
+                  Wrong copy? Find another
+                  <span className={styles.menuItemNote}>
+                    For a recap, a different episode or a bad file. This copy is skipped for good
+                    and another one plays.
+                  </span>
+                </button>
+
                 <div className={styles.menuHeading}>Sleep timer</div>
                 {SLEEP_OPTIONS.map((option) => {
                   const active =
