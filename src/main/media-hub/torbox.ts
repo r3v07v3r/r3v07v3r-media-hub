@@ -613,7 +613,14 @@ export function registerTorBoxIpc(): void {
         },
         limits.maxResolution,
         {
-          local: () => findLocalCacheCandidate(cacheMetaFor(payload, title)),
+          // Each tier misses on a rejected copy rather than answering with
+          // it, so the tiers after it still get their turn.
+          local: async () => {
+            const cached = await findLocalCacheCandidate(cacheMetaFor(payload, title))
+            if (!cached) return null
+            const asStream = { cacheToken: cached.token, cacheSourceRef: cached.sourceRef }
+            return isRejected(asStream as StreamCandidate) ? null : cached
+          },
           // Fast path 1: an identical resolve (same title/episode, same
           // quality/size limits) already ran within the last hour. The answer
           // was already being cached below — it just was never actually READ
@@ -624,9 +631,11 @@ export function registerTorBoxIpc(): void {
           // answer that hadn't changed.
           recent: () => {
             const recent = db.getCache<StreamResolveResult>(key)
-            return recent ? withGroupMemo(recent) : null
+            if (!recent) return null
+            const usable = withoutRejected(recent)
+            return usable.best ? withGroupMemo(usable) : null
           },
-          lan: () => {
+          lan: async () => {
             const meta = cacheMetaFor(payload, title)
             // Must match the key the feeder queued (wantedList.ts
             // lanCacheContentKey), so anime drops its season here too.
@@ -638,7 +647,8 @@ export function registerTorBoxIpc(): void {
                   episodeNumber: meta.episodeNumber
                 })
               : ''
-            return findLanCacheCandidate(lanKey)
+            const candidate = await findLanCacheCandidate(lanKey)
+            return candidate && !isRejected(candidate) ? candidate : null
           },
           rankLan: (candidate) =>
             rankSafeStreams([candidate], audioLanguage, limits, sourcePreference)

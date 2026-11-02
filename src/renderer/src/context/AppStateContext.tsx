@@ -2245,8 +2245,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       }
       const { started } = await runPlayback(media, { fresh: true })
       // That copy has already been stopped; a failed search leaves nothing
-      // playing, and its own notification says why.
-      if (!started) setPlaybackMedia(null)
+      // playing, and its own notification says why. Only while this title is
+      // still the one recorded: a title started meanwhile cancels this
+      // attempt and must keep its own.
+      if (!started) setPlaybackMedia((current) => (current === media ? null : current))
       else
         pushNotification({
           tone: 'success',
