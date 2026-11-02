@@ -230,6 +230,7 @@ export const MEDIA_HUB_CHANNELS = {
   // Streaming / playback
   streamResolve: 'mediahub:stream:resolve',
   playStream: 'mediahub:play:stream',
+  streamRejectCurrent: 'mediahub:stream:reject-current',
   playbackStop: 'mediahub:playback:stop',
   playbackLanguageSettle: 'mediahub:playback:language-settle',
   playbackPrepareProgress: 'mediahub:playback:prepare-progress', // push event

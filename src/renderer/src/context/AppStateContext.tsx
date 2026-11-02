@@ -1956,7 +1956,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
    * to followers, and that has to be the episode that actually started.
    */
   const runPlayback = useCallback(
-    async (requested: MediaItem): Promise<{ started: boolean; target: MediaItem }> => {
+    async (
+      requested: MediaItem,
+      /** `fresh`: skip the shortcut answers and search — see torbox.ts. */
+      options?: { fresh?: boolean }
+    ): Promise<{ started: boolean; target: MediaItem }> => {
       const api = window.api?.mediaHub
       if (!api) {
         pushNotification({
@@ -2009,7 +2013,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
               episodeNumber: media.episodeNumber
             },
             // Releases are named in romaji; the title is not, any more.
-            media.originalTitle ? [media.originalTitle] : undefined
+            media.originalTitle ? [media.originalTitle] : undefined,
+            options?.fresh ? { fresh: true } : undefined
           ),
           'resolving',
           30_000,
@@ -2222,6 +2227,40 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     startPlaybackRef.current = startPlayback
   }, [startPlayback])
+  /** The player's "Wrong copy" item: main sets the copy playing aside for
+   *  this episode for good, then the episode starts again from a fresh
+   *  search, so neither this disk nor the remembered pick can hand the same
+   *  copy back. */
+  const playDifferentCopy = useCallback(
+    async (media: MediaItem) => {
+      const api = window.api?.mediaHub
+      if (!api) return
+      const rejected = await api.stream.rejectCurrent().catch(() => null)
+      if (!rejected?.ok) {
+        pushNotification({
+          tone: 'warning',
+          message: "Couldn't tell which copy is playing, so nothing was changed."
+        })
+        return
+      }
+      const { started } = await runPlayback(media, { fresh: true })
+      // That copy has already been stopped; a failed search leaves nothing
+      // playing, and its own notification says why. Only while this title is
+      // still the one recorded: a title started meanwhile cancels this
+      // attempt and must keep its own.
+      if (!started) setPlaybackMedia((current) => (current === media ? null : current))
+      else
+        pushNotification({
+          tone: 'success',
+          message: `Playing another copy of ${media.title}. The previous one won't be offered again.`
+        })
+    },
+    [pushNotification, runPlayback]
+  )
+  const playDifferentCopyRef = useRef(playDifferentCopy)
+  useEffect(() => {
+    playDifferentCopyRef.current = playDifferentCopy
+  }, [playDifferentCopy])
   const stopPlayback = useCallback((watched?: boolean) => {
     // The one place that genuinely means "playback is over" — every close
     // path routes through here, by way of the player's 'stop-playback'
@@ -2572,6 +2611,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           const media = playbackMediaForEventsRef.current
           if (!media) return
           void startPlaybackRef.current(media)
+          return
+        }
+        case 'different-copy': {
+          const media = playbackMediaForEventsRef.current
+          if (!media) return
+          void playDifferentCopyRef.current(media)
           return
         }
         case 'refresh-watch-status':

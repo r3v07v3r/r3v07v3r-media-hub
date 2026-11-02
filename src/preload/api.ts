@@ -828,7 +828,12 @@ export function createApi(transport: ApiTransport) {
             season: meta?.seasonNumber,
             episode: meta?.episodeNumber,
             episodeTitle: meta?.episodeTitle
-          })
+          }),
+        /** The copy in the player is the wrong one: never offer it for this
+         *  episode again, and stop it. `ok` is false when nothing that can be
+         *  identified is playing. */
+        rejectCurrent: (): Promise<{ ok: boolean }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.streamRejectCurrent)
       },
 
       /** What the central work manager is doing — see taskScheduler.ts. */
