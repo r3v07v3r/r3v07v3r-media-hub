@@ -1827,6 +1827,22 @@ function PlayerControls() {
             </button>
             {menu === 'playback' && (
               <div className={`${styles.menu} ${styles.playbackMenu}`}>
+                {/* First, not under the fold: the menu scrolls at 320px and
+                    this is the item people come looking for mid-episode. */}
+                <div className={styles.menuHeading}>This copy</div>
+                <button
+                  type="button"
+                  className={styles.menuItem}
+                  disabled={party.following}
+                  onClick={() => ui({ type: 'different-copy' })}
+                >
+                  Wrong copy? Find another
+                  <span className={styles.menuItemNote}>
+                    For a recap, a different episode or a bad file. This copy is skipped for good
+                    and another one plays.
+                  </span>
+                </button>
+
                 <div className={styles.menuHeading}>Speed</div>
                 {/* Hidden outright while following a host. Speed is the lever
                     partySync's drift correction pulls (see usePartySync), so a
@@ -1948,20 +1964,6 @@ function PlayerControls() {
                       : abLoopForMedia.b === null
                         ? 'Play to where the loop should end, then press again.'
                         : ''}
-                  </span>
-                </button>
-
-                <div className={styles.menuHeading}>This copy</div>
-                <button
-                  type="button"
-                  className={styles.menuItem}
-                  disabled={party.following}
-                  onClick={() => ui({ type: 'different-copy' })}
-                >
-                  Wrong copy? Find another
-                  <span className={styles.menuItemNote}>
-                    For a recap, a different episode or a bad file. This copy is skipped for good
-                    and another one plays.
                   </span>
                 </button>
 
