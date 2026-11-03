@@ -832,6 +832,14 @@ export interface TrackingListResult {
   laterSeasons: Record<string, { id: string; season: number }>
 }
 
+/**
+ * tracking:list's watched rows without its tracked-list enrichment: the
+ * database alone, so it answers at once. tracking:list resolves metadata for
+ * every tracked series first (newEpisodeCount, airing), which a surface that
+ * only asks "what has been watched" should never wait on.
+ */
+export type TrackingHistoryResult = Pick<TrackingListResult, 'history' | 'laterSeasons'>
+
 /** Services with both a login in this app and a personal list to read.
  *  Kitsu is deliberately absent: it is a public catalog here, with no
  *  account, so there is no list of yours to fetch. */

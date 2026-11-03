@@ -48,6 +48,7 @@ import type {
   TitleWatchState,
   TrackedItem,
   TrackedItemEnriched,
+  TrackingHistoryResult,
   TrackingListResult,
   WatchStatusDiscrepancy
 } from '../../shared/media-hub/types'
@@ -2252,6 +2253,17 @@ export function registerTrackingIpc(): void {
       history,
       plannedSources: plannedSources(),
       // Where a later season's card finds its episodes: under the show.
+      laterSeasons: watchedLaterSeasons(history, animeSeasonMembersWhenGrouped())
+    }
+  })
+
+  /** The same history and laterSeasons as tracking:list, with none of its
+   *  metadata lookups — for the watched badges and season stops, which
+   *  otherwise sat unticked for seconds behind a long tracked list. */
+  handle<undefined, TrackingHistoryResult>(MEDIA_HUB_CHANNELS.trackingHistory, () => {
+    const history = getDatabase().history()
+    return {
+      history,
       laterSeasons: watchedLaterSeasons(history, animeSeasonMembersWhenGrouped())
     }
   })

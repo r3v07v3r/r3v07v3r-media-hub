@@ -1872,9 +1872,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     const api = window.api?.mediaHub
     if (api) {
       try {
+        // tracking:history, not tracking:list: the database rows only.
+        // tracking:list resolves metadata for every tracked series before it
+        // answers, and Play waited on all of it to find one episode.
         const [asked, tracking] = await Promise.all([
           api.catalog.meta(kind, media.id),
-          api.tracking.list()
+          api.tracking.history()
         ])
         // A later season of a merged anime, played from its own card (a
         // plan card pulled from a service). What is played is the SHOW, at
