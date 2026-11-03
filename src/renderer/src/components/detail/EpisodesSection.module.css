@@ -494,6 +494,38 @@
   text-align: center;
 }
 
+.watchedLoading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.watchedLoadingDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: watchedPulse 1s ease-in-out infinite alternate;
+}
+
+@keyframes watchedPulse {
+  from {
+    opacity: 0.25;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .watchedLoadingDot {
+    animation: none;
+  }
+}
+
 .skeletonSeasonRow {
   display: flex;
   gap: 8px;
