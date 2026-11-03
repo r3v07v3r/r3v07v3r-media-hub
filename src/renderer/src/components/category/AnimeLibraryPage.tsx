@@ -509,28 +509,32 @@ function LibraryDetails({ media, config }: { media: MediaItem | null; config: Ca
     const timer = setTimeout(() => {
       void (async () => {
         try {
-          const [item, tracking] = await Promise.all([
-            api.catalog.meta(kind, mediaId),
-            kind === 'movie' ? Promise.resolve(null) : api.tracking.list()
-          ])
+          const item = await api.catalog.meta(kind, mediaId)
           if (cancelled) return
+          // Shown before the watched rows are read: the Rotten Tomatoes
+          // figure has nothing to do with them.
           setDetail({ id: mediaId, item })
-          if (!tracking) return
+          if (kind === 'movie') return
           // A later season of a merged anime, selected by its own tile. Play
           // on it starts the SHOW at that season, from the show's viewings
           // (resolvePlaybackTarget), so the same is read here: nothing is
           // kept under the tile's own id to find a next episode from.
           const part = item.seasonOf
-          const shown = part ? await api.catalog.meta(kind, part.id) : item
-          if (cancelled) return
           const titleId = part ? part.id : mediaId
+          // tracking:title-state, the database rows for this one title —
+          // tracking:list resolves every tracked series first, seconds on a
+          // long list.
+          const [shown, state] = await Promise.all([
+            part ? api.catalog.meta(kind, part.id) : Promise.resolve(item),
+            api.tracking.titleState(titleId)
+          ])
+          if (cancelled) return
           const videos = part
             ? (shown.videos ?? []).filter((video) => video.season === part.season)
             : (shown.videos ?? [])
           if (!videos.length) return
           const watchedKeys = new Set<string>()
-          for (const row of tracking.history) {
-            if (String(row.id) !== String(titleId)) continue
+          for (const row of state.watched) {
             if (row.season == null || row.episode == null) continue
             watchedKeys.add(episodeWatchKey(row.season, row.episode))
           }

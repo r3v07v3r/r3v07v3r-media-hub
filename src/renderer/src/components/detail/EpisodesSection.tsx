@@ -65,7 +65,10 @@ interface EpisodesSectionProps {
    *  (no equivalent batch endpoint exists) falls back to one
    *  tracking:unmark-watched call per episode. */
   onMarkSeason: (season: number, watched: boolean) => void
-  status: 'loading' | 'ready' | 'error'
+  /** The title's watched rows haven't arrived yet: every tile reads as
+   *  unwatched for now, so say so rather than let that look like the answer. */
+  watchedLoading?: boolean
+  status:'loading' | 'ready' | 'error'
 }
 
 /** Which menu the single portal below is currently showing. One portal
@@ -136,6 +139,7 @@ export function EpisodesSection({
   onMarkWatched,
   onMarkMany,
   onMarkSeason,
+  watchedLoading = false,
   status
 }: EpisodesSectionProps) {
   const { resolvingMedia } = useAppState()
@@ -415,6 +419,12 @@ export function EpisodesSection({
             )
           })}
         </div>
+      )}
+      {watchedLoading && (
+        <p className={styles.watchedLoading} role="status">
+          <span className={styles.watchedLoadingDot} aria-hidden="true" />
+          Checking what you’ve watched…
+        </p>
       )}
 
       {openMenu &&

@@ -529,7 +529,7 @@ export function useMediaHubWatchedIds(libraryKey: string): WatchedIdsResult {
     const api = window.api?.mediaHub
     if (!api) return
     api.tracking
-      .list()
+      .history()
       .then((result) => {
         if (cancelled) return
         setWatchedIds(new Set(result.history.map((h) => h.id)))

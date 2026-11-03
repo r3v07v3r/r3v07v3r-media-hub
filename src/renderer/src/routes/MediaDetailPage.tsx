@@ -7,7 +7,7 @@
 // the episode list categoryFilters' catalogItemToMediaItem discards —
 // see adapters.ts), catalog:related for similar titles (empty for series
 // — the backend has no series branch, see catalog.ts's registerCatalogIpc
-// — surfaced honestly rather than hidden), and tracking:list's history for
+// — surfaced honestly rather than hidden), and tracking:title-state for
 // real per-episode watched state (which specific episodes were watched,
 // not just "N of M" — a strictly more accurate source than the aggregate
 // count continueWatchingEntryToItem synthesizes progress bars from).
@@ -49,6 +49,8 @@ import { isUpcomingEpisode } from '@renderer/lib/mediaHub/releaseDate'
 import { resolveArtwork } from '@renderer/lib/artwork'
 
 type FetchStatus = 'loading' | 'ready' | 'error'
+
+const NO_HISTORY: HistoryEntry[] = []
 
 function episodeKey(season: number | null | undefined, episode: number | null | undefined): string {
   return `${season ?? ''}:${episode ?? ''}`
@@ -110,12 +112,15 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   // Release or story order for the franchise guide, as last chosen here.
   const [storyOrder, setStoryOrder] = useState<AnimeStoryOrder>(readStoryOrder)
 
-  const [history, setHistory] = useState<HistoryEntry[]>([])
-  // Only the setter is used — nothing in this page shows a separate
-  // loading indicator for tracking history specifically (episodes just
-  // render as not-yet-watched until it resolves, via EpisodesSection's
-  // own `status`, which tracks the primary catalog:meta fetch instead).
-  const [, setHistoryStatus] = useState<FetchStatus>('loading')
+  const [historyRows, setHistory] = useState<HistoryEntry[]>([])
+  // Which title `historyRows` belongs to. This page is reused across titles
+  // (see the primary fetch below), so until the new title's rows arrive the
+  // old title's would otherwise tick the new grid's tiles. A refetch for the
+  // SAME title (watchStatusVersion) keeps showing the current rows instead
+  // of blanking them.
+  const [historyLoadedFor, setHistoryLoadedFor] = useState<string | null>(null)
+  const historyReady = historyLoadedFor === id
+  const history = historyReady ? historyRows : NO_HISTORY
 
   // Resume bookmarks for every episode of this title, in one call (see
   // EpisodePlaybackPosition's doc comment) — what the episode grid draws
@@ -262,23 +267,34 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   useEffect(() => {
     if (!id) return
     let cancelled = false
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setHistoryStatus('loading')
     const api = window.api?.mediaHub
     if (!api) {
-      setHistoryStatus('error')
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- nothing to wait for without a bridge
+      setHistoryLoadedFor(id)
       return
     }
+    // tracking:title-state, not tracking:list: the database rows for this
+    // one title. tracking:list resolves metadata for EVERY tracked series
+    // before it answers (for its newEpisodeCount/airing fields), which on a
+    // long list left the grid unticked for seconds after the page opened.
     api.tracking
-      .list()
-      .then((result) => {
+      .titleState(id)
+      .then((state) => {
         if (cancelled) return
-        setHistory(result.history.filter((h) => h.id === id))
-        setHistoryStatus('ready')
+        setHistory(
+          state.watched.map((w) => ({
+            id,
+            type: kind,
+            season: w.season,
+            episode: w.episode,
+            watchedAt: null
+          }))
+        )
+        setHistoryLoadedFor(id)
       })
       .catch(() => {
-        if (cancelled) return
-        setHistoryStatus('error')
+        // Stop saying "checking"; tiles read as unwatched, as before.
+        if (!cancelled) setHistoryLoadedFor(id)
       })
     return () => {
       cancelled = true
@@ -287,6 +303,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     // `id` and has no other way to learn about a mark-watched that happened
     // elsewhere (PlaybackOverlay's 80%-progress auto-mark, in particular) —
     // see AppStateContext's watchStatusVersion doc comment.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- kind follows the route with id; only labels the optimistic rows
   }, [id, watchStatusVersion])
 
   // Two triggers, because a bookmark and a watch are saved by different
@@ -448,7 +465,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   // {trackedIds: myList}) above, which — unlike the full context the home/
   // category grids build with — never passes watchedIds/history, so those
   // fields are unconditionally false here. `history` (this page's own
-  // tracking:list fetch, already filtered to this exact id) is the real
+  // tracking:title-state fetch, already this exact id's rows) is the real
   // source of truth for a movie's watched state instead.
   const movieWatched = history.length > 0
 
@@ -789,6 +806,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
               onMarkWatched={handleMarkEpisodeWatched}
               onMarkMany={handleMarkManyWatched}
               onMarkSeason={handleMarkSeasonWatched}
+              watchedLoading={!historyReady}
               status={metaStatus}
             />
             <SimilarPanel

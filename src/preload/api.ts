@@ -104,6 +104,7 @@ import type {
   TitleCollectionResult,
   TitleWatchState,
   TorBoxConnectResult,
+  TrackingHistoryResult,
   TrackingListResult,
   TraktPollResult,
   TraktStartResult,
@@ -610,6 +611,10 @@ export function createApi(transport: ApiTransport) {
 
       tracking: {
         list: (): Promise<TrackingListResult> => transport.invoke(MEDIA_HUB_CHANNELS.trackingList),
+        /** list()'s history and laterSeasons alone — the database only, so
+         *  it answers at once. Use it wherever `tracked` is not read. */
+        history: (): Promise<TrackingHistoryResult> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.trackingHistory),
         /** Pull plan-to-watch from every connected tracking service now,
          *  rather than waiting for the background pass. */
         syncPlanned: (): Promise<PlannedSyncReport> =>

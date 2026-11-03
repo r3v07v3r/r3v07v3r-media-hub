@@ -163,6 +163,8 @@ export const MEDIA_HUB_CHANNELS = {
    *  for a few weeks — see main/media-hub/recommendations.ts. */
   recommendationsPassOver: 'mediahub:recommendations:pass-over',
   trackingList: 'mediahub:tracking:list',
+  /** tracking:list's history alone, from the database — see TrackingHistoryResult. */
+  trackingHistory: 'mediahub:tracking:history',
   trackingToggle: 'mediahub:tracking:toggle',
   /** The Undo on the "off your plan" toast: puts back the tracked row the
    *  toggle just removed, its date, episode baseline and details as they

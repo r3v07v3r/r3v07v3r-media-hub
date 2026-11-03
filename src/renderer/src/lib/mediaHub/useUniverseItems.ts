@@ -81,7 +81,7 @@ export function useSeasonHistory(
     const wanted = new Set(splitIds.split(' '))
     let cancelled = false
     api
-      .list()
+      .history()
       .then((result) => {
         if (!cancelled) {
           setRead({ libraryKey, rows: result.history.filter((row) => wanted.has(row.id)) })
