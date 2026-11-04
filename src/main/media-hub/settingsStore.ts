@@ -245,9 +245,55 @@ function legacySettingsPath(): string {
   return path.join(electron().app.getPath('userData'), 'settings.json')
 }
 
+/**
+ * The last settings read from or written to disk, so readSettings() is not a
+ * readFileSync + JSON.parse on the main thread for each of its ~120 callers
+ * (several on the playback path).
+ *
+ * Keyed on the file's mtime and size, checked with one statSync per read.
+ * The app takes no single-instance lock, so a second copy running on the
+ * same userData can write this file too; without the check this process
+ * would keep its old snapshot and erase the other's change (a saved token,
+ * say) on its next unrelated write. Every write here is a rename of a new
+ * file, so either stamp moving is a reliable "someone wrote it".
+ *
+ * Every read hands out a clone because callers mutate the object before
+ * passing it back to writeSettings, and a mutation that is never written
+ * must not leak into the next reader.
+ */
+let cachedSettings: { value: MediaHubRawSettings; mtimeMs: number; size: number } | null = null
+
+function cloneSettings(value: MediaHubRawSettings): MediaHubRawSettings {
+  return structuredClone(value)
+}
+
+function fileStamp(file: string): { mtimeMs: number; size: number } | null {
+  try {
+    const stat = fs.statSync(file)
+    return { mtimeMs: stat.mtimeMs, size: stat.size }
+  } catch {
+    return null
+  }
+}
+
 export function readSettings(): MediaHubRawSettings {
   try {
-    return JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) as MediaHubRawSettings
+    const file = settingsPath()
+    const stamp = fileStamp(file)
+    if (
+      cachedSettings &&
+      stamp &&
+      cachedSettings.mtimeMs === stamp.mtimeMs &&
+      cachedSettings.size === stamp.size
+    ) {
+      return cloneSettings(cachedSettings.value)
+    }
+    cachedSettings = null
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as MediaHubRawSettings
+    // The stamp taken before the read: if another process renames a new file
+    // in between, the next read sees a different stamp and re-reads.
+    if (stamp) cachedSettings = { value: parsed, ...stamp }
+    return cloneSettings(parsed)
   } catch {
     // No media-hub-settings.json yet — fall through to the one-time legacy import.
   }
@@ -268,8 +314,21 @@ export function writeSettings(value: MediaHubRawSettings): void {
 
   fs.mkdirSync(directory, { recursive: true })
   try {
-    fs.writeFileSync(temporary, JSON.stringify(value, null, 2), { mode: 0o600 })
+    const serialized = JSON.stringify(value, null, 2)
+    // Drop the cache before touching disk: if the write fails, the next read
+    // goes back to whatever the file actually holds.
+    cachedSettings = null
+    fs.writeFileSync(temporary, serialized, { mode: 0o600 })
+    // Stamp OUR file, before the rename: a rename keeps mtime and size, so
+    // this is what the target carries once it lands. Stamping the target
+    // after the rename could pick up another instance's file renamed over
+    // ours in between, and pair our content with its stamp for good.
+    const stamp = fileStamp(temporary)
     fs.renameSync(temporary, target)
+    // Re-parse what was written rather than keeping `value`: the caller still
+    // holds that reference, and this also drops undefined/function values
+    // exactly as a fresh read from disk would.
+    if (stamp) cachedSettings = { value: JSON.parse(serialized) as MediaHubRawSettings, ...stamp }
   } finally {
     try {
       if (fs.existsSync(temporary)) fs.unlinkSync(temporary)
