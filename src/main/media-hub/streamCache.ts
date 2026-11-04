@@ -204,6 +204,10 @@ interface ChunkStore {
 const diskChunkStore: ChunkStore = {
   persistent: true,
   async write(root, token, index, data) {
+    // Same refusal as read() below, and the one that matters more: an
+    // empty token here writes the chunk into the cache root itself, where
+    // no listing or cleanup ever looks (see STRAY_CHUNK_RE).
+    if (!token) throw new Error('No cache session is open.')
     await fsp.mkdir(sessionDir(root, token), { recursive: true })
     const finalPath = chunkFilePath(root, token, index)
     const tmpPath = `${finalPath}.tmp`
@@ -219,6 +223,7 @@ const diskChunkStore: ChunkStore = {
     return fsp.readFile(chunkFilePath(root, token, index))
   },
   async remove(root, token, index) {
+    if (!token) return
     await fsp.unlink(chunkFilePath(root, token, index))
   },
   clear() {
@@ -621,6 +626,17 @@ const OWN_CACHE_URL_RE = /^http:\/\/127\.0\.0\.1:\d+\/stream\/([a-f0-9]{64})(?:\
 // as a deletable session. Only ever touch entries that are actually
 // shaped like a token this module would have minted.
 const SESSION_TOKEN_RE = /^[a-f0-9]{64}$/
+/**
+ * A chunk file sitting directly in the cache ROOT rather than inside a
+ * session directory. Never legitimate: it is what an empty token resolved
+ * to before the disk store refused one (sessionDir(root, '') === root).
+ * Builds before #153 wrote gigabytes of these — a stopped session's
+ * still-draining fill landing its chunks at root/chunk-N.bin — and every
+ * listing and cleanup here walks session directories only, so they were
+ * invisible on the Downloads page and survived every Delete, Clear and
+ * prune. Matched by exact shape for the same reason as SESSION_TOKEN_RE.
+ */
+const STRAY_CHUNK_RE = /^chunk-\d+\.bin(?:\.tmp)?$/
 
 export function isOwnCacheUrl(url: unknown): boolean {
   const match = OWN_CACHE_URL_RE.exec(String(url))
@@ -1990,34 +2006,87 @@ export function createStreamCache({
  * a derived constraint — safe to retune later.
  */
 export async function pruneIdleSessions(maxAgeMs = 24 * 60 * 60 * 1000): Promise<void> {
-  const root = cacheRootDir()
+  const cutoff = Date.now() - maxAgeMs
+  for (const root of cleanupRoots()) await sweepRoot(root, { cutoff, countBytes: false })
+}
+
+/**
+ * Every root cleanup should walk: the configured one, plus the default
+ * userData location when the cache has been moved off it. The default
+ * folder is this app's alone (no person picked it), and once the setting
+ * points elsewhere nothing reads it again. The folder-change handler's
+ * clearAllSessions was meant to empty it, but before stray chunks were
+ * swept it left every one of them behind (6GB on the first machine
+ * checked). Deduped so an unmoved cache is walked once.
+ */
+function cleanupRoots(): string[] {
+  const roots: string[] = []
+  try {
+    roots.push(cacheRootDir())
+  } catch {
+    return roots
+  }
+  try {
+    const fallback = path.join(electron().app.getPath('userData'), 'stream-cache')
+    if (path.resolve(fallback).toLowerCase() !== path.resolve(roots[0]).toLowerCase()) {
+      roots.push(fallback)
+    }
+  } catch {
+    // No Electron app (tests): the configured root is all there is.
+  }
+  return roots
+}
+
+/**
+ * One pass over a cache root: stray root-level chunks always go (never
+ * part of any session, see STRAY_CHUNK_RE); session directories go when
+ * idle and, with a cutoff, untouched since it. Returns bytes freed when
+ * asked to count (a stat per file, so only for the manual Clear button).
+ */
+export async function sweepRoot(
+  root: string,
+  { cutoff, countBytes }: { cutoff: number | null; countBytes: boolean }
+): Promise<number> {
   let entries: fs.Dirent[]
   try {
     entries = await fsp.readdir(root, { withFileTypes: true })
   } catch {
-    return
+    return 0
   }
-  const cutoff = Date.now() - maxAgeMs
+  let freedBytes = 0
   for (const entry of entries) {
-    if (!entry.isDirectory() || !SESSION_TOKEN_RE.test(entry.name)) continue
-    if (activeCacheTokens.has(entry.name)) continue
-    const dir = path.join(root, entry.name)
+    const target = path.join(root, entry.name)
     try {
-      // The directory's own mtime, not a stat of every chunk inside it:
-      // chunk writes land by rename-into-directory and evictions remove
-      // entries, both of which bump the directory timestamp — the same
-      // signal the newest-file scan derived at a stat per chunk file,
-      // thousands of calls per pass on a cache holding a few films.
-      // (Reads bump neither, exactly as before; the active session is
-      // already exempted above.)
-      const newestMtime = (await fsp.stat(dir)).mtimeMs
-      if (newestMtime === 0 || newestMtime < cutoff) {
-        await fsp.rm(dir, { recursive: true, force: true })
+      if (entry.isFile() && STRAY_CHUNK_RE.test(entry.name)) {
+        if (countBytes) freedBytes += (await fsp.stat(target)).size
+        await fsp.unlink(target)
+        continue
       }
+      if (!entry.isDirectory() || !SESSION_TOKEN_RE.test(entry.name)) continue
+      if (activeCacheTokens.has(entry.name)) continue
+      if (cutoff !== null) {
+        // The directory's own mtime, not a stat of every chunk inside it:
+        // chunk writes land by rename-into-directory and evictions remove
+        // entries, both of which bump the directory timestamp. (Reads bump
+        // neither; the active session is exempted above.)
+        const mtime = (await fsp.stat(target)).mtimeMs
+        if (mtime !== 0 && mtime >= cutoff) continue
+      }
+      if (countBytes) {
+        for (const file of await fsp.readdir(target)) {
+          try {
+            freedBytes += (await fsp.stat(path.join(target, file))).size
+          } catch {
+            // Already gone: nothing to count.
+          }
+        }
+      }
+      await fsp.rm(target, { recursive: true, force: true })
     } catch (error) {
-      logError('streamCache:pruneIdleSessions', error)
+      logError('streamCache:sweepRoot', error)
     }
   }
+  return freedBytes
 }
 
 /**
@@ -2198,36 +2267,14 @@ export async function deleteCacheSession(token: string): Promise<void> {
  * threshold). Reads cacheRootDir() fresh rather than any single instance's
  * captured `cacheRoot`, since this is meant to act on wherever the person
  * has the cache configured RIGHT NOW — if they just changed the folder,
- * this clears the NEW location, not a stale one. Clearing the OLD location
- * after switching folders is not handled here; nothing in this app tracks
- * where a stream cache used to live once the setting has moved on.
+ * this clears the NEW location, not a stale one. A custom folder the
+ * setting has since moved away from is not tracked; the default userData
+ * folder is always swept too (see cleanupRoots).
  */
 export async function clearAllSessions(): Promise<number> {
-  const root = cacheRootDir()
-  let entries: fs.Dirent[]
-  try {
-    entries = await fsp.readdir(root, { withFileTypes: true })
-  } catch {
-    return 0
-  }
   let freedBytes = 0
-  for (const entry of entries) {
-    if (!entry.isDirectory() || !SESSION_TOKEN_RE.test(entry.name)) continue
-    if (activeCacheTokens.has(entry.name)) continue
-    const dir = path.join(root, entry.name)
-    try {
-      const files = await fsp.readdir(dir)
-      for (const file of files) {
-        try {
-          freedBytes += (await fsp.stat(path.join(dir, file))).size
-        } catch {
-          // Already gone — nothing to count.
-        }
-      }
-      await fsp.rm(dir, { recursive: true, force: true })
-    } catch (error) {
-      logError('streamCache:clearAllSessions', error)
-    }
+  for (const root of cleanupRoots()) {
+    freedBytes += await sweepRoot(root, { cutoff: null, countBytes: true })
   }
   return freedBytes
 }
