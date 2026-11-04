@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -1702,16 +1703,27 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // that prefix itself (it doubled up as "Back to Back to X" before this
   // comment was written). Every other call site omits it and gets the
   // auto-derived label, same as before.
-  const openPerson = useCallback(
-    (name: string) => {
-      const trimmed = String(name || '').trim()
-      if (trimmed) navigate(`/people/${encodeURIComponent(trimmed)}`)
-    },
-    [navigate]
-  )
+  //
+  // Both read where we are through a ref rather than closing over it, so
+  // they keep one identity for the whole session. react-router hands out a
+  // new `navigate` and `location` on every route change, and these two sit
+  // in the context value: closing over them re-rendered every useAppState
+  // consumer on every navigation, for a function nobody calls until a
+  // click. Updated in a layout effect, which runs before any click on the
+  // new page can reach these.
+  const navigationRef = useRef({ location, navigate, categorySearch, activeMood })
+  useLayoutEffect(() => {
+    navigationRef.current = { location, navigate, categorySearch, activeMood }
+  })
+
+  const openPerson = useCallback((name: string) => {
+    const trimmed = String(name || '').trim()
+    if (trimmed) navigationRef.current.navigate(`/people/${encodeURIComponent(trimmed)}`)
+  }, [])
 
   const openDetail = useCallback(
     (media: MediaItem, originLabelOverride?: string, season?: number) => {
+      const { location, navigate, categorySearch, activeMood } = navigationRef.current
       const route = `${location.pathname}${location.search}`
       const label =
         originLabelOverride ??
@@ -1737,7 +1749,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // which the detail page already reads (MediaDetailPage's openedSeason).
       navigate(mediaKindToDetailPath(media), season != null ? { state: { season } } : undefined)
     },
-    [location.pathname, location.search, categorySearch, activeMood, navigate, closeContextMenu]
+    [closeContextMenu]
   )
 
   /**
