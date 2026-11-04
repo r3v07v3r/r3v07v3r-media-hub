@@ -245,9 +245,27 @@ function legacySettingsPath(): string {
   return path.join(electron().app.getPath('userData'), 'settings.json')
 }
 
+/**
+ * The last settings read from or written to disk, so readSettings() is not a
+ * readFileSync + JSON.parse on the main thread for each of its ~120 callers
+ * (several on the playback path). Safe because writeSettings() below is the
+ * only writer of the file: no worker or other process touches it. Every
+ * read hands out a clone because callers mutate the object before passing it
+ * back to writeSettings, and a mutation that is never written must not leak
+ * into the next reader.
+ */
+let cachedSettings: MediaHubRawSettings | null = null
+
+function cloneSettings(value: MediaHubRawSettings): MediaHubRawSettings {
+  return structuredClone(value)
+}
+
 export function readSettings(): MediaHubRawSettings {
+  if (cachedSettings) return cloneSettings(cachedSettings)
   try {
-    return JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) as MediaHubRawSettings
+    const parsed = JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) as MediaHubRawSettings
+    cachedSettings = parsed
+    return cloneSettings(parsed)
   } catch {
     // No media-hub-settings.json yet — fall through to the one-time legacy import.
   }
@@ -268,8 +286,16 @@ export function writeSettings(value: MediaHubRawSettings): void {
 
   fs.mkdirSync(directory, { recursive: true })
   try {
-    fs.writeFileSync(temporary, JSON.stringify(value, null, 2), { mode: 0o600 })
+    const serialized = JSON.stringify(value, null, 2)
+    // Drop the cache before touching disk: if the write fails, the next read
+    // goes back to whatever the file actually holds.
+    cachedSettings = null
+    fs.writeFileSync(temporary, serialized, { mode: 0o600 })
     fs.renameSync(temporary, target)
+    // Re-parse what was written rather than keeping `value`: the caller still
+    // holds that reference, and this also drops undefined/function values
+    // exactly as a fresh read from disk would.
+    cachedSettings = JSON.parse(serialized) as MediaHubRawSettings
   } finally {
     try {
       if (fs.existsSync(temporary)) fs.unlinkSync(temporary)
