@@ -319,11 +319,15 @@ export function writeSettings(value: MediaHubRawSettings): void {
     // goes back to whatever the file actually holds.
     cachedSettings = null
     fs.writeFileSync(temporary, serialized, { mode: 0o600 })
+    // Stamp OUR file, before the rename: a rename keeps mtime and size, so
+    // this is what the target carries once it lands. Stamping the target
+    // after the rename could pick up another instance's file renamed over
+    // ours in between, and pair our content with its stamp for good.
+    const stamp = fileStamp(temporary)
     fs.renameSync(temporary, target)
     // Re-parse what was written rather than keeping `value`: the caller still
     // holds that reference, and this also drops undefined/function values
     // exactly as a fresh read from disk would.
-    const stamp = fileStamp(target)
     if (stamp) cachedSettings = { value: JSON.parse(serialized) as MediaHubRawSettings, ...stamp }
   } finally {
     try {
