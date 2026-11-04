@@ -61,19 +61,35 @@ function safeStorage(): Electron.SafeStorage {
 }
 
 /**
- * Writes the sealed key only if no file is there yet. The app takes no
- * single-instance lock: two copies starting together must not each mint a
- * key and leave the loser's secrets unreadable, so the second one to arrive
- * reads the first one's file instead.
+ * Publishes the sealed key only if no file is there yet, and only once it
+ * is complete. The app takes no single-instance lock: two copies starting
+ * together must not each mint a key and leave the loser's secrets
+ * unreadable, so the second one to arrive reads the first one's file
+ * instead.
+ *
+ * Written to a private temporary file first and then hard-linked into
+ * place: a link is created whole or not at all, and fails if the name is
+ * taken. Creating the real name directly with `wx` was exclusive but not
+ * atomic: the other copy could open it while still empty, fail to unseal
+ * it, set it aside as unreadable and mint a second key.
  */
-function createKeyFile(file: string, sealed: Buffer): boolean {
+export function createKeyFile(file: string, sealed: Buffer): boolean {
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  const temporary = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`
+  fs.writeFileSync(temporary, sealed.toString('base64'), { mode: 0o600, flag: 'wx' })
   try {
-    fs.mkdirSync(path.dirname(file), { recursive: true })
-    fs.writeFileSync(file, sealed.toString('base64'), { mode: 0o600, flag: 'wx' })
+    fs.linkSync(temporary, file)
     return true
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false
-    throw error
+    // A filesystem with no hard links (FAT/exFAT): fall back to a rename,
+    // which is still atomic for the contents, checked for an existing file
+    // first. The window between the check and the rename is microseconds.
+    if (fs.existsSync(file)) return false
+    fs.renameSync(temporary, file)
+    return true
+  } finally {
+    fs.rmSync(temporary, { force: true })
   }
 }
 

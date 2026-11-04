@@ -131,6 +131,20 @@ async function main(): Promise<void> {
     assert.equal(store.decrypt('not-a-secret'), '')
   })
 
+  await check('the key file appears whole or not at all, and only once', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-key-race-'))
+    const file = path.join(dir, 'media-hub-secret.key')
+    const first = Buffer.from('first sealed key')
+    const second = Buffer.from('second sealed key')
+    assert.equal(secrets.createKeyFile(file, first), true)
+    // The copy that arrives second must not replace the first one's key.
+    assert.equal(secrets.createKeyFile(file, second), false)
+    assert.equal(fs.readFileSync(file, 'utf8'), first.toString('base64'))
+    // No half-written temporary left behind by either attempt.
+    assert.deepEqual(fs.readdirSync(dir), ['media-hub-secret.key'])
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
   await check('an unreadable key file is set aside, never deleted, and replaced', async () => {
     fs.writeFileSync(keyFile, Buffer.from('not sealed by anything').toString('base64'))
     secrets.resetSecretStorageForTests()
