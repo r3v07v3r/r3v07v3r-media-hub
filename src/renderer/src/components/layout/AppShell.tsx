@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import { motion, useAnimationControls } from 'framer-motion'
 import { BackgroundEffects } from './BackgroundEffects'
 import { TopUtilityBar } from '@renderer/components/topbar/TopUtilityBar'
 import { SidebarNavigation } from '@renderer/components/sidebar/SidebarNavigation'
 import { GlobalOverlays } from '@renderer/components/overlays/GlobalOverlays'
-import { ControlCentreFace } from '@renderer/components/controlcentre/ControlCentreFace'
+import { ControlCentreFace } from '@renderer/routes/lazyRoutes'
 import { useMotionSuspended } from '@renderer/hooks/useMotionSuspended'
 import { useMotionUserDisabled } from '@renderer/hooks/useMotionUserDisabled'
 import { useAppState } from '@renderer/context/AppStateContext'
@@ -188,7 +188,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             // far face is unreachable whichever way the cube is turned.
             inert={firstRunBlocking}
           >
-            {hasOpened && <ControlCentreFace />}
+            {hasOpened && (
+              // Lazy (see lazyRoutes): prefetched after first paint, so by the
+              // first turn of the cube it is normally already loaded.
+              <Suspense fallback={null}>
+                <ControlCentreFace />
+              </Suspense>
+            )}
           </div>
         </motion.div>
       </div>
