@@ -248,23 +248,51 @@ function legacySettingsPath(): string {
 /**
  * The last settings read from or written to disk, so readSettings() is not a
  * readFileSync + JSON.parse on the main thread for each of its ~120 callers
- * (several on the playback path). Safe because writeSettings() below is the
- * only writer of the file: no worker or other process touches it. Every
- * read hands out a clone because callers mutate the object before passing it
- * back to writeSettings, and a mutation that is never written must not leak
- * into the next reader.
+ * (several on the playback path).
+ *
+ * Keyed on the file's mtime and size, checked with one statSync per read.
+ * The app takes no single-instance lock, so a second copy running on the
+ * same userData can write this file too; without the check this process
+ * would keep its old snapshot and erase the other's change (a saved token,
+ * say) on its next unrelated write. Every write here is a rename of a new
+ * file, so either stamp moving is a reliable "someone wrote it".
+ *
+ * Every read hands out a clone because callers mutate the object before
+ * passing it back to writeSettings, and a mutation that is never written
+ * must not leak into the next reader.
  */
-let cachedSettings: MediaHubRawSettings | null = null
+let cachedSettings: { value: MediaHubRawSettings; mtimeMs: number; size: number } | null = null
 
 function cloneSettings(value: MediaHubRawSettings): MediaHubRawSettings {
   return structuredClone(value)
 }
 
-export function readSettings(): MediaHubRawSettings {
-  if (cachedSettings) return cloneSettings(cachedSettings)
+function fileStamp(file: string): { mtimeMs: number; size: number } | null {
   try {
-    const parsed = JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) as MediaHubRawSettings
-    cachedSettings = parsed
+    const stat = fs.statSync(file)
+    return { mtimeMs: stat.mtimeMs, size: stat.size }
+  } catch {
+    return null
+  }
+}
+
+export function readSettings(): MediaHubRawSettings {
+  try {
+    const file = settingsPath()
+    const stamp = fileStamp(file)
+    if (
+      cachedSettings &&
+      stamp &&
+      cachedSettings.mtimeMs === stamp.mtimeMs &&
+      cachedSettings.size === stamp.size
+    ) {
+      return cloneSettings(cachedSettings.value)
+    }
+    cachedSettings = null
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as MediaHubRawSettings
+    // The stamp taken before the read: if another process renames a new file
+    // in between, the next read sees a different stamp and re-reads.
+    if (stamp) cachedSettings = { value: parsed, ...stamp }
     return cloneSettings(parsed)
   } catch {
     // No media-hub-settings.json yet — fall through to the one-time legacy import.
@@ -295,7 +323,8 @@ export function writeSettings(value: MediaHubRawSettings): void {
     // Re-parse what was written rather than keeping `value`: the caller still
     // holds that reference, and this also drops undefined/function values
     // exactly as a fresh read from disk would.
-    cachedSettings = JSON.parse(serialized) as MediaHubRawSettings
+    const stamp = fileStamp(target)
+    if (stamp) cachedSettings = { value: JSON.parse(serialized) as MediaHubRawSettings, ...stamp }
   } finally {
     try {
       if (fs.existsSync(temporary)) fs.unlinkSync(temporary)
