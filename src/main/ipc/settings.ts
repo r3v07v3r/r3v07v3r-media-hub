@@ -1,4 +1,4 @@
-import { ipcMain, safeStorage } from 'electron'
+import { ipcMain } from 'electron'
 import Store from 'electron-store'
 import {
   DEFAULT_SERVICE_CONFIG,
@@ -10,6 +10,14 @@ import {
   withServiceDefaults
 } from '../../shared/ipc-types'
 import { getLanCacheConnection } from '../media-hub/settingsStore'
+import { logError } from '../media-hub/logger'
+import {
+  isLegacySealed,
+  openLegacySecrets,
+  openSecret,
+  sealSecret,
+  secretStorageAvailable
+} from '../media-hub/secretStorage'
 import { setTrustedMediaHosts } from '../media-hub/playback'
 import { assertTrustedSender } from './trustedSender'
 
@@ -46,16 +54,59 @@ const store = new Store<StoreSchema>({
 const ENC_PREFIX = 'enc:'
 
 function encryptApiKey(value: string): string {
-  if (!value || !safeStorage.isEncryptionAvailable()) return value
-  return ENC_PREFIX + safeStorage.encryptString(value).toString('base64')
+  if (!value) return value
+  const sealed = sealSecret(value)
+  // No key store: stored as it always was in that case, plain, untagged.
+  return sealed === null ? value : ENC_PREFIX + sealed
 }
 
 function decryptApiKey(value: string): string {
   if (!value || !value.startsWith(ENC_PREFIX)) return value
+  // Both the app-key format and, until migrateServiceApiKeys() has run, the
+  // synchronous API's output (which openSecret() answers from what startup
+  // opened). Anything else stays the '' it always was.
+  return openSecret(value.slice(ENC_PREFIX.length))
+}
+
+/**
+ * Rewrites API keys the synchronous safeStorage API sealed into the app-key
+ * format, once, at startup — see secretStorage.ts. A key that will not open
+ * is left as it is.
+ */
+export async function migrateServiceApiKeys(): Promise<void> {
   try {
-    return safeStorage.decryptString(Buffer.from(value.slice(ENC_PREFIX.length), 'base64'))
-  } catch {
-    return ''
+    const services = store.get('services')
+    if (!services) return
+    const legacy = Object.values(services)
+      .map((config) => (config as ServiceConfig | undefined)?.apiKey)
+      .filter((apiKey): apiKey is string => typeof apiKey === 'string')
+      .filter((apiKey) => apiKey.startsWith(ENC_PREFIX))
+      .map((apiKey) => apiKey.slice(ENC_PREFIX.length))
+      .filter(isLegacySealed)
+    if (!legacy.length) return
+    const opened = await openLegacySecrets(legacy)
+    if (!opened.size || !secretStorageAvailable()) return
+    const current = store.get('services')
+    store.set(
+      'services',
+      Object.fromEntries(
+        Object.entries(current).map(([id, config]) => {
+          const apiKey = (config as ServiceConfig).apiKey
+          const plaintext =
+            typeof apiKey === 'string' && apiKey.startsWith(ENC_PREFIX)
+              ? opened.get(apiKey.slice(ENC_PREFIX.length))
+              : undefined
+          return [
+            id,
+            plaintext === undefined
+              ? config
+              : { ...(config as ServiceConfig), apiKey: encryptApiKey(plaintext) }
+          ]
+        })
+      ) as ServiceSettings
+    )
+  } catch (error) {
+    logError('settings:migrateServiceApiKeys', error)
   }
 }
 

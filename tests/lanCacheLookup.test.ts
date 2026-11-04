@@ -90,6 +90,9 @@ function startDaemon(stall: boolean): Promise<{ url: string; close: () => void }
 }
 
 async function main(): Promise<void> {
+  // The app unseals its credentials' key before anything stores a token.
+  const { initSecretStorage } = await import('../src/main/media-hub/secretStorage')
+  await initSecretStorage(process.env.R3_USER_DATA as string)
   const { setLanCacheConnection } = await import('../src/main/media-hub/settingsStore')
   const { findLanCacheCandidate, LAN_LOOKUP_TIMEOUT_MS } =
     await import('../src/main/media-hub/lanCache')

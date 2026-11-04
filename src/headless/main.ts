@@ -16,7 +16,7 @@
 
 import path from 'node:path'
 
-import { startBackend, stopBackend } from '../main/backend'
+import { prepareBackend, startBackend, stopBackend } from '../main/backend'
 import { setActiveWindow } from '../main/media-hub/rendererBridge'
 import { setPlatformCapabilities } from '../main/media-hub/platform'
 import { setHostOverlay } from '../main/media-hub/playerWindow'
@@ -50,6 +50,7 @@ async function main(): Promise<void> {
   // screen on the 'overlay' connection, not a window the backend opens.
   if (hostPlayer) setHostOverlay(overlayWindow as never)
 
+  await prepareBackend()
   startBackend()
   setActiveWindow(mainWindow as never)
 
