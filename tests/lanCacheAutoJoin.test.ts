@@ -120,6 +120,9 @@ async function deadUrl(): Promise<string> {
 }
 
 async function main(): Promise<void> {
+  // The app unseals its credentials' key before anything stores a token.
+  const { initSecretStorage } = await import('../src/main/media-hub/secretStorage')
+  await initSecretStorage(process.env.R3_USER_DATA as string)
   const store = await import('../src/main/media-hub/settingsStore')
   const lan = await import('../src/main/media-hub/lanCache')
   const discovery = await import('../src/main/media-hub/lanCacheDiscovery')

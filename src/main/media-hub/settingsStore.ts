@@ -23,6 +23,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import { electronModule } from './electronModule'
+import {
+  isLegacySealed,
+  openLegacySecrets,
+  openSecret,
+  sealSecret,
+  secretStorageAvailable
+} from './secretStorage'
 import { logError } from './logger'
 import { sendToRenderer } from './rendererBridge'
 import type { ProfileRecord } from './profiles'
@@ -374,21 +381,26 @@ export function ensureSetupCompleteDecided(): void {
 const ENCRYPTION_UNAVAILABLE_PREFIX = 'plain:'
 let warnedNoEncryption = false
 
-/** Encrypts a credential-shaped string for storage. Falls back to a tagged, reversible base64 encoding (NOT real encryption) when the OS has no secure-storage backend available, so dev/headless environments don't hard-crash — see module doc comment. */
+/**
+ * Encrypts a credential-shaped string for storage, under the app key that
+ * secretStorage.ts unseals at startup. Falls back to a tagged, reversible
+ * base64 encoding (NOT real encryption) when the OS has no secure-storage
+ * backend, so dev/headless environments don't hard-crash — see module doc
+ * comment.
+ */
 export function encrypt(value: string): string {
-  if (!electron().safeStorage.isEncryptionAvailable()) {
-    if (!warnedNoEncryption) {
-      warnedNoEncryption = true
-      logError(
-        'media-hub:settingsStore',
-        new Error(
-          'OS secure storage is unavailable — credentials will be stored in a reversible but unencrypted form in media-hub-settings.json. Expected in some headless/no-keyring dev environments; should not happen in a packaged build.'
-        )
+  const sealed = sealSecret(value)
+  if (sealed !== null) return sealed
+  if (!warnedNoEncryption) {
+    warnedNoEncryption = true
+    logError(
+      'media-hub:settingsStore',
+      new Error(
+        'OS secure storage is unavailable — credentials will be stored in a reversible but unencrypted form in media-hub-settings.json. Expected in some headless/no-keyring dev environments; should not happen in a packaged build.'
       )
-    }
-    return ENCRYPTION_UNAVAILABLE_PREFIX + Buffer.from(value, 'utf8').toString('base64')
+    )
   }
-  return electron().safeStorage.encryptString(value).toString('base64')
+  return ENCRYPTION_UNAVAILABLE_PREFIX + Buffer.from(value, 'utf8').toString('base64')
 }
 
 export function decrypt(value: string | undefined): string {
@@ -402,10 +414,52 @@ export function decrypt(value: string | undefined): string {
       return ''
     }
   }
+  return openSecret(value)
+}
+
+/** Every string in `value`, however deeply nested, that the sync API sealed. */
+function collectLegacySecrets(value: unknown, into: string[] = []): string[] {
+  if (isLegacySealed(value)) into.push(value)
+  else if (Array.isArray(value)) value.forEach((entry) => collectLegacySecrets(entry, into))
+  else if (value && typeof value === 'object') {
+    Object.values(value).forEach((entry) => collectLegacySecrets(entry, into))
+  }
+  return into
+}
+
+function replaceStrings(value: unknown, replace: (text: string) => string | undefined): unknown {
+  if (typeof value === 'string') return replace(value) ?? value
+  if (Array.isArray(value)) return value.map((entry) => replaceStrings(entry, replace))
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, replaceStrings(entry, replace)])
+    )
+  }
+  return value
+}
+
+/**
+ * Rewrites every credential the synchronous safeStorage API wrote into the
+ * app-key format, so nothing here depends on that API once Electron 46
+ * removes it. Runs once per launch after initSecretStorage(), before the
+ * backend starts, and is a no-op once a file has been migrated. A value
+ * that will not open (another machine's) is left exactly as it was.
+ */
+export async function migrateLegacySecrets(): Promise<void> {
   try {
-    return electron().safeStorage.decryptString(Buffer.from(value, 'base64'))
-  } catch {
-    return ''
+    const legacy = collectLegacySecrets(readSettings())
+    if (!legacy.length) return
+    const opened = await openLegacySecrets(legacy)
+    if (!opened.size || !secretStorageAvailable()) return
+    // Read again after the awaits, so the write carries the file as it is now.
+    const current = readSettings()
+    const migrated = replaceStrings(current, (text) => {
+      const plaintext = opened.get(text)
+      return plaintext === undefined ? undefined : encrypt(plaintext)
+    }) as MediaHubRawSettings
+    writeSettings(migrated)
+  } catch (error) {
+    logError('media-hub:settingsStore', error)
   }
 }
 
