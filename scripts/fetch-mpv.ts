@@ -26,9 +26,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const DEST = path.join(ROOT, 'resources', 'mpv-win')
 
 /** Bump these three together when upgrading mpv. */
-const MPV_RELEASE_TAG = '20261015'
-const MPV_ASSET = 'mpv-x86_64-20261015-git-492bae0768.7z'
-const MPV_SHA256 = 'f9becefe40e2a29d2ce5f3ab231ff094f9cf3e4038ff014cfe4a0c09ad90e79e'
+const MPV_RELEASE_TAG = '20261101'
+const MPV_ASSET = 'mpv-x86_64-20261101-git-48fca90e8c.7z'
+const MPV_SHA256 = '7a887a10b74c1a4a7e8c29ead8300cfc610c466c4686bf9dcb92ca2f224ba110'
 
 const MPV_URL = `https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/${MPV_RELEASE_TAG}/${MPV_ASSET}`
 
