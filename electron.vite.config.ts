@@ -3,6 +3,14 @@ import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import { fontPackageRoot } from './vite.fonts'
 
+// Rolldown (Vite 8) keeps JSDoc comments in its output, which Rollup used
+// to drop: on this codebase that was ~400 KB of the main bundle, about a
+// third of it, parsed on every launch and shipped for nothing. Licence
+// comments stay. The renderer is minified, which already strips them.
+const MAIN_PROCESS_OUTPUT = {
+  comments: { legal: true, annotation: true, jsdoc: false }
+}
+
 export default defineConfig({
   main: {
     resolve: {
@@ -11,7 +19,17 @@ export default defineConfig({
       }
     },
     build: {
-      rollupOptions: {
+      rolldownOptions: {
+        // Chunks sit beside index.js, not in the chunks/ folder electron-vite
+        // defaults to. Rolldown, unlike Rollup here, splits dynamically
+        // imported modules out, and the `join(__dirname, ...)` paths in them
+        // (the app:// renderer root, the preload, the player overlay, the
+        // telemetry worker) are written relative to out/main/: from
+        // out/main/chunks/ the window loaded nothing at all. Keeping every
+        // file in one directory keeps __dirname the same for all of them.
+        // (`codeSplitting: false` would also do it, but Rolldown refuses it
+        // with two inputs.)
+        output: { ...MAIN_PROCESS_OUTPUT, chunkFileNames: '[name]-[hash].js' },
         // telemetryWorker runs as its own worker_thread (see
         // src/main/ipc/telemetry.ts) via `new Worker(join(__dirname,
         // 'telemetryWorker.js'))`, which needs a real sibling file next to
@@ -30,6 +48,7 @@ export default defineConfig({
       }
     },
     build: {
+      rolldownOptions: { output: MAIN_PROCESS_OUTPUT },
       // `sandbox: true` (see main/index.ts) runs the preload script through
       // Electron's sandboxed loader, which only resolves `electron` itself
       // at runtime (verified live) — a plain `require("@electron-toolkit/
