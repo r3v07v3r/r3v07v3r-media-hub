@@ -2218,9 +2218,18 @@ async function budgetRoomTest(): Promise<void> {
     ownerDeviceId: 'device-1'
   })
   quotaFetcher.start()
-  // Long enough for the loop to pick the job up and decide; the download
-  // itself would need a content host, and the point is that it never runs.
-  await new Promise((resolve) => setTimeout(resolve, 300))
+  // Until the loop has picked the job up and decided, not a fixed pause: a
+  // flat 300 ms was enough on a quiet machine and not on a loaded CI runner.
+  // A job that errors instead is put back as 'queued' with a backoff, so a
+  // real failure still fails the assertion below; only the wait is bounded.
+  // The download itself would need a content host, and the point is that it
+  // never runs.
+  const decideBy = Date.now() + 5000
+  while (Date.now() < decideBy) {
+    const state = quotaJobs.list().find((job) => job.contentKey === 'tt-big::1:1')?.state
+    if (resolves > 0 && state !== 'queued' && state !== 'fetching') break
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
   await quotaFetcher.stop()
   const refused = quotaJobs.list().find((job) => job.contentKey === 'tt-big::1:1')
   assert.equal(refused?.state, 'expired', 'a file over the owner allocation is refused, not queued')
