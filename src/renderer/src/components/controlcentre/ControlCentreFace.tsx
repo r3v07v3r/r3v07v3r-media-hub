@@ -27,6 +27,7 @@ import { PipelineSection } from './sections/PipelineSection'
 import { ServicesSection } from './sections/ServicesSection'
 import { UpdatesSection } from './sections/UpdatesSection'
 import { ControlCentreNav } from './ControlCentreNav'
+import { PanelVisibleContext } from './panelVisibility'
 import { MatrixRain } from './MatrixRain'
 import {
   CONTROL_CENTRE_SECTIONS,
@@ -155,10 +156,12 @@ export function ControlCentreFace() {
                   category={SETTINGS_CATEGORY_FOR[entry.id] as SettingsCategory}
                 />
               ) : null}
-              {entry.id === 'caching' ? <CachingSection /> : null}
-              {entry.id === 'pipeline' ? <PipelineSection onNavigate={setSection} /> : null}
-              {entry.id === 'services' ? <ServicesSection /> : null}
-              {entry.id === 'updates' ? <UpdatesSection /> : null}
+              <PanelVisibleContext.Provider value={controlCentreOpen && entry.id === section}>
+                {entry.id === 'caching' ? <CachingSection /> : null}
+                {entry.id === 'pipeline' ? <PipelineSection onNavigate={setSection} /> : null}
+                {entry.id === 'services' ? <ServicesSection /> : null}
+                {entry.id === 'updates' ? <UpdatesSection /> : null}
+              </PanelVisibleContext.Provider>
             </div>
           ))}
         </div>

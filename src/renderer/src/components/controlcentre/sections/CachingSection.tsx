@@ -24,6 +24,7 @@ import type {
 } from '@shared/lancache/protocol'
 import styles from './CachingSection.module.css'
 import type { StreamCacheEntry, StreamCacheUsage } from '@shared/media-hub/types'
+import { usePanelVisible } from '../panelVisibility'
 
 interface DiscoveredDaemon {
   name: string
@@ -70,6 +71,9 @@ function bytes(value: number | null | undefined): string {
 
 export function CachingSection() {
   const api = window.api?.mediaHub?.lanCache
+  // The polls below run only while this panel is on screen (see
+  // panelVisibility.ts); each restarts with an immediate refresh when it is.
+  const visible = usePanelVisible()
 
   const [pairState, setPairState] = useState<'none' | 'pending' | 'approved'>('none')
   const [status, setStatus] = useState<LanCacheStatusResponse | null>(null)
@@ -147,10 +151,11 @@ export function CachingSection() {
   // whether or not it has ever joined one, so this does not sit behind the
   // pairing state the rest of this page does.
   useEffect(() => {
+    if (!visible) return
     void Promise.resolve().then(refreshLocal)
     const timer = window.setInterval(() => void refreshLocal(), STATUS_POLL_MS)
     return () => window.clearInterval(timer)
-  }, [refreshLocal])
+  }, [refreshLocal, visible])
 
   const handleDeleteLocal = (token: string): void => {
     setLocalItems((prev) => prev.filter((entry) => entry.token !== token))
@@ -213,7 +218,7 @@ export function CachingSection() {
   // process is what flips the stored connection to approved, so this only
   // has to observe it.
   useEffect(() => {
-    if (!api || pairState !== 'pending') return
+    if (!api || pairState !== 'pending' || !visible) return
     const timer = window.setInterval(() => {
       void (async () => {
         const pair = await api.pairStatus()
@@ -225,7 +230,7 @@ export function CachingSection() {
       })()
     }, PAIR_POLL_MS)
     return () => window.clearInterval(timer)
-  }, [api, pairState, refreshStatus, refreshMyItems])
+  }, [api, pairState, refreshStatus, refreshMyItems, visible])
 
   // Joined: keep the figures live, and the device list with them when this
   // device administers the server.
@@ -236,8 +241,8 @@ export function CachingSection() {
   // cached — so it cannot be shared or removed until the app is restarted,
   // which is the point at which somebody assumes the fetch failed.
   useEffect(() => {
-    if (!api || pairState !== 'approved') return
-    const timer = window.setInterval(() => {
+    if (!api || pairState !== 'approved' || !visible) return
+    const tick = (): void => {
       if (mutatingRef.current) return
       // The device list polls WITH the figures when this device
       // administers the server. It used to load only when isAdmin
@@ -251,9 +256,13 @@ export function CachingSection() {
         refreshMyItems(),
         isAdmin ? refreshDevices() : Promise.resolve()
       ])
-    }, STATUS_POLL_MS)
+    }
+    // Straight away on coming back into view, so figures and a waiting
+    // join request are current the moment somebody looks.
+    void Promise.resolve().then(tick)
+    const timer = window.setInterval(tick, STATUS_POLL_MS)
     return () => window.clearInterval(timer)
-  }, [api, pairState, isAdmin, refreshStatus, refreshMyItems, refreshDevices])
+  }, [api, pairState, isAdmin, refreshStatus, refreshMyItems, refreshDevices, visible])
 
   useEffect(() => {
     if (!api || !isAdmin) return
