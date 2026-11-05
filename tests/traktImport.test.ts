@@ -798,6 +798,56 @@ async function ratingRetries(): Promise<void> {
   )
   store.writeSettings({ traktClientId: 'tid', traktAccessToken: plain('trakt-token') })
 
+  // A rating given under one account waits on the title's chain, and another
+  // account is signed in before its turn: it is not sent to that account,
+  // and what that account owes for the title is left alone. B's rating is
+  // older than A's, so an outcome written for A would have cleared it.
+  const owedByB = (score: number): void => {
+    const stored = db.getCache<Record<string, unknown>>(client.owedTraktRatingsKey('profile-a'), {
+      allowExpired: true
+    })
+    db.putCache(
+      client.owedTraktRatingsKey('profile-a'),
+      {
+        ...stored,
+        [dune.id]: { item: dune, score, at: Date.now() - 60_000, attempts: 0, mark: otherMark }
+      },
+      60_000
+    )
+  }
+  const owedB = (): ReturnType<typeof client.readOwedTraktRatings> =>
+    client.readOwedTraktRatings(db, 'profile-a', otherMark)
+  owedByB(9)
+  let releaseA = (): void => {}
+  const gateA = new Promise<void>((resolve) => {
+    releaseA = () => resolve()
+  })
+  const busyA = queue.titlePushQueue.run(queue.titlePushKey(dune), () => gateA)
+  status = 201
+  sent.length = 0
+  const waiting = client.pushTraktRating(dune, 4)
+  store.writeSettings({ traktClientId: 'tid', traktAccessToken: plain('someone-else') })
+  assert.equal(store.traktAccountMark(), otherMark)
+  releaseA()
+  await busyA
+  await waiting
+  assert.deepEqual(sent, [], 'a rating given under one account is not sent to the next')
+  assert.equal(owedB()[dune.id]?.score, 9, 'what the account signed in now owes is kept')
+  store.writeSettings({ traktClientId: 'tid', traktAccessToken: plain('trakt-token') })
+
+  // The switch happens while the push is out: its outcome is not written
+  // over the record of the account signed in now.
+  whileSending = () => {
+    store.writeSettings({ traktClientId: 'tid', traktAccessToken: plain('someone-else') })
+  }
+  status = 201
+  sent.length = 0
+  await client.pushTraktRating(dune, 4)
+  assert.equal(sent.length, 1)
+  assert.equal(owedB()[dune.id]?.score, 9, 'a success for one account does not clear the next')
+  store.writeSettings({ traktClientId: 'tid', traktAccessToken: plain('trakt-token') })
+  db.putCache(client.owedTraktRatingsKey('profile-a'), {}, 60_000)
+
   // Another account's owed rating is never sent.
   status = 503
   await client.pushTraktRating(dune, 7)

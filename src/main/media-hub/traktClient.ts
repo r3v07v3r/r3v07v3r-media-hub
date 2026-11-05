@@ -469,10 +469,17 @@ export async function pushTraktRating(item: TraktPushItem, rating: number): Prom
   const profile = getDatabase().activeProfile()
   const mark = traktAccountMark()
   await titlePushQueue.run(titlePushKey(item), async () => {
+    const db = getDatabase()
+    // Whose rating and whose account, checked again after the wait for the
+    // chain, as retryTraktRatings does: sent now, a rating given under the
+    // account signed out in between would go to the one signed in.
+    if (db.activeProfile() !== profile || traktAccountMark() !== mark) return
     const result = await sendTraktRating(item, score)
     if (!result) return
-    const db = getDatabase()
-    const owed = readOwedTraktRatings(db, profile, traktAccountMark())
+    // And after the send: a switch while it was out leaves the record to the
+    // account signed in now, whose owed rating this outcome must not clear.
+    if (db.activeProfile() !== profile || traktAccountMark() !== mark) return
+    const owed = readOwedTraktRatings(db, profile, mark)
     const next = recordTraktRating(owed, { item, score, mark, at, error: result.error })
     if (next !== owed) writeOwedTraktRatings(db, profile, next)
   })
