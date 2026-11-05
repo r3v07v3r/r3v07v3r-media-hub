@@ -73,8 +73,11 @@ export type SeasonEpisodes = ReadonlyMap<number, ReadonlySet<number>>
 /**
  * The sides of one row. `listed` is the episodes per season as the title's
  * metadata lists them, when the panel has them; a season not in it, or not
- * yet loaded, gets no green. Specials (season 0) are left out: the
- * comparison never looks at them.
+ * yet loaded, gets no green. Specials (season 0) are left out of every
+ * side. For anime that matches the comparison, which never reads them. A
+ * series' specials ARE compared, sent and recorded (episodeSync.ts keeps
+ * season 0 for series), so a Use choice on a series can add or remove
+ * specials that no bubble here shows.
  */
 export function showSyncSides(
   row: Pick<ShowSyncRow, 'held' | 'services'>,

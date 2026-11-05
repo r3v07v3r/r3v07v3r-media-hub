@@ -14,9 +14,19 @@
 // lives away from AppStateContext's state machine and can be reasoned about
 // on its own.
 
-import type { CatalogItem, HistoryEntry, MediaKind } from '@shared/media-hub/types'
+import type {
+  CatalogItem,
+  HistoryEntry,
+  MediaKind,
+  ProviderShortfall
+} from '@shared/media-hub/types'
 import type { OllamaTitleRef } from '@shared/media-hub/ollama'
-import { CLOSE_MATCH_RANK, mergeSearchResults, titleMatchRank } from '@shared/media-hub/titleSearch'
+import {
+  CLOSE_MATCH_RANK,
+  combinedShortfall,
+  mergeSearchResults,
+  titleMatchRank
+} from '@shared/media-hub/titleSearch'
 
 /** The kinds the app has, and the order results fall back to when nothing scores better. Movies first because that is what most questions are about. */
 const KINDS: MediaKind[] = ['movie', 'series', 'anime']
@@ -70,11 +80,16 @@ export async function searchAppCatalog(query: string): Promise<CatalogItem[]> {
  * reached. When one could not, the list holds only what the library already
  * had for that kind, and the answer panel says so: otherwise a title the
  * provider alone knew would read as one the app does not have. A kind whose
- * whole request failed counts the same way.
+ * whole request failed counts the same way. `providerReason` says which:
+ * 'slow' only when every kind that fell short was still answering when its
+ * search stopped waiting, so the panel does not call a slow catalog out of
+ * reach.
  */
-export async function searchAppCatalogWithStatus(
-  query: string
-): Promise<{ items: CatalogItem[]; providerUnreachable: boolean }> {
+export async function searchAppCatalogWithStatus(query: string): Promise<{
+  items: CatalogItem[]
+  providerUnreachable: boolean
+  providerReason?: ProviderShortfall
+}> {
   const q = query.trim()
   if (q.length < MIN_QUERY_LENGTH) return { items: [], providerUnreachable: false }
   const api = window.api?.mediaHub?.catalog
@@ -94,7 +109,8 @@ export async function searchAppCatalogWithStatus(
       perKind.map((answer) => answer.items),
       MAX_ASSISTANT_RESULTS
     ),
-    providerUnreachable: perKind.some((answer) => answer.providerUnreachable)
+    providerUnreachable: perKind.some((answer) => answer.providerUnreachable),
+    providerReason: combinedShortfall(perKind)
   }
 }
 

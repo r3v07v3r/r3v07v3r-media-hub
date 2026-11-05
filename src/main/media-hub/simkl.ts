@@ -50,6 +50,7 @@ interface SimklMediaRef {
 
 interface SimklEpisodeRef {
   number?: number
+  watched_at?: string
 }
 
 interface SimklSeasonEntry {
@@ -70,9 +71,14 @@ interface SimklAnimeRef extends SimklMediaRef {
   episodes: SimklEpisodeRef[]
 }
 
+/** A film in a history body; `watched_at` only on a retried add (withMovieWatchedAt). */
+interface SimklMovieRef extends SimklMediaRef {
+  watched_at?: string
+}
+
 /** Body for POST /sync/history — exactly one of movies/shows/anime is set per call. */
 export interface SimklHistoryPayload {
-  movies?: SimklMediaRef[]
+  movies?: SimklMovieRef[]
   shows?: SimklShowRef[]
   anime?: SimklAnimeRef[]
 }
@@ -147,18 +153,30 @@ function animeRef(item: SimklPushItem, entryId: string): SimklMediaRef | null {
  *
  * NEVER an entry without episodes. Sent to /sync/history/remove, an anime
  * reference that names none removes that entry's whole history.
+ *
+ * `watchedAt` (`season:episode` as held here, to a time) dates each
+ * episode. It is applied here rather than to the finished body, as
+ * episodeSync.ts's withWatchedAt does for shows, because only here is it
+ * known which of the show's episodes an entry's number stands for.
  */
 function animeEntries(
   item: SimklPushItem,
   episodes: readonly { season?: number | null; episode?: number | null }[],
-  membersOf: AnimeSeasonMembers | undefined
+  membersOf: AnimeSeasonMembers | undefined,
+  watchedAt?: ReadonlyMap<string, string>
 ): SimklAnimeRef[] {
-  const byEntry = new Map<string, Set<number>>()
+  // entry id -> episode number -> when it was watched here ('' for unknown)
+  const byEntry = new Map<string, Map<number, string>>()
   for (const { season, episode } of episodes) {
     const at = toSimklAnimeEpisode({ id: String(item.id), season, episode }, membersOf)
     if (!at) continue
-    const numbers = byEntry.get(at.id) ?? new Set<number>()
-    numbers.add(at.episode)
+    const numbers = byEntry.get(at.id) ?? new Map<number, string>()
+    const when = watchedAt?.get(`${season ?? 1}:${episode}`) ?? ''
+    const known = numbers.get(at.episode) ?? ''
+    // An entry that fronts no group can be asked for under two of Kitsu's
+    // season labels with the same number: the newest viewing stands.
+    const newer = isDate(when) && !(isDate(known) && Date.parse(known) > Date.parse(when))
+    numbers.set(at.episode, newer ? when : known)
     byEntry.set(at.id, numbers)
   }
   const entries: SimklAnimeRef[] = []
@@ -167,18 +185,56 @@ function animeEntries(
     if (!ref) continue
     entries.push({
       ...ref,
-      episodes: [...numbers].sort((a, b) => a - b).map((number) => ({ number }))
+      episodes: [...numbers.keys()]
+        .sort((a, b) => a - b)
+        .map((number) => {
+          const when = numbers.get(number) ?? ''
+          return isDate(when) ? { number, watched_at: new Date(when).toISOString() } : { number }
+        })
     })
   }
   return entries
 }
 
+function isDate(value: string): boolean {
+  return value !== '' && Number.isFinite(Date.parse(value))
+}
+
+/**
+ * Whether an anime row is left out of a Simkl body only because the catalog
+ * has not been grouped yet (`membersOf` undefined, as after every six-hourly
+ * crawl and on a fresh install): a later season, which toSimklAnimeEpisode
+ * will not place until it can tell a merged show from an unmerged one.
+ * Leaving it out is right, but it is owed, not unsendable: tracking.ts keeps
+ * such a push for the retry, and a retry inside the window keeps it queued
+ * without spending a try. A special, a row with no episode and an id Simkl
+ * cannot be told are never sendable, grouped or not, so they are not this.
+ */
+export function animeRowAwaitsGrouping(
+  item: { id: string | number; type?: string },
+  row: { season?: number | null; episode?: number | null },
+  membersOf: AnimeSeasonMembers | undefined
+): boolean {
+  if (membersOf || item.type !== 'anime') return false
+  if (!hasExpressibleSimklId(String(item.id))) return false
+  const { season, episode } = row
+  return (
+    typeof season === 'number' &&
+    Number.isInteger(season) &&
+    season >= 2 &&
+    typeof episode === 'number' &&
+    Number.isInteger(episode) &&
+    episode >= 1
+  )
+}
+
 function animePayload(
   item: SimklPushItem,
   episodes: readonly { season?: number | null; episode?: number | null }[],
-  membersOf: AnimeSeasonMembers | undefined
+  membersOf: AnimeSeasonMembers | undefined,
+  watchedAt?: ReadonlyMap<string, string>
 ): SimklHistoryPayload {
-  const entries = animeEntries(item, episodes, membersOf)
+  const entries = animeEntries(item, episodes, membersOf, watchedAt)
   return entries.length ? { anime: entries } : {}
 }
 
@@ -296,6 +352,21 @@ export function completedListPayload(
 }
 
 /**
+ * A film's history body dated with when it was watched here, for a retried
+ * add (tracking.ts's sendHistoryRetry): sent bare, Simkl records the viewing
+ * on the day the retry got through, which after an outage can be weeks
+ * late. No time, or one that does not parse, leaves the body as it was.
+ */
+export function withMovieWatchedAt(
+  body: SimklHistoryPayload,
+  watchedAt: string | undefined
+): SimklHistoryPayload {
+  if (!body.movies?.length || !watchedAt || !isDate(watchedAt)) return body
+  const at = new Date(watchedAt).toISOString()
+  return { ...body, movies: body.movies.map((movie) => ({ ...movie, watched_at: at })) }
+}
+
+/**
  * What Simkl answers a /sync/history (or /sync/history/remove) POST with.
  * Only `not_found` is read here, and it is the whole reason this type
  * exists: Simkl replies 200 whether or not it actually matched anything
@@ -392,18 +463,23 @@ export function seasonHistoryPayload(
  * the one request a bulk unwatch must never make by accident. An anime's
  * seasons go out as one entry each, every one naming its episodes (see
  * animeEntries).
+ *
+ * `animeWatchedAt` dates an anime's episodes (see animeEntries); a show's
+ * are dated on the finished body by episodeSync.ts's withWatchedAt.
  */
 export function titleHistoryPayload(
   item: SimklPushItem,
   seasons: readonly { season: number; episodes: readonly number[] }[],
-  membersOf?: AnimeSeasonMembers
+  membersOf?: AnimeSeasonMembers,
+  animeWatchedAt?: ReadonlyMap<string, string>
 ): SimklHistoryPayload {
   if (!hasExpressibleSimklId(String(item?.id ?? ''))) return {}
   if (item.type === 'anime') {
     return animePayload(
       item,
       seasons.flatMap(({ season, episodes }) => episodes.map((episode) => ({ season, episode }))),
-      membersOf
+      membersOf,
+      animeWatchedAt
     )
   }
   const ref = mediaRef(item)
@@ -423,7 +499,10 @@ export function titleHistoryPayload(
 /** Body for POST /scrobble/* — reports in-progress playback rather than a
  *  completed watch. Null on an id Simkl cannot be told, for the reason
  *  historyPayload gives — and for an anime episode with no place at Simkl
- *  (see animeEntries), since a stop near the end is a watched write there. */
+ *  (see animeEntries), since a stop near the end is a watched write there.
+ *  An anime play with no episode number has no place either: it is not
+ *  taken to be episode 1, because its history mark sends nothing, and a
+ *  stop would tell Simkl an episode was watched that nothing here says. */
 export function scrobblePayload(
   item: SimklPushItem,
   playback: PlaybackPosition = {},
@@ -433,7 +512,7 @@ export function scrobblePayload(
   if (!hasExpressibleSimklId(String(item?.id ?? ''))) return null
   if (item.type === 'anime') {
     const at = toSimklAnimeEpisode(
-      { id: String(item.id), season: playback.season, episode: playback.episode ?? 1 },
+      { id: String(item.id), season: playback.season, episode: playback.episode },
       membersOf
     )
     const anime = at && animeRef(item, at.id)

@@ -2,7 +2,7 @@
 //
 // After the title matches, catalog:search appends the catalogued titles whose
 // cast, creators or story labels contain the query (see credits.ts's
-// searchCredits). That pass used to start with catalogData(kind), which on a
+// matchCredits). That pass used to start with catalogData(kind), which on a
 // cold install or an expired six-hour blob joined a full catalogue crawl, so
 // a search reply could wait about twenty seconds for anime with its title
 // results already in hand. On a warm cache it still parsed the whole blob and

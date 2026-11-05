@@ -705,7 +705,7 @@ function MoreOptionsSection({
       <ToggleRow
         icon="thumbs-down"
         title="Hide disliked by default"
-        description="Anything marked “Not interested” (see a title's context menu) is hidden by default, everywhere it would otherwise appear."
+        description="Anything marked “Not interested” (see a title's context menu) is hidden by default from Movies/Series/Anime browsing and Mood Browser. It still shows, marked, in My Stuff's Planned and Lists, a title page's Similar and Rest of the series rows, and the assistant's search answers, and on Home and For You until you leave the page."
         checked={mediaHubSettings?.hideDislikedDefault ?? true}
         onChange={handleToggleHideDisliked}
       />
@@ -845,6 +845,13 @@ export default function SettingsPage({
         message: error instanceof Error ? error.message : String(error)
       }))
       setAnime4kStatus(status)
+      // Installing is the opt-in. A second switch to find before anything
+      // happened used to leave a fresh install showing no shaders and no
+      // button; since the shaders start on only for anime, it no longer
+      // protects films. The switch stays below, and can be turned off.
+      if (status.state === 'installed') {
+        await api.settings.setAnime4kEnabled(true).catch(() => {})
+      }
     }
     refreshMediaHubSettings()
   }
@@ -1209,7 +1216,7 @@ export default function SettingsPage({
               <ToggleRow
                 icon="play"
                 title="Play the next episode"
-                description="When an episode ends, offer the next one and start it after a short countdown. Movies and last episodes are unaffected."
+                description="When the credits start, an Up next card offers the next episode beside Skip credits; when the episode ends, it starts after a short countdown. Off, there is no card and Skip credits stands alone. Movies and last episodes are unaffected."
                 checked={mediaHubSettings?.autoplayNextEnabled ?? true}
                 onChange={handleSetAutoplayNext}
               />
@@ -1332,8 +1339,8 @@ export default function SettingsPage({
                   title="Anime4K shaders"
                   description={
                     anime4kStatus?.state === 'installed'
-                      ? 'Installed. Neural-network shaders that restore line art and upscale anime on the GPU while it plays. Once enabled below, the player gets an on/off button and the A key.'
-                      : 'Downloads the Anime4K v4.0.1 shader pack (under 1 MB, MIT licensed) from its GitHub release and keeps the ten files the modes below use. Nothing changes until you also enable it.'
+                      ? 'Installed. Neural-network shaders that restore line art and upscale anime on the GPU while it plays. While Use Anime4K while watching is on, the player has an on/off button and the A key.'
+                      : 'Downloads the Anime4K v4.0.1 shader pack (under 1 MB, MIT licensed) from its GitHub release and keeps the ten files the modes below use. Installing also switches on Use Anime4K while watching.'
                   }
                   label={anime4kStatus?.state === 'installed' ? 'Remove' : 'Install'}
                   busy={anime4kStatus?.state === 'installing'}
@@ -1349,7 +1356,7 @@ export default function SettingsPage({
                     <ToggleRow
                       icon="play"
                       title="Use Anime4K while watching"
-                      description="Anime starts with the shaders on; films and series start with them off. The player's Anime4K button (or the A key) switches them for the title you are watching, and that choice is kept for the rest of that title."
+                      description="Install turns this on. Anime starts with the shaders on; films and series start with them off. The player's Anime4K button (or the A key) switches them for the title you are watching, and that choice is kept for the rest of that title."
                       checked={mediaHubSettings.anime4k.enabled}
                       onChange={handleSetAnime4kEnabled}
                     />
@@ -1467,7 +1474,7 @@ export default function SettingsPage({
                 <ToggleRow
                   icon="play"
                   title="Play the next episode"
-                  description="When an episode ends, offer the next one and start it after a short countdown. Movies and last episodes are unaffected."
+                  description="When the credits start, an Up next card offers the next episode beside Skip credits; when the episode ends, it starts after a short countdown. Off, there is no card and Skip credits stands alone. Movies and last episodes are unaffected."
                   checked={mediaHubSettings?.autoplayNextEnabled ?? true}
                   onChange={handleSetAutoplayNext}
                 />

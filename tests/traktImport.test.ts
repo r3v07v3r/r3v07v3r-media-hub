@@ -20,8 +20,10 @@
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import { registerHooks } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import { createDatabase } from '../src/main/media-hub/database'
 import {
@@ -31,9 +33,13 @@ import {
 } from '../src/main/media-hub/trakt'
 import {
   OVERLAP_MS,
+  heldViewings,
   markTraktHistoryPulled,
   playsNotHeld,
   pullTraktHistory,
+  traktFilingHeldBack,
+  traktImportFailuresKey,
+  traktImportRetryAfterMs,
   traktPullKey,
   type TraktPullDeps,
   type TraktPullState
@@ -191,6 +197,8 @@ interface PullHarness {
   /** The ratings the faked import finds at Trakt. */
   importRatings: { id: string; score: number }[]
   importError: Error | null
+  /** How long the faked import reads before it answers or fails. */
+  importTakesMs: number
   /** The held set the pull handed the import, as the import read it. */
   importHeld: ReadonlySet<string> | null
   state(): TraktPullState | null
@@ -211,6 +219,7 @@ function pullHarness(): PullHarness {
     importRows: [],
     importRatings: [],
     importError: null,
+    importTakesMs: 0,
     importHeld: null,
     state: () =>
       pullDb.getCache<TraktPullState>(traktPullKey(pullDb.activeProfile()), {
@@ -238,6 +247,7 @@ function pullHarness(): PullHarness {
     // does with skipHeld.
     fullImport: async (held) => {
       h.calls.push('import')
+      h.clock += h.importTakesMs
       if (h.importError) throw h.importError
       h.importHeld = held()
       return {
@@ -429,7 +439,8 @@ async function pulls(): Promise<void> {
 
   {
     // The first pass's import refused (the anime catalog still being
-    // organised): nothing recorded, so the next pass runs it again.
+    // organised): no position recorded, so the next half-hourly pass runs it
+    // again.
     const h = pullHarness()
     h.importError = new Error('still being organised')
     const report = await pullTraktHistory(h.deps)
@@ -437,9 +448,71 @@ async function pulls(): Promise<void> {
     assert.equal(h.state(), null)
     h.importError = null
     h.calls.length = 0
+    h.clock += traktImportRetryAfterMs(1)
     await pullTraktHistory(h.deps)
     assert.deepEqual(h.calls, ['last_activities', 'import'])
     assert.equal(h.state()?.account, 'trakt-1')
+  }
+
+  {
+    // An import that keeps failing is not re-read whole on every pass: the
+    // catch-up's three-minute passes and the half-hourly job wait for it,
+    // until the next half-hourly pass after one failure, six hours after
+    // two, a day after three.
+    const h = pullHarness()
+    h.importError = new Error('Simkl could not be reached')
+    const imports = (): number => h.calls.filter((call) => call === 'import').length
+    const MIN = 60 * 1000
+    await pullTraktHistory(h.deps)
+    assert.equal(imports(), 1)
+    h.clock += 3 * MIN
+    const waiting = await pullTraktHistory(h.deps)
+    assert.deepEqual(waiting, { plays: 0, read: false }, 'a pass inside the wait asks nothing big')
+    assert.equal(imports(), 1)
+    h.clock += 30 * MIN
+    await pullTraktHistory(h.deps)
+    assert.equal(imports(), 2, 'tried again after half an hour')
+    h.clock += 5 * 60 * MIN
+    await pullTraktHistory(h.deps)
+    assert.equal(imports(), 2, 'six hours after the second failure, not five')
+    h.clock += 60 * MIN
+    await pullTraktHistory(h.deps)
+    assert.equal(imports(), 3)
+    h.clock += 23 * 60 * MIN
+    await pullTraktHistory(h.deps)
+    assert.equal(imports(), 3, 'a day after the third')
+    h.clock += 60 * MIN
+    h.importError = null
+    await pullTraktHistory(h.deps)
+    assert.equal(imports(), 4)
+    assert.equal(h.state()?.account, 'trakt-1', 'the pass that succeeds records its position')
+    // Another account's failures do not hold this one back.
+    const other = pullHarness()
+    other.db.putCache(
+      traktImportFailuresKey('profile-a'),
+      { account: 'trakt-0', failures: 5, at: other.clock },
+      24 * 60 * MIN
+    )
+    await pullTraktHistory(other.deps)
+    assert.deepEqual(other.calls, ['last_activities', 'import'])
+
+    // The wait runs from when the failed pass began, not from when its long
+    // read gave up: the job's next pass, thirty minutes after the last one
+    // began, tries again even though the import read for six minutes first.
+    const slow = pullHarness()
+    slow.importError = new Error('still being organised')
+    slow.importTakesMs = 6 * MIN
+    const began = slow.clock
+    await pullTraktHistory(slow.deps)
+    slow.importError = null
+    slow.clock = began + 30 * MIN
+    await pullTraktHistory(slow.deps)
+    assert.equal(
+      slow.calls.filter((call) => call === 'import').length,
+      2,
+      'the next half-hourly pass runs the import again'
+    )
+    assert.equal(slow.state()?.account, 'trakt-1')
   }
 
   {
@@ -457,7 +530,58 @@ async function pulls(): Promise<void> {
     assert.ok(filter > 0, 'the import filters held viewings when asked')
     assert.ok(filter < body.indexOf("backupBeforeRewrite('trakt-import')"))
     assert.ok(filter < body.indexOf('db.importWatched(remappedPlays)'))
-    assert.match(client, /MEDIA_HUB_CHANNELS\.traktImport, \(\) => importTraktLibrary\(\)\)/)
+    // The Import button leaves out what is held here too, the same set the
+    // pull's first pass hands it: played here (and so echoed back by Trakt
+    // with Trakt's own time), or un-marked with the removal still owed.
+    const button = client.slice(client.indexOf('MEDIA_HUB_CHANNELS.traktImport,'))
+    assert.match(
+      button.slice(0, 400),
+      /importTraktLibrary\(\{\s*skipHeld: \(\) => heldViewings\(getDatabase\(\)\.history\(\), removalsHeldBack\('trakt'\)\)/
+    )
+    assert.doesNotMatch(client, /importTraktLibrary\(\)\)/)
+    const held = heldViewings(
+      [
+        { id: 'tt1', season: null, episode: null },
+        { id: 'tt2', season: 1, episode: 4 }
+      ],
+      ['tt2:1:5']
+    )
+    assert.deepEqual([...held].sort(), ['tt1:movie:movie', 'tt2:1:4', 'tt2:1:5'])
+    // An episode played here and echoed back by Trakt is not a second play.
+    const echoed = [
+      { id: 'tt2', type: 'series', title: 'B', season: 1, episode: 4, watchedAt: '2026-10-05' },
+      { id: 'tt2', type: 'series', title: 'B', season: 1, episode: 6, watchedAt: '2026-10-05' }
+    ] as ImportedPlay[]
+    assert.deepEqual(
+      playsNotHeld(echoed, held).map((row) => row.episode),
+      [6]
+    )
+  }
+
+  {
+    // When series rows may be filed. A lookup nobody answered while a Simkl
+    // Client ID is set may be anime: refused, so the import writes nothing
+    // and the pull records nothing (the "Filing refused" case below), and
+    // the next pass asks again. With no Client ID there is nobody to wait
+    // for: filed as they come.
+    const ready = { resolved: 0, unanswered: 0, groupingReady: true, resolverConfigured: true }
+    assert.equal(traktFilingHeldBack(ready), null)
+    assert.match(String(traktFilingHeldBack({ ...ready, unanswered: 2 })), /Simkl could not/)
+    assert.equal(traktFilingHeldBack({ ...ready, unanswered: 2, resolverConfigured: false }), null)
+    // The grouping rule as before: only once something resolved to anime.
+    assert.equal(traktFilingHeldBack({ ...ready, groupingReady: false }), null)
+    assert.match(
+      String(traktFilingHeldBack({ ...ready, resolved: 1, groupingReady: false })),
+      /still being organised/
+    )
+    // The import's lookups keep whether anyone answered, and refuse on it.
+    const client = fs.readFileSync(
+      path.join(__dirname, '..', 'src', 'main', 'media-hub', 'traktClient.ts'),
+      'utf8'
+    )
+    const targets = client.slice(client.indexOf('async function imdbToAnimeTargets('))
+    assert.match(targets, /kitsuIdLookup\('imdb', imdbId, 'background'\)/)
+    assert.match(targets, /if \(heldBack\) throw new Error\(heldBack\)/)
   }
 
   {
@@ -512,4 +636,318 @@ async function pulls(): Promise<void> {
   }
 }
 
-void pulls().then(() => console.log('trakt import tests passed'))
+// A rating sent to Trakt that does not get through is kept and sent again,
+// as a watched push is (traktClient.ts's retryTraktRatings). Run against the
+// real client with Trakt faked at fetch; traktClient reaches Electron, so
+// 'electron' is the headless stand-in, as tests/accountMarks.test.ts loads it.
+async function ratingRetries(): Promise<void> {
+  process.env.R3_USER_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-trakt-ratings-'))
+  process.env.R3_ELECTRON_SHIM = '1'
+  const shim = pathToFileURL(
+    path.join(__dirname, '..', 'src', 'headless', 'electronShim', 'index.ts')
+  )
+  registerHooks({
+    resolve(specifier, context, next) {
+      if (specifier === 'electron') return { url: shim.href, shortCircuit: true }
+      return next(specifier, context)
+    }
+  })
+  const store = await import('../src/main/media-hub/settingsStore')
+  const { setDatabase } = await import('../src/main/media-hub/dbState')
+  const client = await import('../src/main/media-hub/traktClient')
+  const db = createDatabase(path.join(process.env.R3_USER_DATA, 'ratings.sqlite'), 'profile-a')
+  setDatabase(db)
+  const plain = (value: string): string => `plain:${Buffer.from(value, 'utf8').toString('base64')}`
+  store.writeSettings({ traktClientId: 'tid', traktAccessToken: plain('trakt-token') })
+  const mark = store.traktAccountMark()
+
+  const sent: string[] = []
+  let status = 503
+  /** Statuses for the next requests, in order, before `status` applies. */
+  const queued: number[] = []
+  /** Run once while the next request is out. */
+  let whileSending: (() => void) | null = null
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input instanceof Request ? input.url : input))
+    sent.push(`${url.pathname} ${String(init?.body ?? '')}`)
+    const during = whileSending
+    whileSending = null
+    during?.()
+    const answer = queued.shift() ?? status
+    return new Response(answer < 300 ? '{}' : '', { status: answer })
+  }) as typeof fetch
+  const owed = (): ReturnType<typeof client.readOwedTraktRatings> =>
+    client.readOwedTraktRatings(db, 'profile-a', mark)
+  const dune = { id: 'tt1160419', type: 'movie' as const, title: 'Dune' }
+
+  // Trakt down: the rating is owed, to this account.
+  await client.pushTraktRating(dune, 8)
+  assert.equal(sent.length, 1)
+  assert.equal(owed()[dune.id]?.score, 8)
+  assert.equal(owed()[dune.id]?.attempts, 0)
+  // Still down at the next pass: no try counted for an outage.
+  await client.retryTraktRatings()
+  assert.equal(owed()[dune.id]?.attempts, 0)
+  // Up again: sent, and no longer owed.
+  status = 201
+  sent.length = 0
+  await client.retryTraktRatings()
+  assert.equal(sent.length, 1)
+  assert.match(sent[0], /^\/sync\/ratings /)
+  assert.match(sent[0], /"rating":8/)
+  assert.deepEqual(owed(), {})
+
+  // A refusal counts a try; ten and it is let go.
+  status = 422
+  await client.pushTraktRating(dune, 6)
+  for (let i = 0; i < 9; i += 1) await client.retryTraktRatings()
+  assert.equal(owed()[dune.id]?.attempts, 9)
+  await client.retryTraktRatings()
+  assert.deepEqual(owed(), {})
+
+  // A cleared rating is owed as the removal it is.
+  status = 503
+  await client.pushTraktRating(dune, 0)
+  status = 201
+  sent.length = 0
+  await client.retryTraktRatings()
+  assert.match(sent[0], /^\/sync\/ratings\/remove /)
+  assert.deepEqual(owed(), {})
+
+  // Two ratings given in a row reach Trakt in that order, the newer one
+  // last. The older one, held up by a 429 and then failing, is not kept over
+  // the newer one that got through: retried, it would put the older score
+  // back at Trakt.
+  const scores = (): (string | undefined)[] => sent.map((line) => /"rating":(\d+)/.exec(line)?.[1])
+  sent.length = 0
+  queued.push(429, 503, 201)
+  await Promise.all([client.pushTraktRating(dune, 3), client.pushTraktRating(dune, 4)])
+  assert.deepEqual(scores(), ['3', '3', '4'])
+  assert.deepEqual(owed(), {}, 'the older rating that failed is not owed over the newer one')
+
+  // An owed rating whose title has been rated again since, and that rating
+  // got through, is not sent again after it.
+  status = 503
+  await client.pushTraktRating(dune, 2)
+  assert.equal(owed()[dune.id]?.score, 2)
+  status = 201
+  sent.length = 0
+  const fresh = client.pushTraktRating(dune, 7)
+  await client.retryTraktRatings()
+  await fresh
+  assert.deepEqual(scores(), ['7'], 'the old score is not sent after the new one')
+  assert.deepEqual(owed(), {})
+
+  // The account switched while the retry waited for the title's chain:
+  // nothing goes to the account signed in now, and the rating stays owed to
+  // its own.
+  const queue = await import('../src/main/media-hub/titlePushQueue')
+  status = 503
+  await client.pushTraktRating(dune, 5)
+  assert.equal(owed()[dune.id]?.score, 5)
+  let release = (): void => {}
+  const gate = new Promise<void>((resolve) => {
+    release = () => resolve()
+  })
+  const busy = queue.titlePushQueue.run(queue.titlePushKey(dune), () => gate)
+  const retrying = client.retryTraktRatings()
+  store.writeSettings({ traktClientId: 'tid', traktAccessToken: plain('someone-else') })
+  status = 201
+  sent.length = 0
+  release()
+  await busy
+  await retrying
+  assert.deepEqual(sent, [], 'a rating owed to one account is not sent to the next')
+  assert.equal(owed()[dune.id]?.score, 5, 'and it is still owed to the account it was given under')
+  store.writeSettings({ traktClientId: 'tid', traktAccessToken: plain('trakt-token') })
+
+  // The account switched while the retry's send was out, and the account
+  // signed in now owes a rating of its own: the retry's write-back leaves
+  // the record alone rather than erase that.
+  const interstellar = { id: 'tt0816692', type: 'movie' as const, title: 'Interstellar' }
+  let otherMark = ''
+  whileSending = () => {
+    store.writeSettings({ traktClientId: 'tid', traktAccessToken: plain('someone-else') })
+    otherMark = store.traktAccountMark()
+    const stored = db.getCache<Record<string, unknown>>(client.owedTraktRatingsKey('profile-a'), {
+      allowExpired: true
+    })
+    db.putCache(
+      client.owedTraktRatingsKey('profile-a'),
+      {
+        ...stored,
+        [interstellar.id]: {
+          item: interstellar,
+          score: 9,
+          at: Date.now(),
+          attempts: 0,
+          mark: otherMark
+        }
+      },
+      60_000
+    )
+  }
+  status = 201
+  sent.length = 0
+  await client.retryTraktRatings()
+  assert.equal(sent.length, 1)
+  assert.equal(
+    client.readOwedTraktRatings(db, 'profile-a', otherMark)[interstellar.id]?.score,
+    9,
+    'what the account signed in now owes is kept'
+  )
+  store.writeSettings({ traktClientId: 'tid', traktAccessToken: plain('trakt-token') })
+
+  // A rating given under one account waits on the title's chain, and another
+  // account is signed in before its turn: it is not sent to that account,
+  // and what that account owes for the title is left alone. B's rating is
+  // older than A's, so an outcome written for A would have cleared it.
+  const owedByB = (score: number): void => {
+    const stored = db.getCache<Record<string, unknown>>(client.owedTraktRatingsKey('profile-a'), {
+      allowExpired: true
+    })
+    db.putCache(
+      client.owedTraktRatingsKey('profile-a'),
+      {
+        ...stored,
+        [dune.id]: { item: dune, score, at: Date.now() - 60_000, attempts: 0, mark: otherMark }
+      },
+      60_000
+    )
+  }
+  const owedB = (): ReturnType<typeof client.readOwedTraktRatings> =>
+    client.readOwedTraktRatings(db, 'profile-a', otherMark)
+  owedByB(9)
+  let releaseA = (): void => {}
+  const gateA = new Promise<void>((resolve) => {
+    releaseA = () => resolve()
+  })
+  const busyA = queue.titlePushQueue.run(queue.titlePushKey(dune), () => gateA)
+  status = 201
+  sent.length = 0
+  const waiting = client.pushTraktRating(dune, 4)
+  store.writeSettings({ traktClientId: 'tid', traktAccessToken: plain('someone-else') })
+  assert.equal(store.traktAccountMark(), otherMark)
+  releaseA()
+  await busyA
+  await waiting
+  assert.deepEqual(sent, [], 'a rating given under one account is not sent to the next')
+  assert.equal(owedB()[dune.id]?.score, 9, 'what the account signed in now owes is kept')
+  store.writeSettings({ traktClientId: 'tid', traktAccessToken: plain('trakt-token') })
+
+  // The switch happens while the push is out: its outcome is not written
+  // over the record of the account signed in now.
+  whileSending = () => {
+    store.writeSettings({ traktClientId: 'tid', traktAccessToken: plain('someone-else') })
+  }
+  status = 201
+  sent.length = 0
+  await client.pushTraktRating(dune, 4)
+  assert.equal(sent.length, 1)
+  assert.equal(owedB()[dune.id]?.score, 9, 'a success for one account does not clear the next')
+  store.writeSettings({ traktClientId: 'tid', traktAccessToken: plain('trakt-token') })
+  db.putCache(client.owedTraktRatingsKey('profile-a'), {}, 60_000)
+
+  // Another account's owed rating is never sent.
+  status = 503
+  await client.pushTraktRating(dune, 7)
+  store.writeSettings({ traktClientId: 'tid', traktAccessToken: plain('someone-else') })
+  status = 201
+  sent.length = 0
+  await client.retryTraktRatings()
+  assert.deepEqual(sent, [])
+
+  // Last write wins: a push that settles late for an older rating changes
+  // nothing, and a success clears only what it is not older than.
+  const base = { item: dune, mark: 'm', error: 'down' }
+  const newer = client.recordTraktRating({}, { ...base, score: 9, at: 2000 })
+  assert.equal(client.recordTraktRating(newer, { ...base, score: 4, at: 1000 }), newer)
+  assert.equal(
+    client.recordTraktRating(newer, { item: dune, mark: 'm', score: 4, at: 1000 }),
+    newer,
+    'an older success does not clear a newer rating that is owed'
+  )
+  assert.deepEqual(
+    client.recordTraktRating(newer, { item: dune, mark: 'm', score: 9, at: 3000 }),
+    {}
+  )
+  console.log('trakt rating retry tests passed')
+}
+
+// An import whose history read stops at the 200-page limit says so in its
+// summary, which the Settings line shows, and not only in the log. Against
+// the real client with Trakt faked at fetch; runs after ratingRetries, which
+// has pointed 'electron' at the headless stand-in.
+async function partialImport(): Promise<void> {
+  const store = await import('../src/main/media-hub/settingsStore')
+  const { setDatabase } = await import('../src/main/media-hub/dbState')
+  const client = await import('../src/main/media-hub/traktClient')
+  const db = createDatabase(
+    path.join(process.env.R3_USER_DATA as string, 'partial.sqlite'),
+    'profile-a'
+  )
+  setDatabase(db)
+  const plain = (value: string): string => `plain:${Buffer.from(value, 'utf8').toString('base64')}`
+  store.writeSettings({ traktClientId: 'tid', traktAccessToken: plain('trakt-token') })
+
+  /** Every history page full, so the read never meets a short one. Rows with
+   *  no id are skipped by the parser, so the pages cost nothing to write. */
+  let fullPages = true
+  const pagesRead: number[] = []
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = new URL(String(input instanceof Request ? input.url : input))
+    if (!url.pathname.startsWith('/sync/history')) return new Response('[]', { status: 200 })
+    const page = Number(url.searchParams.get('page'))
+    pagesRead.push(page)
+    const rows: unknown[] = Array.from({ length: fullPages ? 100 : 1 }, () => ({
+      watched_at: '2020-01-01T00:00:00.000Z',
+      type: 'movie',
+      movie: { title: 'No id', ids: {} }
+    }))
+    if (page === 1) {
+      rows[0] = {
+        watched_at: '2019-04-02T21:15:00.000Z',
+        type: 'movie',
+        movie: { title: 'Dune', year: 2021, ids: { imdb: 'tt1160419' } }
+      }
+    }
+    return new Response(JSON.stringify(rows), { status: 200 })
+  }) as typeof fetch
+
+  // The Trakt lane sends a request a second (taskScheduler.ts), which is
+  // more than three minutes for 200 pages. A clock that moves a second each
+  // time it is read lets each page go as soon as it is asked for. Kept for
+  // both imports: the lane's last send is stamped on this clock, and back
+  // on the real one the next send would wait for that time to come round.
+  const realNow = Date.now
+  let fakeNow = realNow()
+  Date.now = () => (fakeNow += 1000)
+  try {
+    const summary = await client.importTraktLibrary()
+    assert.equal(Math.max(...pagesRead), 200, 'the limit is kept')
+    assert.equal(summary.partial, true, 'a read stopped at the limit says so')
+    assert.equal(summary.plays, 1)
+    // The position is recorded all the same: Trakt answers newest first, so
+    // what was left out is the oldest history, which no later pull reads.
+    assert.ok(db.getCache(traktPullKey('profile-a'), { allowExpired: true }))
+
+    fullPages = false
+    pagesRead.length = 0
+    const whole = await client.importTraktLibrary()
+    assert.deepEqual(pagesRead, [1], 'a short first page is the end')
+    assert.equal(whole.partial, undefined, 'a read that reached the end is not partial')
+  } finally {
+    Date.now = realNow
+  }
+  db.close()
+  console.log('trakt partial import tests passed')
+}
+
+void pulls()
+  .then(() => console.log('trakt import tests passed'))
+  .then(ratingRetries)
+  .then(partialImport)
+  .catch((error) => {
+    console.error(error)
+    process.exit(1)
+  })

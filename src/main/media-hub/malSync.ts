@@ -31,7 +31,9 @@ import {
   animeSeasonMembersWhenGrouped,
   placeAnimeEntry
 } from './animeSeasons'
+import type { MediaHubDatabase } from './database'
 import { getDatabase } from './dbState'
+import { readHistoryPending, recordHistoryPush, writeHistoryPending } from './historyRetry'
 import { fetchJson, type HttpError } from './httpClient'
 import { crossIdsForKitsu, kitsuIdForExternal } from './idBridge'
 import { handle } from './ipcGuard'
@@ -42,6 +44,8 @@ import {
   buildAuthorizeUrl,
   computeReconciliation,
   localEntryProgress,
+  MAL_AWAITING_ANIME_GROUPING,
+  malPushAwaitsGrouping,
   normalizeMalEntry,
   planMalPushes,
   type MalEntryPush
@@ -50,10 +54,13 @@ import { isAllowedExternalUrl } from './security'
 import { hasSimklContent, seasonHistoryPayload } from './simkl'
 import { simklRequest, simklWatchedSnapshot } from './simklClient'
 import {
+  carryAccountMarkThroughRefresh,
   encrypt,
+  forgetAccountMark,
   malCredentials,
   readSettings,
   simklCredentials,
+  trackingAccountMarks,
   writeSettings
 } from './settingsStore'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
@@ -95,8 +102,21 @@ async function malEnsureToken(): Promise<string> {
   }
   if (creds.clientSecret) params.client_secret = creds.clientSecret
 
+  const account = trackingAccountMarks().mal
   const result = await malTokenRequest(params)
+  // Signed out, or signed in again, while the refresh was out: its answer
+  // belongs to the connection that is gone. Written now it would bring that
+  // one back, or sit under the new sign-in's mark (pinned below) and send
+  // what that account owes to the old one. The request waiting on it was
+  // made for that connection too, so it fails rather than go to whoever is
+  // signed in now. Another refresh landing first keeps the mark, and is not
+  // this.
+  if (trackingAccountMarks().mal !== account) {
+    throw new Error('MyAnimeList was signed in or out while this request was waiting.')
+  }
   const settings = readSettings()
+  // The same account, so it keeps the mark its stamped state carries.
+  carryAccountMarkThroughRefresh(settings, 'mal')
   settings.malAccessToken = encrypt(result.access_token)
   settings.malRefreshToken = encrypt(result.refresh_token || creds.refreshToken)
   settings.malTokenExpiresAt = Date.now() + (Number(result.expires_in) || 3600) * 1000
@@ -106,23 +126,30 @@ async function malEnsureToken(): Promise<string> {
 
 /** Authenticated MAL v2 API request. Refreshes the access token first if needed (see malEnsureToken). */
 /** Exported so watchlists.ts can read the plan-to-watch list through the
- *  same token refresh and error handling as every other MAL call. */
+ *  same token refresh and error handling as every other MAL call.
+ *  `scheduling.strictBody` is for a read whose body is the whole answer:
+ *  cut off part way, it is an error rather than an empty list. */
 export async function malRequest<T = unknown>(
   pathname: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  scheduling: { strictBody?: boolean } = {}
 ): Promise<T> {
   const accessToken = await malEnsureToken()
-  return fetchJson<T>(`https://api.myanimelist.net/v2${pathname}`, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      // TODO(media-hub-integration): copied verbatim from the original
-      // app's User-Agent string — see simklClient.ts's header comment for
-      // why this isn't rebranded to this project's name.
-      'User-Agent': `r3v07v3r-media-hub/${app.getVersion()}`,
-      ...options.headers
-    }
-  })
+  return fetchJson<T>(
+    `https://api.myanimelist.net/v2${pathname}`,
+    {
+      ...options,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        // TODO(media-hub-integration): copied verbatim from the original
+        // app's User-Agent string — see simklClient.ts's header comment for
+        // why this isn't rebranded to this project's name.
+        'User-Agent': `r3v07v3r-media-hub/${app.getVersion()}`,
+        ...options.headers
+      }
+    },
+    scheduling.strictBody ? { strictBody: true } : {}
+  )
 }
 
 /** Resolves a MAL id to this app's `kitsu:<id>` catalog id, via idBridge (Simkl's cross-reference search first, Kitsu's own mapping as fallback). '' on no match. */
@@ -249,9 +276,15 @@ export async function pushMalProgress(
   // A sibling's entry is its own season whatever the caller says; only the
   // canonical id, which fronts the whole group, is told which season.
   const touched = item.id === title.id ? (season ?? title.season) : title.season
+  const history = getDatabase().history()
+  // A merged show before the grouping: held and owed, not sent to the wrong
+  // entry. See malPushAwaitsGrouping.
+  if (malPushAwaitsGrouping(history, title.id, [touched], animeGroupingReady())) {
+    return { malSynced: false, malError: MAL_AWAITING_ANIME_GROUPING }
+  }
   return sendMalPushes(
     planMalPushes(
-      getDatabase().history(),
+      history,
       { id: title.id, members: title.members, totalEpisodes: item.totalEpisodes },
       { status, seasons: [touched] }
     )
@@ -286,13 +319,68 @@ export async function pushMalTitleProgress(
   if (!malCredentials().accessToken) return { malSynced: false }
   if (!pushIsForActiveProfile(profile)) return { malSynced: false }
   const title = animeEntriesFor(item.id)
+  const history = getDatabase().history()
+  const touched = [...seasons]
+  // As pushMalProgress: a merged show before the grouping is held and owed.
+  // The history retry sends owed MyAnimeList changes through here, so it
+  // keeps them (a free try: no HTTP status) until the grouping is ready.
+  if (malPushAwaitsGrouping(history, title.id, touched, animeGroupingReady())) {
+    return { malSynced: false, malError: MAL_AWAITING_ANIME_GROUPING }
+  }
   return sendMalPushes(
     planMalPushes(
-      getDatabase().history(),
+      history,
       { id: title.id, members: title.members, totalEpisodes: item.totalEpisodes },
-      { status, seasons, seasonTotals }
+      { status, seasons: touched, seasonTotals }
     )
   )
+}
+
+/**
+ * Records how the MyAnimeList Apply's Simkl push of the episodes it pulled
+ * went, in the same per-profile record of owed pushes every mark keeps
+ * (historyRetry.ts): a failure is owed and retried at the next watch-sync
+ * pass, ten counted tries over thirty days, stamped with the Simkl account;
+ * a success clears whatever an earlier push of those episodes left owing.
+ * It used to be sent once and a failure only logged, so a Simkl outage
+ * during an Apply left those episodes missing at Simkl for good.
+ *
+ * `sentUnder` is the account marks read before the request went out and
+ * `marks` the ones read after it came back. A different Simkl account
+ * connected in between makes the outcome nobody's: recorded, a failure
+ * would be owed under the new account's mark and the retry would send the
+ * old account's episodes to it, and a success would clear what the new one
+ * is owed. So it is dropped, as pushTraktRating drops a rating's outcome
+ * (traktClient.ts).
+ */
+export function noteApplySimklPush(
+  db: Pick<MediaHubDatabase, 'getCache' | 'putCache'>,
+  profile: string,
+  sentUnder: { simkl: string },
+  marks: { simkl: string; trakt: string; mal: string },
+  push: {
+    item: { id: string; type: MediaKind; title: string }
+    season: number
+    episodes: readonly number[]
+    error?: string
+    now: number
+  }
+): void {
+  if (marks.simkl !== sentUnder.simkl) return
+  const pending = readHistoryPending(db, profile, marks)
+  const next = recordHistoryPush(
+    pending,
+    {
+      service: 'simkl',
+      mark: marks.simkl,
+      item: push.item,
+      rows: push.episodes.map((episode) => ({ season: push.season, episode })),
+      action: 'add',
+      error: push.error
+    },
+    push.now
+  )
+  if (JSON.stringify(next) !== JSON.stringify(pending)) writeHistoryPending(db, profile, next)
 }
 
 interface MalAnimeListResponse {
@@ -438,6 +526,8 @@ export function registerMalIpc(): void {
 
       const result = await malTokenRequest(params)
       const settings = readSettings()
+      // A sign-in may be a different account: its mark is its own token's.
+      forgetAccountMark(settings, 'mal')
       settings.malAccessToken = encrypt(result.access_token)
       settings.malRefreshToken = encrypt(result.refresh_token || '')
       settings.malTokenExpiresAt = Date.now() + (Number(result.expires_in) || 3600) * 1000
@@ -456,6 +546,7 @@ export function registerMalIpc(): void {
     delete s.malRefreshToken
     delete s.malTokenExpiresAt
     delete s.malClientSecret
+    forgetAccountMark(s, 'mal')
     writeSettings(s)
     stopMalServer()
     return { ok: true }
@@ -524,15 +615,20 @@ export function registerMalIpc(): void {
     MEDIA_HUB_CHANNELS.malReconcileApply,
     async (_event, diff) => {
       // Re-checked rather than trusted from the preview that produced this
-      // diff: the marker goes back to false whenever a newly crawled raw
-      // catalog is cached (see animeGroupingReady), which can happen in
-      // between somebody pressing Preview and pressing Apply.
+      // diff (see animeGroupingReady). A newly crawled raw catalog leaves a
+      // grouping already in force in place until its own grouping pass has
+      // finished (catalog.ts), but where no grouped catalog was there to
+      // keep, the marker is written false when the crawl lands, and that can
+      // happen in between somebody pressing Preview and pressing Apply.
       if (!animeGroupingReady()) {
         throw new Error(
           'Your anime library is still being organised in the background — preview the sync again once it has finished.'
         )
       }
       const results: MalReconcileApplyResult = { toLocal: [], toMal: [], ratings: [], errors: [] }
+      // Whose history the episodes below are written to, and so whose
+      // record a Simkl push that fails is owed in.
+      const profile = getDatabase().activeProfile()
       // Episodes and ratings are about to be written here from MAL: a
       // backup first (autoBackup.ts).
       if (diff?.toLocal?.length || diff?.ratingsToLocal?.length) backupBeforeRewrite('mal-apply')
@@ -569,6 +665,10 @@ export function registerMalIpc(): void {
             animeSeasonMembersWhenGrouped()
           )
           if (simklCredentials().accessToken && hasSimklContent(simklBody)) {
+            let simklError: string | undefined
+            // The account this is sent to, checked again when its outcome
+            // is recorded (noteApplySimklPush).
+            const sentUnder = trackingAccountMarks()
             try {
               await simklRequest('/sync/history', {
                 method: 'POST',
@@ -576,7 +676,17 @@ export function registerMalIpc(): void {
               })
             } catch (error) {
               logError('mal:reconcile:simkl-push', error)
+              simklError = (error as Error)?.message || String(error)
             }
+            // Kept and retried like any other push that did not reach Simkl,
+            // rather than only logged and lost.
+            noteApplySimklPush(getDatabase(), profile, sentUnder, trackingAccountMarks(), {
+              item: media,
+              season: target.season,
+              episodes: episodeNumbers,
+              error: simklError,
+              now: Date.now()
+            })
           }
           results.toLocal.push(item.kitsuId)
         } catch (error) {

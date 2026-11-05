@@ -115,12 +115,12 @@ export function PlayerSessionRail({ open, onClose }: { open: boolean; onClose: (
   const [sending, setSending] = useState(false)
   const endRef = useRef<HTMLDivElement>(null)
   // Hosting from here, mid-film: the saved display name, the form's state,
-  // and the invite code hosting answered with (party:status never returns
-  // it, so this window keeps its own copy). The code is kept with the host
-  // id of the party it was answered for and shown only while status names
-  // that same host: the rail is unsubscribed while closed, so it cannot
-  // count on seeing the leave that ended party A before party B, hosted
-  // from the main window, is the one on screen.
+  // and the invite code, from hosting's answer or from party:status (which
+  // carries it while this app hosts, wherever the party was started). The
+  // code is kept with the host id of the party it was answered for and
+  // shown only while status names that same host: the rail is unsubscribed
+  // while closed, so it cannot count on seeing the leave that ended party A
+  // before party B, hosted from the main window, is the one on screen.
   const [hostName, setHostName] = useState('')
   const [hosting, setHosting] = useState(false)
   const [hostError, setHostError] = useState<string | null>(null)
@@ -130,6 +130,9 @@ export function PlayerSessionRail({ open, onClose }: { open: boolean; onClose: (
   const applyStatus = (next: PartyStatusResult): void => {
     setStatus(next)
     if (!next.inParty) setInvite(null)
+    else if (next.role === 'host' && next.inviteCode) {
+      setInvite({ code: next.inviteCode, hostId: next.selfId ?? '' })
+    }
   }
 
   useEffect(() => {

@@ -52,6 +52,25 @@ function summarise(report: PlannedSyncReport): string {
   return parts.length ? parts.join(', ') : 'Nothing changed'
 }
 
+/** The history changes still owed, by title and service: "Watched changes
+ *  for 2 titles have not reached Trakt yet". The raw count is one entry per
+ *  service, title and episode, which made a single offline season mark read
+ *  as dozens of changes. */
+function pendingLine(report: PlannedSyncReport): string {
+  const titles = report.historyPendingTitles
+  const services = (report.historyPendingServices ?? []).map((service) => SERVICE_LABELS[service])
+  if (!titles || !services.length) {
+    return report.historyPending === 1
+      ? '1 watched change has not reached a service yet; it is retried with each sync.'
+      : `${report.historyPending} watched changes have not reached a service yet; they are retried with each sync.`
+  }
+  const named =
+    services.length === 1
+      ? services[0]
+      : `${services.slice(0, -1).join(', ')} and ${services[services.length - 1]}`
+  return `Watched changes for ${titles} title${titles === 1 ? '' : 's'} have not reached ${named} yet; they are retried with each sync.`
+}
+
 function line(report: PlannedServiceReport): string {
   if (!report.connected) return 'Not connected'
   if (report.error) return report.error
@@ -144,7 +163,9 @@ export function WatchlistSyncSection() {
             Planning something here adds it to every connected service, and un-planning removes it.
             A title that leaves a service is removed here too — but only if this app pulled it in
             from that service in the first place. Anything you added here is never removed by a
-            sync. Turn this off to keep pulling without writing anything back.
+            sync. Turn this off to keep pulling plan-to-watch lists without sending plan changes
+            back; this switch covers the plan to watch only, and watched history still reaches the
+            services.
           </span>
         </div>
         <button
@@ -200,11 +221,7 @@ export function WatchlistSyncSection() {
           {/* Watch-history pushes that failed, kept and retried with each
               sync (historyRetry.ts). Said only when there are some. */}
           {Boolean(report.historyPending) && (
-            <span className={styles.statusMessage}>
-              {report.historyPending === 1
-                ? '1 watched change has not reached a service yet; it is retried with each sync.'
-                : `${report.historyPending} watched changes have not reached a service yet; they are retried with each sync.`}
-            </span>
+            <span className={styles.statusMessage}>{pendingLine(report)}</span>
           )}
         </>
       )}

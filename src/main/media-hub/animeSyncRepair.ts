@@ -58,6 +58,7 @@ import {
   groupedIdsFor,
   regroupPlaceIsSeason,
   resolveAnimeGroupTarget,
+  seasonLookupsPending,
   seasonMatchesPage
 } from './animeSeasons'
 import { backupBeforeRewrite } from './autoBackup'
@@ -65,7 +66,7 @@ import { getDatabase } from './dbState'
 import { logError } from './logger'
 import { requestRecommendationsRebuild } from './recommendations'
 import { notifyLibraryChanged } from './rendererBridge'
-import { readSettings, writeSettings } from './settingsStore'
+import { readSettings, tmdbCredentials, writeSettings } from './settingsStore'
 
 /**
  * Bumped only if a future change makes the repair worth running again.
@@ -85,6 +86,60 @@ const REPAIR_VERSION = 3
 
 function animeRepairDone(): boolean {
   return Number(readSettings().animeIdRepairVersion || 0) >= REPAIR_VERSION
+}
+
+/**
+ * The ids a run of this version left only because a TheTVDB lookup their
+ * show's page depends on had not answered (seasonLookupsPending), kept in
+ * the settings as `animeIdRepairPending` while the version marker stays
+ * unwritten. The next run asks again about these ids and no others: an id
+ * the run already moved may still hold seasons it could not place, and
+ * taken through again, what is left of them would read as one entry's rows
+ * and be moved onto its season.
+ */
+function pendingRepairIds(settings: Record<string, unknown>): Set<string> | null {
+  const pending = settings.animeIdRepairPending as { version?: unknown; ids?: unknown } | undefined
+  if (pending?.version !== REPAIR_VERSION || !Array.isArray(pending.ids)) return null
+  return new Set(pending.ids.map(String))
+}
+
+/** Whether a merged show's page can be numbered by TMDB at all: only with a
+ *  TMDB key, the test buildGroupedAnimeVideos makes. Without one every page
+ *  is built from its members (animeRegroup.ts's animeGroupRecordsOf). */
+function tmdbPages(): boolean {
+  return Boolean(tmdbCredentials().apiKey)
+}
+
+/**
+ * Whether a regroup plan moves rows somebody here holds, which is when a
+ * backup is worth writing before it. `held` is every Kitsu id a profile has
+ * history, plays, a rating or a resume point under (the database's
+ * animeRowIds: everything the regroup moves), read only when the plan moves
+ * anything.
+ *
+ * A plan names every show whose grouping changed, across the whole
+ * catalog, and almost none of them is one anybody here has watched.
+ * Backing up for each such plan wrote a backup on every grouping change,
+ * and those took places in the rotation (autoBackup.ts). An id that is not
+ * a Kitsu id is taken to hold rows, as that list would not name it.
+ */
+export function regroupMovesHeldRows(
+  plan: { moves: { fromId: string }[]; ratings?: { fromId: string }[] },
+  held: () => readonly string[]
+): boolean {
+  const from = [...plan.moves, ...(plan.ratings ?? [])].map((move) => String(move.fromId))
+  if (!from.length) return false
+  let holding: Set<string>
+  try {
+    holding = new Set(held())
+  } catch {
+    // This runs inside the regroup's own write, so a throw here would stop
+    // the move, and a backup that cannot be decided on must not stop the
+    // step any more than one that cannot be written (autoBackup.ts). Not
+    // knowing, it backs up.
+    return true
+  }
+  return from.some((id) => !id.startsWith('kitsu:') || holding.has(id))
 }
 
 /**
@@ -118,13 +173,16 @@ export function keepAnimeHistoryWithShows(): number {
       {
         animeGroupLedger: () => db.animeGroupLedger(),
         // A backup first whenever the regroup is about to move rows, not
-        // when it only records the grouping (autoBackup.ts).
+        // when it only records the grouping (autoBackup.ts), nor when the
+        // only shows it moves are ones nobody here has watched.
         moveAnimeHistory: (plan, ledger) => {
-          if (plan.moves.length || plan.ratings?.length) backupBeforeRewrite('anime-regroup')
+          if (regroupMovesHeldRows(plan, () => db.animeRowIds())) {
+            backupBeforeRewrite('anime-regroup')
+          }
           return db.moveAnimeHistory(plan, ledger)
         }
       },
-      animeGroupRecordsOf(groups, cachedTvdbSeries),
+      animeGroupRecordsOf(groups, cachedTvdbSeries, tmdbPages()),
       regroupPlaceIsSeason
     )
     for (const miss of result.left) {
@@ -172,7 +230,8 @@ function strandedShow(id: string, showId: string): Parameters<typeof strandedSea
     return counts.get(member) || null
   }
   return {
-    group: { id: showId, members, series: cachedTvdbSeries(showId) },
+    // Numbered as the regroup reads it: by its members with no TMDB key.
+    group: { id: showId, members, series: tmdbPages() ? cachedTvdbSeries(showId) : '' },
     episodesOf,
     // The siblings the index remembers this id having, from when it
     // fronted the show: grouped_ids is written for a fronting id and never
@@ -188,8 +247,11 @@ function strandedShow(id: string, showId: string): Parameters<typeof strandedSea
  * Runs at most once per install (see REPAIR_VERSION), and only once the
  * grouping pass has actually produced the answer it needs — until then it
  * reports that it did nothing and leaves the marker alone, so the next
- * launch retries. Never throws: this is unattended background repair, and
- * a failure here must not take a launch down with it.
+ * launch retries. An id whose place could not be judged because a TheTVDB
+ * lookup had not answered leaves the marker alone as well, and the next run
+ * asks about those ids alone (pendingRepairIds). Never throws: this is
+ * unattended background repair, and a failure here must not take a launch
+ * down with it.
  */
 export function repairAnimeSyncIds(): { repaired: number; ran: boolean } {
   if (animeRepairDone()) return { repaired: 0, ran: true }
@@ -201,12 +263,15 @@ export function repairAnimeSyncIds(): { repaired: number; ran: boolean } {
     const db = getDatabase()
     const mappings = new Map<string, ContentIdRemap>()
     const stranded: AnimeHistoryMove[] = []
+    // A run after one that left ids for a lookup asks about those alone.
+    const retry = pendingRepairIds(readSettings())
+    const pending: string[] = []
     // Every profile's ids, not the active one's: "this kitsu id is season 3
     // of that show" is true for everybody, remapContentIds applies each
     // mapping across every profile, and an id only another profile holds
     // rows under needs the repair as much.
     for (const id of db.animeHistoryIds()) {
-      if (mappings.has(id)) continue
+      if (mappings.has(id) || (retry && !retry.has(id))) continue
       const target = resolveAnimeGroupTarget(id)
       // Same id back means this title is not a merged sibling — either the
       // canonical show itself or an ungrouped title, both already correct.
@@ -214,8 +279,22 @@ export function repairAnimeSyncIds(): { repaired: number; ran: boolean } {
       // Its place in the group has to be its season on the show's page, or
       // the rows would land on a different season and mark it watched (see
       // seasonMatchesPage). Where that cannot be shown they stay where they
-      // are, under an id that still opens as itself.
-      if (!seasonMatchesPage(target.id, id, target.season)) continue
+      // are, under an id that still opens as itself, and the log says why.
+      // Where it cannot be shown YET, because a lookup the answer rests on
+      // has not been made, the id is asked about again on the next run.
+      if (!seasonMatchesPage(target.id, id, target.season)) {
+        const waiting = seasonLookupsPending(target.id)
+        if (waiting) pending.push(id)
+        logError(
+          'anime:sync-repair',
+          `${id} left where it is: ${
+            waiting
+              ? `a TheTVDB lookup for ${target.id}'s seasons has not answered yet, so it is tried again on the next run`
+              : `its place in ${target.id} is not shown to be season ${target.season} of its page`
+          }`
+        )
+        continue
+      }
       // Every row of a later season is that one season of the show,
       // whatever season the row carries: the old sync wrote a 1, but a row
       // written from the season's own page carries Kitsu's label for the
@@ -238,8 +317,16 @@ export function repairAnimeSyncIds(): { repaired: number; ran: boolean } {
     if (mappings.size || stranded.length) backupBeforeRewrite('anime-repair')
     let repaired = mappings.size ? db.remapContentIds([...mappings.values()]) : 0
     if (stranded.length) repaired += db.moveAnimeHistory({ moves: stranded }).history
+    // Done only when nothing was left waiting on a lookup. Otherwise the
+    // marker stays unset and the waiting ids are noted for the next run;
+    // everything else this run decided is not asked again.
     const settings = readSettings()
-    settings.animeIdRepairVersion = REPAIR_VERSION
+    if (pending.length) {
+      settings.animeIdRepairPending = { version: REPAIR_VERSION, ids: pending }
+    } else {
+      settings.animeIdRepairVersion = REPAIR_VERSION
+      delete settings.animeIdRepairPending
+    }
     writeSettings(settings)
     // History, plays and ratings just moved to different ids. Nothing on
     // screen keyed by the old ones is right any more, so every hook starts

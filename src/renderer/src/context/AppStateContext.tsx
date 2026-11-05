@@ -42,7 +42,7 @@ import type {
   StreamResolveResult,
   WatchStatusDiscrepancy
 } from '@shared/media-hub/types'
-import type { ChangedEpisode, TitleStatus } from '@shared/media-hub/types'
+import type { ChangedEpisode, ProviderShortfall, TitleStatus } from '@shared/media-hub/types'
 import {
   mediaItemToTrackablePayload,
   catalogItemToMediaItem,
@@ -63,6 +63,9 @@ import {
 import {
   planToastAfterStatus,
   plannedToast,
+  readShowsAnnouncedAt,
+  rememberShowsAnnounced,
+  showsToAnnounce,
   toastAfterPlanToggle,
   toggleApplies,
   unplannedToast
@@ -336,6 +339,9 @@ interface AppStateValue {
   // are real or should fall back to its own mock data, since (unlike
   // `catalog` above) there's no mock blended in here.
   recommendations: Recommendation[]
+  /** The anime from the whole ranking, for the Anime library's shelf. Empty
+   *  from a backend that predates it. */
+  animeRecommendations: Recommendation[]
   /** The ranking shelved by reason — the For You page's rows. */
   recommendationRails: HomeRail[]
   /** The best of each kind, for the Movies/Series/Anime shelf. A kind with
@@ -393,6 +399,11 @@ interface AppStateValue {
    *  library. The panel says so rather than letting a missing title read
    *  as one that does not exist. */
   assistantProviderUnreachable: boolean
+  /** Set with assistantProviderUnreachable: 'slow' when every catalog that
+   *  fell short was still answering as the search stopped waiting for it,
+   *  so the note can say it did not answer in time rather than that it
+   *  could not be reached (see combinedShortfall). */
+  assistantProviderReason?: ProviderShortfall
   runAssistantQuery: (query: string) => void
   closeAssistant: () => void
 
@@ -400,7 +411,7 @@ interface AppStateValue {
   // AIAssistantInput.tsx, which is route-aware): when the current route is
   // /movies, /series, or /anime, typing + Enter calls catalog:search(kind,
   // query) — a real backend search (main/media-hub/catalog.ts's
-  // catalogSearch handler, Simkl for movies/series, Kitsu for anime) —
+  // searchCatalog handler, Cinemeta for movies/series, Kitsu for anime) —
   // instead of the fake assistant response Home's search still uses.
   // `kind` doubles as "is a category search currently active" — a
   // CategoryPage only renders the search-results view when this matches
@@ -416,6 +427,9 @@ interface AppStateValue {
      *  holds only what the library already had (see catalog.ts's
      *  searchCatalog). */
     providerUnreachable: boolean
+    /** Set with providerUnreachable: 'slow' when the catalog was still
+     *  answering as the library's hits stopped waiting for it. */
+    providerReason?: ProviderShortfall
   }
   runCategorySearch: (kind: CategoryKind, query: string) => void
   clearCategorySearch: () => void
@@ -676,6 +690,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     similarSource: 'model' | 'catalog' | null
     searching: boolean
     providerUnreachable?: boolean
+    providerReason?: ProviderShortfall
   }>({ results: [], similar: [], similarSource: null, searching: false })
   // A STACK, not a slot. Opening a title from another title (the Rest of
   // the series / Similar / Story panels) pushes a second origin, and a
@@ -728,6 +743,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     error: boolean
     /** Set only by an answered search; absent reads as reachable. */
     providerUnreachable?: boolean
+    providerReason?: ProviderShortfall
   }>({
     kind: null,
     query: '',
@@ -794,7 +810,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       results: categorySearchRaw.items.map((item) => catalogItemToMediaItem(item, adapterContext)),
       loading: categorySearchRaw.loading,
       error: categorySearchRaw.error,
-      providerUnreachable: categorySearchRaw.providerUnreachable === true
+      providerUnreachable: categorySearchRaw.providerUnreachable === true,
+      providerReason: categorySearchRaw.providerReason
     }),
     [categorySearchRaw, adapterContext]
   )
@@ -903,7 +920,25 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     // so stringifying them is far cheaper than the render it avoids.
     api
       .status()
-      .then((next) => setPartyStatus((prev) => (prev && sameJson(prev, next) ? prev : next)))
+      .then((next) => {
+        setPartyStatus((prev) => (prev && sameJson(prev, next) ? prev : next))
+        // A party hosted from the player rail never went through hostParty
+        // below, so its invite comes from the status: the Party panel's
+        // Invite and a Rooms join request both need it, and the rail's copy
+        // goes when the player closes.
+        if (next.inParty && next.role === 'host' && next.inviteCode) {
+          setPartyHostCode(next.inviteCode)
+          setPartyWanAvailable(next.beyondLan ?? null)
+          setPartyHostPort(next.port ?? null)
+        } else if (!next.inParty || next.role !== 'host') {
+          // Not hosting: a party left from the player rail ends without
+          // leaveParty below, so its code would otherwise still be offered
+          // as the Invite of whatever party this window shows next.
+          setPartyHostCode(null)
+          setPartyWanAvailable(null)
+          setPartyHostPort(null)
+        }
+      })
       .catch(() => {})
     api
       .queue()
@@ -1218,10 +1253,29 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           forgetContinueWatching(id)
           if (typeof result?.tracked === 'boolean') rememberTrackedId(trackedId, result.tracked)
           homeFeed.refresh()
+          // Remove took the title off the plan, so it gets the same "off
+          // your plan" toast as Remove from plan, and its Undo restores the
+          // row main held (restorePlan), which brings the row back here too.
+          // The plan set is updated first, or the Undo would find the title
+          // still planned and do nothing (toggleApplies).
+          if (result?.tracked === false) {
+            const removed = { ...entry.media, id: trackedId }
+            setMyList((prev) => {
+              if (!prev.has(trackedId)) return prev
+              const next = new Set(prev)
+              next.delete(trackedId)
+              return next
+            })
+            pushNotification(
+              unplannedToast(removed, activeProfileId, () =>
+                toggleMyListRef.current(removed, true, true)
+              )
+            )
+          }
         })
         .catch(() => {})
     },
-    [continueWatching, homeFeed]
+    [continueWatching, homeFeed, pushNotification, activeProfileId]
   )
 
   // A refused download is never routine — it's either something hostile
@@ -1314,6 +1368,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setSyncReviewOpen(false)
   }
 
+  // The launch check below runs once, 8 s in; by then the profile has loaded,
+  // and the record of which rows were already announced is that profile's.
+  const launchProfileRef = useRef(activeProfileId)
+  useEffect(() => {
+    launchProfileRef.current = activeProfileId
+  }, [activeProfileId])
+
   useEffect(() => {
     const api = window.api?.mediaHub?.tracking
     if (!api) return
@@ -1321,10 +1382,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       api
         .reconcileCheck()
         .then((result) => {
-          const shows = result.shows ?? []
-          setSyncShows(shows)
+          const listed = result.shows ?? []
+          setSyncShows(listed)
+          // Only rows a pass added to since the last toast are named; the
+          // rest are still in the panel, behind the bell (statusToasts.ts).
+          const profileId = launchProfileRef.current
+          const shows = showsToAnnounce(listed, readShowsAnnouncedAt(profileId))
           if (!result.discrepancies.length && !shows.length) return
           setSyncDiscrepancies(result.discrepancies)
+          if (shows.length) {
+            rememberShowsAnnounced(profileId, Math.max(...shows.map((row) => row.at)))
+          }
           const said: string[] = []
           if (result.discrepancies.length) {
             said.push(
@@ -2207,9 +2275,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       } catch (error) {
         if (error instanceof PlaybackPreparationCancelledError)
           return { started: false, target: media }
+        // Keyed by title: the message names the reason, not the title, so
+        // two titles failing alike would otherwise share one Retry.
         pushNotification({
           tone: 'error',
           message: playbackPreparationErrorMessage(error),
+          key: `play-failed:${media.id}`,
           action: {
             label: 'Retry',
             run: () => {
@@ -2936,6 +3007,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           .catch(() => {})
         return
       }
+      // Hosting, but the code has not reached this window yet (the status
+      // that carries it is a moment behind a party hosted from the player).
+      if (partyStatus?.inParty && partyStatus.role === 'host') {
+        decline("They're starting a watch party. Try again in a moment.")
+        return
+      }
       if (partyStatus?.inParty) {
         decline("They're already in someone else's watch party.")
         return
@@ -3087,16 +3164,23 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
       void (async () => {
         // --- 1. The app's own answer, with no model involved ------------
-        const { items: found, providerUnreachable } = await searchAppCatalogWithStatus(
-          question
-        ).catch(() => ({ items: [] as CatalogItem[], providerUnreachable: false }))
+        const {
+          items: found,
+          providerUnreachable,
+          providerReason
+        } = await searchAppCatalogWithStatus(question).catch(() => ({
+          items: [] as CatalogItem[],
+          providerUnreachable: false,
+          providerReason: undefined
+        }))
         if (!current()) return
         setAssistantFindings({
           results: found,
           similar: [],
           similarSource: null,
           searching: false,
-          providerUnreachable
+          providerUnreachable,
+          providerReason
         })
 
         // --- 2. What the model makes of it ------------------------------
@@ -3220,7 +3304,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }
     api.catalog
       .searchWithStatus(kind, q)
-      .then(({ items, providerUnreachable }) => {
+      .then(({ items, providerUnreachable, providerReason }) => {
         if (searchGeneration.current !== generation) return
         setCategorySearchRaw({
           kind,
@@ -3228,7 +3312,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           items,
           loading: false,
           error: false,
-          providerUnreachable
+          providerUnreachable,
+          providerReason
         })
       })
       .catch(() => {
@@ -3296,6 +3381,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       adaptCatalogItems,
       watchedIds: watchedIdsResult.watchedIds,
       recommendations: homeFeed.recommendations,
+      animeRecommendations: homeFeed.animeRecommendations,
       recommendationRails: homeFeed.rails,
       recommendationsByKind: homeFeed.byKind,
       featured: homeFeed.featured,
@@ -3313,6 +3399,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       assistantSimilarSource: assistantFindings.similarSource,
       assistantSearching: assistantFindings.searching,
       assistantProviderUnreachable: assistantFindings.providerUnreachable === true,
+      assistantProviderReason: assistantFindings.providerReason,
       runAssistantQuery,
       closeAssistant,
       categorySearch,
@@ -3397,6 +3484,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       adaptCatalogItems,
       watchedIdsResult.watchedIds,
       homeFeed.recommendations,
+      homeFeed.animeRecommendations,
       homeFeed.rails,
       homeFeed.byKind,
       homeFeed.featured,
@@ -3413,6 +3501,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       assistantFindings.similarSource,
       assistantFindings.searching,
       assistantFindings.providerUnreachable,
+      assistantFindings.providerReason,
       runAssistantQuery,
       closeAssistant,
       categorySearch,

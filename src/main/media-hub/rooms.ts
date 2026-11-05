@@ -518,6 +518,21 @@ function onRoomMessage(room: RoomState, raw: unknown): void {
     msg.type.startsWith('friend-join-') &&
     msg.toFriendId === selfId
   ) {
+    // A join request makes this app host a party for what it is playing,
+    // with no prompt, and hosting can open a router port. That is only for
+    // a room this device shares its watching with: the request is answered
+    // here, declined, and never reaches the window that would host. The
+    // Join them button only shows for shared activity, so this is a stale
+    // view (sharing just turned off) or a client that ignores it.
+    if (msg.type === 'friend-join-request' && !room.stored.sharing) {
+      sendRoomPayload(room, {
+        type: 'friend-join-declined',
+        toFriendId: String(msg.fromFriendId || ''),
+        fromFriendId: selfId,
+        reason: "They aren't sharing what they watch in this room."
+      })
+      return
+    }
     const inbound: RoomInboundMessage = {
       roomId: room.roomId,
       message: msg as unknown as RoomMessage

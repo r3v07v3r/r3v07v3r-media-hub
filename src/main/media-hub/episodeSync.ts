@@ -66,16 +66,19 @@ export interface SyncShow {
 const DAY = 24 * 60 * 60 * 1000
 
 /** How long a show stays in the record after the last pass that added to
- *  it, and the record itself after it was last written. */
+ *  it. The record itself is stored for SETTLED_TTL_MS (writeShowSync): it
+ *  carries the settled memory, which has to outlive any one row. */
 export const SHOW_SYNC_TTL_MS = 90 * DAY
 /** An episode marked here this recently may still have its own push on the
  *  way. Sending it again could land a second play at Trakt, so the
  *  comparison leaves it for the next one. */
 export const RECENT_LOCAL_MS = 15 * 60 * 1000
-/** The most shows one comparison sends episodes to per service. Each is a
- *  request, and Simkl allows an account 500 a day across every device. The
- *  rest are sent by the next comparison, which the sends themselves cause
- *  (they move the service's activity stamp). */
+/** The most shows one comparison sends episodes to per service: Simkl's
+ *  two sources (shows and anime) share one count. Each is a request, and
+ *  Simkl allows an account 500 a day across every device. The rest are sent
+ *  by the next comparison, which the sends themselves cause (they move the
+ *  service's activity stamp). A source the other left no room is not read
+ *  at all, so that a later comparison takes it up (compareEpisodeSets). */
 export const MAX_SENT_SHOWS = 20
 /** How long what was seen of a show at a service is kept after anything
  *  was last added to it: as long as a comparison's own state. */
@@ -267,7 +270,13 @@ export function writeShowSync(
   profile: string,
   record: ShowSyncRecord
 ): boolean {
-  db.putCache(showSyncKey(profile), record, SHOW_SYNC_TTL_MS, { durable: true })
+  // Stored for as long as the settled memory is kept, not a row's ninety
+  // days. The record is written only when something changes, and a cache
+  // row is pruned a month after it expires: under SHOW_SYNC_TTL_MS a quiet
+  // spell of four months took the memory of what arrived and what was sent
+  // with it, and the next comparison re-sent episodes removed at a service.
+  // Rows and settled parts still age out by their own `at` (noteMerge).
+  db.putCache(showSyncKey(profile), record, SETTLED_TTL_MS, { durable: true })
   return JSON.stringify(readShowSync(db, profile)) === JSON.stringify(normalizeRecord(record))
 }
 
@@ -791,6 +800,9 @@ export async function compareEpisodeSets(deps: CompareDeps): Promise<CompareRepo
   const { db } = deps
   const profile = db.activeProfile()
   const report: CompareReport = { compared: [], added: 0, sent: 0 }
+  // Shows sent to each service this comparison, across its sources: Simkl's
+  // shows and anime are read separately but spend one allowance.
+  const sentShows: Record<EpisodeService, number> = { simkl: 0, trakt: 0 }
   for (const source of EPISODE_SOURCES) {
     const service = SOURCE_SERVICE[source]
     const mark = deps.marks()[service]
@@ -804,6 +816,13 @@ export async function compareEpisodeSets(deps: CompareDeps): Promise<CompareRepo
       if (deps.now() - last.at < wait) continue
     }
     const first = !last || last.mark !== mark
+    // The service's count already spent by its other source (Simkl's shows
+    // go first): this one could send nothing. Read and recorded under the
+    // stamp it was read at, it would not be read again until something else
+    // moved that stamp, as no send of its own would be on the way to move
+    // it, and what it has to send would wait for that. Left unread, its
+    // stamp is not claimed, and the next pass with room compares it.
+    if (sentShows[service] >= MAX_SENT_SHOWS) continue
 
     let read: RemoteRead
     try {
@@ -890,7 +909,7 @@ export async function compareEpisodeSets(deps: CompareDeps): Promise<CompareRepo
       const unsendable = without(localOnly, sendable)
       let sent: Ep[] = []
       if (sendable.length) {
-        if (sends.length < MAX_SENT_SHOWS) {
+        if (sentShows[service] + sends.length < MAX_SENT_SHOWS) {
           sends.push({ show: here.show, eps: sendable })
           sent = sendable
         } else {
@@ -923,6 +942,7 @@ export async function compareEpisodeSets(deps: CompareDeps): Promise<CompareRepo
       deps.send(service, show, eps)
       report.sent += eps.length
     }
+    sentShows[service] += sends.length
     // A comparison that left shows unsent is recorded as partial: the next
     // moved stamp reads again, but not before PARTIAL_INTERVAL_MS, and the
     // shows sent this time are not sent again (`sentBefore`), so the rest
@@ -942,8 +962,9 @@ export async function compareEpisodeSets(deps: CompareDeps): Promise<CompareRepo
  * `watched_at` per episode; without it they record an episode the
  * comparison sends as watched at the moment it is sent, and a backlog sent
  * to a newly connected Trakt account would all land on one day of its
- * history. Anime bodies (Simkl's flat entries) are left as they are: their
- * numbers are the entry's at Simkl, not the show's here.
+ * history. Anime bodies (Simkl's flat entries) are left as they are here:
+ * their numbers are the entry's at Simkl, not the show's, so simkl.ts's
+ * titleHistoryPayload dates them as it builds them, from the same map.
  */
 export function withWatchedAt<T>(body: T, dates: ReadonlyMap<string, string>): T {
   const shows = (body as { shows?: unknown } | null)?.shows

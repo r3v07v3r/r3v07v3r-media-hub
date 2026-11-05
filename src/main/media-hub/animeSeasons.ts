@@ -123,6 +123,20 @@ export function seasonMatchesPage(showId: string, memberId: string, season: numb
 }
 
 /**
+ * Whether a no from seasonMatchesPage for the show `showId` fronts is still
+ * waiting on a lookup: the TheTVDB mapping of the show's first member, or of
+ * a later one while the first has one, was never asked for (or never
+ * answered). Such a no can turn into a yes once the grouping pass has asked;
+ * any other is the mappings' own answer. No request.
+ */
+export function seasonLookupsPending(showId: string): boolean {
+  const front = cachedTvdbMapping(showId)
+  if (front === null) return true
+  if (front === 'none') return false
+  return (groupedIdsFor(showId) ?? []).some((member) => cachedTvdbMapping(member) === null)
+}
+
+/**
  * seasonMatchesPage for the regroup (animeRegroup.ts), which asks it of
  * groupings that are gone as well as of the one that stands: was this member
  * that season of a show that has since come apart, or been re-ordered.
@@ -777,8 +791,10 @@ export const ANIME_GROUPED_KEY = 'catalog:v2:anime:grouped'
  * that window would write exactly the unreadable rows it was meant to
  * fix, and invalidating the index later cannot repair ids already
  * committed to the database. Two windows to care about, not just a fresh
- * install: catalog.ts also stamps this false whenever it caches a newly
- * crawled raw catalog, for the minutes until that catalog is grouped.
+ * install: catalog.ts also stamps this false when it caches a newly crawled
+ * raw catalog with no grouped one before it, for the minutes until that
+ * catalog is grouped. A crawl behind a grouped catalog leaves this, and the
+ * grouped catalog, as they are until its own pass has finished.
  *
  * Read with allowExpired to match groupedIdsFor, which reads the catalog
  * blob itself on the same terms — an aged-out `true` still describes the

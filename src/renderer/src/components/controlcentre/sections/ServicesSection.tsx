@@ -122,7 +122,7 @@ export function ServicesSection() {
             if (result.ok && (id === 'sonarr' || id === 'radarr')) {
               const queue = await (id === 'sonarr' ? sonarrClient : radarrClient).getQueue(config)
               if (queue.ok && queue.data) {
-                next.metric = { label: 'In queue', value: String(queue.data.length) }
+                next.metric = { label: 'In queue', value: String(queue.data.total) }
               }
             }
             if (result.ok && id === 'prowlarr') {

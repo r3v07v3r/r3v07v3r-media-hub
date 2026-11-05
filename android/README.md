@@ -40,10 +40,11 @@ need to reopen them.
 
 On every launch the app checks the GitHub releases for a newer APK on its
 channel and offers to install it (`Updater.kt`). The phone takes its channel
-from the desktop's **Control centre → Updates** when it is linked, and uses
-preview until then. A later change on the desktop reaches the phone the next
-time it is linked. A desktop still on its default channel is an exception;
-see Known limitations.
+from the desktop's **Control centre → Updates** when it is linked (a desktop
+still on its default channel sends Stable), and uses preview until then. A
+phone linked to a Stable desktop follows Stable once a stable release carries
+the APK, and stays on preview until then. A later change on the desktop
+reaches the phone the next time it is linked.
 
 Android always asks the person to confirm, and only installs an update signed
 with the same key as the build on the phone. Pull-request builds, and releases
@@ -199,9 +200,6 @@ watched.
 - Watch Party: the phone and TV app cannot host or join a party.
 - Not interested marks shared between the phone and the desktop: each keeps its
   own, and neither is sent to the tracking services.
-- A desktop left on its default channel shows Stable but sends no channel when
-  a phone links, so the phone stays on preview. Pick Preview and then Stable on
-  the desktop before linking.
 - A first launch with no catalogue source reachable: Home says it could not
   reach the backend and shows no rows, not even Continue Watching or Plan to
   Watch, until a catalogue has been fetched once.

@@ -82,7 +82,10 @@ export function CachingSection() {
   const [daemons, setDaemons] = useState<DiscoveredDaemon[]>([])
   const [discovering, setDiscovering] = useState(false)
   const [url, setUrl] = useState('')
-  const [shareTorbox, setShareTorbox] = useState(true)
+  // Starts unticked: copying a credential to another machine is an explicit
+  // opt-in (lanCache.ts's pair payload says it is never implied), so joining
+  // without reading the box below must not share the key.
+  const [shareTorbox, setShareTorbox] = useState(false)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
 

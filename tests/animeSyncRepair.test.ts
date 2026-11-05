@@ -4,17 +4,41 @@
 //
 // Exercises db.remapContentIds directly (the repair's only real work);
 // animeSyncRepair's own wrapper is a settings marker and a grouping check
-// around this call, and the grouping index it consults needs a populated
-// catalog cache rather than a unit test.
+// around this call. The last section runs that wrapper once, against a
+// grouped catalog in the cache, for when it may write the marker.
 //
 // Run with: npx tsx tests/animeSyncRepair.test.ts   (or npm.cmd test)
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import { registerHooks } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
+import { ANIME_GROUPED_KEY, invalidateAnimeGroupIndex } from '../src/main/media-hub/animeSeasons'
+import { repairAnimeSyncIds } from '../src/main/media-hub/animeSyncRepair'
 import { createDatabase } from '../src/main/media-hub/database'
+import { setDatabase } from '../src/main/media-hub/dbState'
+import { readSettings } from '../src/main/media-hub/settingsStore'
+
+// The repair's own run (repairAnimeSyncIds, at the end) keeps its marker in
+// the settings and writes a backup and a log line, all in the user-data
+// folder, which those modules find through Electron: pointed here at the
+// headless stand-in (src/headless/electronShim), as catalogSearch.test.ts
+// does for catalog.ts.
+const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-anime-repair-data-'))
+process.env.R3_USER_DATA = userData
+process.env.R3_ELECTRON_SHIM = '1'
+const shim = pathToFileURL(
+  path.join(__dirname, '..', 'src', 'headless', 'electronShim', 'index.ts')
+)
+registerHooks({
+  resolve(specifier, context, next) {
+    if (specifier === 'electron') return { url: shim.href, shortCircuit: true }
+    return next(specifier, context)
+  }
+})
 
 const PROFILE = 'profile-repair'
 
@@ -181,6 +205,27 @@ check('an id that once held the whole show gives up only its own season 1', () =
   )
 })
 
+// A special under the season's own id, numbered like one of its episodes,
+// used to read as a second season: the id's rows were taken for a whole
+// show's, only season 1 could move, and the season's rows (labelled 2 by
+// Kitsu) stayed under the id for good.
+check('a special does not make one entry’s rows a whole show’s, and is not moved', () => {
+  const db = tempDb()
+  for (const episode of [1, 2, 3]) db.markWatched(sibling, { season: 2, episode })
+  db.markWatched(sibling, { season: 0, episode: 1 })
+
+  assert.deepEqual(db.wholeShowRowsUnder('kitsu:sennen'), [], 'one entry’s rows')
+  const moved = db.remapContentIds([{ fromId: 'kitsu:sennen', toId: canonical, season: 2 }])
+
+  assert.equal(moved, 3)
+  assert.deepEqual(keys(db, canonical), ['2:1', '2:2', '2:3'])
+  assert.deepEqual(
+    keys(db, 'kitsu:sennen'),
+    ['0:1'],
+    'the special is not relabelled as the season’s first episode'
+  )
+})
+
 check('a row with no episode stays where it is', () => {
   const db = tempDb()
   db.markWatched(sibling)
@@ -209,6 +254,64 @@ check('an empty or self-referential mapping changes nothing', () => {
   assert.equal(db.remapContentIds([]), 0)
   assert.equal(db.remapContentIds([{ fromId: canonical, toId: canonical, season: 2 }]), 0)
   assert.equal(db.history().filter((h) => h.id === 'kitsu:sennen').length, 1)
+})
+
+console.log('\nrepairAnimeSyncIds')
+
+// The repair is meant to run once. It used to write its marker even when it
+// had left an id only because a TheTVDB lookup its show's page depends on
+// had not answered yet, and so that id was never repaired.
+check('an id left for a lookup that has not answered is tried again, and only it', () => {
+  const db = tempDb()
+  setDatabase(db)
+  const HOUR = 60 * 60 * 1000
+  // Two merged shows. kitsu:100's own mapping has never been looked up, so
+  // whether its second season is season 2 of its page is not known yet.
+  // kitsu:200 is numbered by TMDB, and its second member is TheTVDB's
+  // season 3: not season 2 of its page, which a later run cannot change.
+  const show = (id: string, later: string) => ({
+    id,
+    type: 'anime',
+    title: id,
+    videos: [],
+    groupedIds: [later]
+  })
+  db.putCache(
+    'catalog:v2:anime',
+    [show('kitsu:100', 'kitsu:101'), show('kitsu:200', 'kitsu:201')],
+    HOUR
+  )
+  db.putCache(ANIME_GROUPED_KEY, true, HOUR)
+  db.putCache('kitsu:tvdb:101', { seriesId: '', season: -1 }, HOUR)
+  db.putCache('kitsu:tvdb:200', { seriesId: '81797', season: 1 }, HOUR)
+  db.putCache('kitsu:tvdb:201', { seriesId: '81797', season: 3 }, HOUR)
+  invalidateAnimeGroupIndex()
+  const season = (id: string) => ({ id, type: 'anime' as const, title: id })
+  for (const episode of [1, 2, 3]) db.markWatched(season('kitsu:101'), { season: 1, episode })
+  for (const episode of [1, 2]) db.markWatched(season('kitsu:201'), { season: 1, episode })
+
+  assert.deepEqual(repairAnimeSyncIds(), { repaired: 0, ran: true })
+  assert.deepEqual(keys(db, 'kitsu:101'), ['1:1', '1:2', '1:3'])
+  assert.deepEqual(keys(db, 'kitsu:201'), ['1:1', '1:2'])
+  assert.equal(readSettings().animeIdRepairVersion, undefined, 'not done while one is waiting')
+  assert.deepEqual(readSettings().animeIdRepairPending, { version: 3, ids: ['kitsu:101'] })
+  const log = fs.readFileSync(path.join(userData, 'logs', 'media-hub.log'), 'utf8')
+  assert.match(log, /kitsu:101 left where it is: a TheTVDB lookup for kitsu:100/)
+  assert.match(log, /kitsu:201 left where it is: its place in kitsu:200 is not shown/)
+
+  // The lookup answers: kitsu:100 has no mapping, so its page is built from
+  // its members. kitsu:201's answer changes as well, but it was decided.
+  db.putCache('kitsu:tvdb:100', { seriesId: '', season: -1 }, HOUR)
+  db.putCache('kitsu:tvdb:201', { seriesId: '81797', season: 2 }, HOUR)
+  invalidateAnimeGroupIndex()
+
+  assert.deepEqual(repairAnimeSyncIds(), { repaired: 3, ran: true })
+  assert.deepEqual(keys(db, 'kitsu:100'), ['2:1', '2:2', '2:3'])
+  assert.deepEqual(keys(db, 'kitsu:101'), [])
+  assert.deepEqual(keys(db, 'kitsu:201'), ['1:1', '1:2'], 'not asked about again')
+  assert.equal(readSettings().animeIdRepairVersion, 3)
+  assert.equal(readSettings().animeIdRepairPending, undefined)
+  assert.deepEqual(repairAnimeSyncIds(), { repaired: 0, ran: true }, 'and it is done')
 })
 
 console.log(`\n${pass} passed`)

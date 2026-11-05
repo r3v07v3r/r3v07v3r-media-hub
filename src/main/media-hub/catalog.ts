@@ -260,6 +260,14 @@ let animeGrouping: { generation: number; promise: Promise<unknown> } | null = nu
 let animeGroupingPending: CatalogItem[] | null = null
 
 /**
+ * A crawled anime catalog waiting for its grouping pass while the grouped
+ * one before it is still served (see catalogListing). Cleared when the pass
+ * writes its result; still there on the next launch when the app was quit
+ * mid-pass, which is how that launch knows to group it.
+ */
+const ANIME_RAW_CATALOG_KEY = 'catalog:v2:anime:raw'
+
+/**
  * Grouping the full Kitsu crawl costs roughly one enrichment request per
  * title, plus a second relationship pass for every title without a TVDB
  * mapping. That is valuable catalog hygiene and it is also the single
@@ -309,6 +317,7 @@ function runAnimeGrouping(items: CatalogItem[], generation: number): void {
       getDatabase().putCache('catalog:v2:anime', grouped, CATALOG_TTL_MS)
       invalidateSearchPool('anime')
       getDatabase().putCache(ANIME_GROUPED_KEY, true, CATALOG_TTL_MS)
+      getDatabase().deleteCache(ANIME_RAW_CATALOG_KEY)
       // The whole point of the pass that just finished is the groupedIds
       // it worked out, so the index has to drop the pre-grouping answer
       // it may have already handed out.
@@ -318,6 +327,11 @@ function runAnimeGrouping(items: CatalogItem[], generation: number): void {
       // answer moves now, in this same tick, before anything is read or
       // written under the new one. See animeRegroup.ts.
       keepAnimeHistoryWithShows()
+      // Said out loud, as the crawl says it: the crawl's own announcement
+      // went out while the catalog was raw, so a grid that re-read then
+      // lists every season as a tile of its own, and nothing else tells it
+      // the seasons are one show now.
+      notifyLibraryChanged('anime-grouping', 'index')
     })
     .catch((error) => logError('catalog:anime-grouping', error))
     .finally(() => {
@@ -521,6 +535,12 @@ async function catalogListing(
       // out its six hours ungrouped. See ANIME_GROUPED_KEY.
       if (kind === 'anime' && db.getCache<boolean>(ANIME_GROUPED_KEY) !== true) {
         startAnimeGrouping(cached)
+      } else if (kind === 'anime' && !animeGrouping) {
+        // The same, for a crawl that landed behind a grouped catalog: that
+        // one is served, and the crawl waits for its pass under a key of
+        // its own.
+        const raw = db.getCache<CatalogItem[]>(ANIME_RAW_CATALOG_KEY)
+        if (raw?.length) startAnimeGrouping(raw)
       }
       // Seed the index from the blob we already hold, but only when it has
       // nothing for this kind.
@@ -623,14 +643,31 @@ async function catalogListing(
       throw primaryError
     }
 
-    // The catalog about to be replaced may be a grouped one, and the write
-    // below is the end of it. Watch history is filed by that grouping, so
-    // it is noted first if it has not been: on the first launch after the
-    // ledger arrived this is the only copy there will ever be of the
-    // grouping the rows were written under. Normally a comparison that
+    // The grouping in force is about to change hands: this crawl's own
+    // grouping pass replaces it when it lands. Watch history is filed by
+    // it, so it is noted first if it has not been: on the first launch
+    // after the ledger arrived this is the only copy there will ever be of
+    // the grouping the rows were written under. Normally a comparison that
     // finds nothing new.
     if (kind === 'anime') keepAnimeHistoryWithShows()
-    db.putCache(key, items, CATALOG_TTL_MS)
+    // A grouped anime catalog stays the one served until this crawl's own
+    // grouping pass has finished. Replaced by the raw crawl, every merged
+    // show was a tile per season again for the minutes the pass takes, in
+    // the grids, search and suggestions, and a later season's Simkl sends
+    // were held back as ungrouped. The raw catalog waits under a key of its
+    // own, where a launch after a quit mid-pass finds it again. Re-written
+    // with the marker so both last as long as the crawl just made.
+    const keptGrouping =
+      kind === 'anime' && db.getCache<boolean>(ANIME_GROUPED_KEY, { allowExpired: true }) === true
+        ? db.getCache<CatalogItem[]>(key, { allowExpired: true })
+        : null
+    if (keptGrouping?.length) {
+      db.putCache(key, keptGrouping, CATALOG_TTL_MS)
+      db.putCache(ANIME_GROUPED_KEY, true, CATALOG_TTL_MS)
+      db.putCache(ANIME_RAW_CATALOG_KEY, items, CATALOG_TTL_MS)
+    } else {
+      db.putCache(key, items, CATALOG_TTL_MS)
+    }
     invalidateSearchPool(kind)
     // ...and into the accumulating index, which is what this blob is on its
     // way to being replaced by (see migration 2). Written alongside rather
@@ -649,10 +686,17 @@ async function catalogListing(
     // screen that read an empty index on a fresh install (the phone's Browse
     // grid) has no other way to learn the first crawl has landed.
     notifyLibraryChanged('catalog-crawl', 'index')
+    if (keptGrouping?.length) {
+      // The grouping in force is untouched, so nothing it answers changes
+      // until the pass below writes the new one.
+      startAnimeGrouping(items)
+      return { items: keptGrouping, stale: false }
+    }
     if (kind === 'anime') {
-      // This catalog is raw until the pass below says otherwise. Written
-      // rather than left absent so a marker from the PREVIOUS catalog
-      // cannot vouch for this one.
+      // No grouping yet (a fresh install, or a catalog never grouped): this
+      // catalog is raw until the pass below says otherwise. Written rather
+      // than left absent so a marker from the PREVIOUS catalog cannot vouch
+      // for this one.
       db.putCache(ANIME_GROUPED_KEY, false, CATALOG_TTL_MS)
       invalidateAnimeGroupIndex()
       startAnimeGrouping(items)
@@ -1020,8 +1064,9 @@ async function resolveMetadata(
   // episodes, so its counts — the denominator the Completed badge and the
   // browse grid's "N episodes" read — are empty until a crawl happens to
   // re-list it. A full resolve is exactly the moment those counts are
-  // known: every title somebody opens heals its own row. Counts only —
-  // never the rank or the source a crawl assigned.
+  // known: every title somebody opens heals its own row. Counts, and the
+  // art a row was written without (a watchlist pull's) — never the rank,
+  // the source or any art a crawl assigned.
   if (!degraded) {
     db.indexRefreshFromMetadata(type, item)
     // A title the index has no row for at all — found by a remote search,
@@ -1156,6 +1201,12 @@ async function providerSearch(kind: MediaKind, query: string): Promise<CatalogIt
  *  index's own ORDER BY guarantees those come first (see indexSearch). */
 const INDEX_SEARCH_CANDIDATES = 100
 
+/** How many later seasons of merged anime one search considers, apart from
+ *  INDEX_SEARCH_CANDIDATES so they never take a place there. Each is folded
+ *  into its show, so this bounds how many shows a season's own name can
+ *  bring in. */
+const LATER_SEASON_CANDIDATES = 20
+
 /** How many title matches one search returns. Enough to page through a
  *  common word; bounded so the IPC reply stays a reply. */
 const MAX_SEARCH_RESULTS = 120
@@ -1175,8 +1226,9 @@ const PROVIDER_GRACE_MS = 4_000
  * catalog:search for one kind: the local index and the provider at once,
  * then the cast and label pass. `providerUnreachable` says the provider
  * failed or did not answer in time, so the list is what was already on this
- * device; the screens say that rather than "no matches". Under two
- * characters there is nothing to search and no provider is asked.
+ * device; the screens say that rather than "no matches", and which of the
+ * two it was (`providerReason`). Under two characters there is nothing to
+ * search and no provider is asked.
  */
 async function searchCatalog(kind: MediaKind, q: string): Promise<CatalogSearchResult> {
   if (q.length < 2) return { items: [], providerUnreachable: false }
@@ -1198,10 +1250,17 @@ async function searchCatalog(kind: MediaKind, q: string): Promise<CatalogSearchR
   // provider is the only hope, and it gets its full time.
   const remotePending = providerSearch(kind, q)
   // A later season of a merged anime is answered as its show, as the
-  // grid shows it: the index leaves its row out, and a provider hit for
-  // it is folded into the show below.
+  // grid shows it. The index leaves its row out of the main match, so it
+  // takes no place there, and finds it in a small match of its own: a
+  // season's own name ("Shippuuden") is in no show's title, and without
+  // that match only the provider could find it, and offline nothing would.
+  // Those rows, and a provider hit for a later season, are folded into the
+  // show below.
   const later = kind === 'anime' ? laterSeasons() : undefined
-  const local = getDatabase().indexSearch(kind, q, INDEX_SEARCH_CANDIDATES, later)
+  const local = [
+    ...getDatabase().indexSearch(kind, q, INDEX_SEARCH_CANDIDATES, later),
+    ...getDatabase().indexSearch(kind, q, LATER_SEASON_CANDIDATES, later, true)
+  ]
   const remote = await settleProvider(remotePending, local.length ? PROVIDER_GRACE_MS : undefined)
   const merged = mergeSearchResults(q, [local, remote.items], MAX_SEARCH_RESULTS)
   const folding = later?.size ? merged.filter((item) => later.has(String(item.id))) : []
@@ -1231,7 +1290,8 @@ async function searchCatalog(kind: MediaKind, q: string): Promise<CatalogSearchR
   const items = [...byTitle, ...searchByCredits(kind, q, seen)]
   return {
     items: kind === 'anime' ? withCurrentShowTotals(items) : items,
-    providerUnreachable: remote.unreachable
+    providerUnreachable: remote.unreachable,
+    ...(remote.reason ? { providerReason: remote.reason } : {})
   }
 }
 

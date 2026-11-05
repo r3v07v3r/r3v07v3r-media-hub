@@ -37,7 +37,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { AppNotification, MediaItem } from '@renderer/types'
-import { notificationTtlMs } from '@renderer/lib/notificationTtl'
+import { addNotification, notificationTtlMs } from '@renderer/lib/notificationTtl'
 
 interface ContextMenuTarget {
   x: number
@@ -108,7 +108,21 @@ export function OverlayProvider({ children }: { children: React.ReactNode }) {
     (notification: Omit<AppNotification, 'id' | 'createdAt'>) => {
       notificationSeq += 1
       const id = `n-${notificationSeq}`
-      setNotifications((prev) => [...prev, { ...notification, id, createdAt: Date.now() }])
+      const createdAt = Date.now()
+      // A repeat replaces the toast it repeats and the column is capped
+      // (addNotification). Clearing a timer twice is harmless, which is what
+      // lets this run inside the updater, as dismissNotificationsOutside does.
+      setNotifications((prev) => {
+        const { kept, dropped } = addNotification(prev, { ...notification, id, createdAt })
+        for (const x of dropped) {
+          const timer = timers.current.get(x.id)
+          if (timer) {
+            clearTimeout(timer)
+            timers.current.delete(x.id)
+          }
+        }
+        return kept
+      })
       const ttl = notificationTtlMs(notification)
       if (ttl === null) return
       const timer = setTimeout(() => {

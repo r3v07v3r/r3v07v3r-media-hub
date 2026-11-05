@@ -16,8 +16,9 @@ const ERROR_TTL_MS = 10_000
  * to vanish on the same 4.2s timer as "Synced 3 titles", taking its only
  * Retry with it. Two seconds of that were spent looking at a spinner, so
  * what a person saw was a Play button that did nothing and no explanation
- * anywhere. Such a toast now stays until the action is taken or it is
- * dismissed with its own close control (NotificationLayer offers one).
+ * anywhere. Such a toast now stays until the action is taken, it is
+ * dismissed with its own close control (NotificationLayer offers one), or a
+ * repeat or the column's cap takes its place (addNotification below).
  */
 export function notificationTtlMs(
   notification: Pick<AppNotification, 'tone' | 'action' | 'durationMs'>
@@ -29,4 +30,54 @@ export function notificationTtlMs(
   // way back. The close button is always there.
   if (notification.action) return null
   return notification.tone !== 'error' ? NOTIFICATION_TTL_MS : ERROR_TTL_MS
+}
+
+/** The most toasts on screen at once. The column has no scroll of its own,
+ *  and a toast that waits to be dismissed (an error with Retry, an Undo)
+ *  would otherwise stack once per failed Play until each was closed by hand. */
+export const MAX_NOTIFICATIONS = 8
+
+type Placed = Pick<
+  AppNotification,
+  'tone' | 'message' | 'action' | 'durationMs' | 'profileId' | 'key'
+>
+
+/** Whether two toasts say the same thing: same tone, words, action and
+ *  profile. A second one replaces the first rather than standing under it.
+ *  A toast with a key is the same only as one with that key: two failed
+ *  Plays can fail for the same reason, in the same words, and each Retry
+ *  is for its own title. */
+function sameNotification(a: Placed, b: Placed): boolean {
+  if (a.key !== undefined || b.key !== undefined) {
+    return a.key === b.key && a.profileId === b.profileId
+  }
+  return (
+    a.tone === b.tone &&
+    a.message === b.message &&
+    a.action?.label === b.action?.label &&
+    a.profileId === b.profileId
+  )
+}
+
+/**
+ * The toasts on screen once `next` is added, and the ones it pushed off
+ * (their timers are the caller's to clear). An earlier toast saying the same
+ * thing goes, so a fourth failed Play of the same title leaves one Retry,
+ * and past MAX_NOTIFICATIONS the oldest goes, one that would have left by
+ * itself first: a waiting Undo or Retry is kept over a passing "Synced".
+ * `next` itself is always kept.
+ */
+export function addNotification<T extends Placed>(
+  current: readonly T[],
+  next: T
+): { kept: T[]; dropped: T[] } {
+  const dropped = current.filter((x) => sameNotification(x, next))
+  const kept = current.filter((x) => !dropped.includes(x))
+  while (kept.length >= MAX_NOTIFICATIONS) {
+    const timed = kept.findIndex((x) => notificationTtlMs(x) !== null)
+    const [gone] = kept.splice(timed >= 0 ? timed : 0, 1)
+    dropped.push(gone)
+  }
+  kept.push(next)
+  return { kept, dropped }
 }

@@ -646,6 +646,9 @@ export interface ImportSummary {
   ratings: number
   /** Rows the source offered that could not be matched to a title this app knows. */
   skipped: number
+  /** Set when a read stopped at the source's page limit (Trakt's), so the
+   *  oldest history or ratings were not read. */
+  partial?: boolean
 }
 
 export interface TrackedItem {
@@ -876,6 +879,11 @@ export interface PlannedSyncReport {
    *  and are waiting to be retried — see historyRetry.ts. Filled in when the
    *  report is handed to the interface, not stored with it. */
   historyPending?: number
+  /** The same changes as the panel says them: how many titles they are
+   *  about, and the services they are owed to (tracking.ts's
+   *  summarizeHistoryPending). Filled in alongside historyPending. */
+  historyPendingTitles?: number
+  historyPendingServices?: ('simkl' | 'trakt' | 'mal')[]
 }
 
 /**
@@ -960,6 +968,14 @@ export interface HomePersonalizedResult {
   planned: TrackedItem[]
   recommendations: CatalogItem[]
   /**
+   * The Anime library's "Recommended for you" shelf: the anime from the
+   * whole stored ranking, best first, rather than the few among
+   * `recommendations` (recommendations.ts's animeShelf). Their reasons are
+   * in `recommendationReasons` with the row's. Absent from a backend that
+   * predates it; the page then takes the anime from `recommendations`.
+   */
+  animeRecommendations?: CatalogItem[]
+  /**
    * Why each suggestion is there, by title id — see RecommendationReason.
    *
    * A sidecar map rather than a field on the items, so every existing
@@ -1000,6 +1016,16 @@ export interface HomePersonalizedResult {
    * for the renderer to tell "finished" from "started".
    */
   completedIds: string[]
+  /**
+   * Set when there was no stored suggestion list and no catalog could be
+   * read, not even an expired copy. The suggestion fields are then empty,
+   * while Continue Watching and Plan to Watch, which come from the local
+   * database, are filled as always; the phone's Home says the catalog could
+   * not be reached rather than the backend. The call used to throw here; the
+   * desktop's home feed (hooks.ts) treats this as that failure, keeping the
+   * suggestions it already shows and offering Retry.
+   */
+  catalogError?: string
 }
 
 /**
@@ -1792,6 +1818,14 @@ export interface PartyStatusResult {
   allowMemberControl?: boolean
   /** See PartyNowPlayingSummary; null when nothing is playing. */
   nowPlaying?: PartyNowPlayingSummary | null
+  /** Host only: the invite code party:host answered, so the main window can
+   *  offer Invite for a party hosted from the player rail. */
+  inviteCode?: string
+  /** Host only: whether that code reaches beyond the LAN (a mapped port or
+   *  the relay) — PartyHostResult's wanAvailable || relayAttached. */
+  beyondLan?: boolean
+  /** Host only: the direct listener's port, as party:host answered. */
+  port?: number
 }
 
 export type PartyEventPayload =
@@ -2163,7 +2197,16 @@ export interface CatalogSearchResult {
    *  failed or had not answered in time, so `items` holds only what was
    *  already on this device. A screen says so instead of "no matches". */
   providerUnreachable: boolean
+  /** Why, when `providerUnreachable`: it failed, or it was still running
+   *  when the index's hits stopped waiting for it (the search's grace). A
+   *  slow catalog was reached, so the screens say it did not answer in time
+   *  rather than that it could not be reached. Absent from a backend that
+   *  predates it, which reads as 'failed'. */
+  providerReason?: ProviderShortfall
 }
+
+/** How the online catalog fell short in one search — see CatalogSearchResult. */
+export type ProviderShortfall = 'failed' | 'slow'
 
 export interface DeepScanReport {
   kind: MediaKind

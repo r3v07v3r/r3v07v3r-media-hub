@@ -26,12 +26,15 @@ import type {
 import { animeGroupingReady, laterSeasonOf } from './animeSeasons'
 import { backupBeforeRewrite } from './autoBackup'
 import { fetchJson, retryOnceOn429, type HttpError } from './httpClient'
-import { kitsuIdForExternal } from './idBridge'
+import { kitsuIdLookup } from './idBridge'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
+import type { MediaHubDatabase } from './database'
 import { getDatabase } from './dbState'
+import { HISTORY_PENDING_MAX_ATTEMPTS, HISTORY_PENDING_TTL_MS, retryFailure } from './historyRetry'
 import { requestRecommendationsRebuild } from './recommendations'
 import { mapWithLimit, type TaskPriority } from './taskScheduler'
+import { titlePushKey, titlePushQueue } from './titlePushQueue'
 import {
   hasTraktContent,
   historyPayload,
@@ -46,17 +49,22 @@ import {
   type TraktPushItem
 } from './trakt'
 import {
+  carryAccountMarkThroughRefresh,
   encrypt,
+  forgetAccountMark,
   readSettings,
+  simklCredentials,
   traktAccountMark,
   traktCredentials,
   writeSettings
 } from './settingsStore'
 import { notifyLibraryChanged } from './rendererBridge'
 import {
+  heldViewings,
   markTraktHistoryPulled,
   playsNotHeld,
   pullTraktHistory,
+  traktFilingHeldBack,
   type TraktPullReport
 } from './traktHistoryPull'
 import { withWatchedAt } from './episodeSync'
@@ -110,8 +118,12 @@ function headers(clientId: string, accessToken?: string): Record<string, string>
   }
 }
 
-function storeTokens(payload: TokenResponse): void {
+/** `how` decides the account mark: a refresh is the same account and keeps
+ *  it, a sign-in may be somebody else and starts from its own token. */
+function storeTokens(payload: TokenResponse, how: 'sign-in' | 'refresh'): void {
   const settings = readSettings()
+  if (how === 'refresh') carryAccountMarkThroughRefresh(settings, 'trakt')
+  else forgetAccountMark(settings, 'trakt')
   settings.traktAccessToken = encrypt(String(payload.access_token ?? ''))
   settings.traktRefreshToken = encrypt(String(payload.refresh_token ?? ''))
   const createdAt = Number(payload.created_at) * 1000
@@ -126,6 +138,7 @@ function clearTraktTokens(): void {
   settings.traktAccessToken = undefined
   settings.traktRefreshToken = undefined
   settings.traktExpiresAt = undefined
+  forgetAccountMark(settings, 'trakt')
   writeSettings(settings)
 }
 
@@ -186,7 +199,7 @@ async function pollDeviceToken(deviceCode: string): Promise<TraktPollOutcome> {
   if (!response) return { state: 'error', message: 'Could not reach Trakt.' }
   switch (response.status) {
     case 200: {
-      storeTokens((await response.json().catch(() => ({}))) as TokenResponse)
+      storeTokens((await response.json().catch(() => ({}))) as TokenResponse, 'sign-in')
       return { state: 'connected' }
     }
     // Waiting for the person to approve it. The overwhelmingly common answer.
@@ -215,12 +228,15 @@ async function pollDeviceToken(deviceCode: string): Promise<TraktPollOutcome> {
  *
  * Best-effort and silent: a refresh that fails leaves the existing token in
  * place to fail on its own terms, which produces one clear "not connected"
- * rather than two different errors for the same cause.
+ * rather than two different errors for the same cause. It throws only when
+ * somebody signed in or out while it was out (see below).
  */
 async function refreshIfDue(): Promise<void> {
   const { clientId, clientSecret, refreshToken, expiresAt } = traktCredentials()
   if (!clientId || !clientSecret || !refreshToken || !expiresAt) return
   if (expiresAt - Date.now() > REFRESH_WINDOW_MS) return
+  const account = traktAccountMark()
+  let moved = false
   try {
     const payload = await fetchJson<TokenResponse>(
       `${API}/oauth/token`,
@@ -237,17 +253,29 @@ async function refreshIfDue(): Promise<void> {
       },
       { priority: 'background', label: 'Trakt' }
     )
-    if (payload.access_token) storeTokens(payload)
+    // Signed out, or signed in again, while the refresh was out: its answer
+    // belongs to the connection that is gone. Written now it would bring
+    // that one back, or sit under the new sign-in's mark (storeTokens pins
+    // it) and send what that account owes to the old one. Another refresh
+    // landing first keeps the mark, and is not this.
+    moved = traktAccountMark() !== account
+    if (!moved && payload.access_token) storeTokens(payload, 'refresh')
   } catch {
     // Left to expire. See the doc comment.
   }
+  // The request waiting on this was made for that connection too: sent now,
+  // it would go to whoever is signed in.
+  if (moved) throw new Error('Trakt was signed in or out while this request was waiting.')
 }
 
-/** An authenticated Trakt call. Throws when not connected. */
+/** An authenticated Trakt call. Throws when not connected. `scheduling` is
+ *  for a read whose body is the whole answer (watchlists.ts's plan lists):
+ *  strict, a body cut off part way is an error rather than an empty list. */
 export async function traktRequest<T = unknown>(
   pathname: string,
   options: RequestInit = {},
-  priority: TaskPriority = 'interactive'
+  priority: TaskPriority = 'interactive',
+  scheduling: { strictBody?: boolean } = {}
 ): Promise<T> {
   await refreshIfDue()
   const { clientId, accessToken } = traktCredentials()
@@ -256,7 +284,7 @@ export async function traktRequest<T = unknown>(
     fetchJson<T>(
       `${API}${pathname}`,
       { ...options, headers: { ...headers(clientId, accessToken), ...options.headers } },
-      { priority, label: 'Trakt' }
+      { priority, label: 'Trakt', strictBody: scheduling.strictBody }
     )
   // A write is a push: Trakt allows one a second, and a burst that trips
   // that gets one delayed retry rather than being lost (see retryOnceOn429).
@@ -299,7 +327,8 @@ export async function traktStatus(): Promise<TraktStatus> {
 
 // ---------------------------------------------------------------------------
 // Pushes. Every one is fire-and-forget and swallows its own failure; the
-// history pushes report it, so a failed one can be kept and retried.
+// history pushes report it, so a failed one can be kept and retried, and a
+// rating that fails is kept and retried here (retryTraktRatings).
 //
 // A tracking service is a courtesy: the local database is the record, and an
 // expired token or an outage must never turn "I finished this episode" into an
@@ -394,37 +423,226 @@ export async function pushTraktTitleHistory(
   )
 }
 
-/** Sends a rating, or removes it when the score is this app's "cleared" 0. */
-export async function pushTraktRating(item: TraktPushItem, rating: number): Promise<void> {
-  if (!traktCredentials().accessToken) return
-  const score = Math.round(Number(rating))
+/**
+ * Sends one rating, or its removal for this app's "cleared" 0. Null when
+ * there is nothing Trakt could be sent (not connected, or a title Trakt
+ * cannot identify), which is not a failure.
+ */
+async function sendTraktRating(
+  item: TraktPushItem,
+  score: number
+): Promise<TraktPushResult | null> {
+  if (!traktCredentials().accessToken) return null
   // 0 is the clear action (see shared/media-hub/rating.ts), and Trakt has a
   // separate endpoint for withdrawing one — sending it as a rating would
   // record an opinion that was just taken back.
-  if (score === 0) {
-    // NOT historyPayload — see ratingRemovalPayload's own doc comment. A
-    // series rating was written at the SHOW level (ratingsPayload never
-    // adds a season/episode hierarchy), and historyPayload synthesizes one
-    // when none is given, which would ask Trakt to remove an episode-level
-    // record that was never written and leave the real rating in place.
-    const removal = ratingRemovalPayload(item)
-    if (!hasTraktContent(removal)) return
-    try {
-      await traktRequest('/sync/ratings/remove', {
-        method: 'POST',
-        body: JSON.stringify(removal)
-      })
-    } catch (error) {
-      logError('trakt:rating-remove', error)
+  //
+  // The removal is NOT historyPayload — see ratingRemovalPayload's own doc
+  // comment. A series rating was written at the SHOW level (ratingsPayload
+  // never adds a season/episode hierarchy), and historyPayload synthesizes
+  // one when none is given, which would ask Trakt to remove an
+  // episode-level record that was never written and leave the real rating
+  // in place.
+  const payload = score === 0 ? ratingRemovalPayload(item) : ratingsPayload(item, score)
+  if (!hasTraktContent(payload)) return null
+  return sendTraktHistory(
+    score === 0 ? '/sync/ratings/remove' : '/sync/ratings',
+    payload,
+    score === 0 ? 'trakt:rating-remove' : 'trakt:rating'
+  )
+}
+
+/**
+ * Sends a rating, or removes it when the score is this app's "cleared" 0.
+ * A rating that does not get through is kept and sent again
+ * (retryTraktRatings), as a failed watched push is.
+ *
+ * On the title's one chain (titlePushQueue.ts), so two ratings given in a
+ * row reach Trakt in the order they were given and the newer one settles
+ * last. Sent side by side, an older one held up by a 429 could land after
+ * the newer one, or fail after it got through and be kept, and the retry
+ * would then put the older score back at Trakt.
+ */
+export async function pushTraktRating(item: TraktPushItem, rating: number): Promise<void> {
+  const score = Math.round(Number(rating))
+  const at = Date.now()
+  const profile = getDatabase().activeProfile()
+  const mark = traktAccountMark()
+  await titlePushQueue.run(titlePushKey(item), async () => {
+    const db = getDatabase()
+    // Whose rating and whose account, checked again after the wait for the
+    // chain, as retryTraktRatings does: sent now, a rating given under the
+    // account signed out in between would go to the one signed in.
+    if (db.activeProfile() !== profile || traktAccountMark() !== mark) return
+    const result = await sendTraktRating(item, score)
+    if (!result) return
+    // And after the send: a switch while it was out leaves the record to the
+    // account signed in now, whose owed rating this outcome must not clear.
+    if (db.activeProfile() !== profile || traktAccountMark() !== mark) return
+    const owed = readOwedTraktRatings(db, profile, mark)
+    const next = recordTraktRating(owed, { item, score, mark, at, error: result.error })
+    if (next !== owed) writeOwedTraktRatings(db, profile, next)
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Ratings that did not reach Trakt.
+//
+// On the terms the owed watched pushes are kept on (historyRetry.ts): per
+// profile, stamped with the account it was owed to and never sent to
+// another, ten counted tries, given up thirty days after the last write. A
+// record of its own rather than an entry in that one: a rating is one value
+// per title, not an episode, and that record's reader drops any entry that
+// is not an episode push, which would erase these on its next write.
+// ---------------------------------------------------------------------------
+
+/** One rating Trakt has not taken yet. Keyed by the title: the newest
+ *  rating given here is the one Trakt should end up with. */
+export interface OwedTraktRating {
+  item: TraktPushItem
+  /** The score, 0 for a cleared rating (sent as a removal). */
+  score: number
+  /** When the rating was given here. A later one replaces it; an earlier
+   *  push settling late never does. */
+  at: number
+  attempts: number
+  /** traktAccountMark when it was given. */
+  mark: string
+  lastError?: string
+}
+
+export type OwedTraktRatings = Record<string, OwedTraktRating>
+
+export function owedTraktRatingsKey(profile: string): string {
+  return `trakt:pending-ratings:v1:${profile}`
+}
+
+/** What is owed to the Trakt account connected now; anything else is
+ *  inert and left out. */
+export function readOwedTraktRatings(
+  db: Pick<MediaHubDatabase, 'getCache'>,
+  profile: string,
+  mark: string
+): OwedTraktRatings {
+  const stored = db.getCache<Record<string, OwedTraktRating>>(owedTraktRatingsKey(profile), {
+    allowExpired: true
+  })
+  const out: OwedTraktRatings = {}
+  if (!stored || typeof stored !== 'object' || !mark) return out
+  for (const [id, entry] of Object.entries(stored)) {
+    if (
+      entry &&
+      typeof entry === 'object' &&
+      entry.mark === mark &&
+      typeof entry.score === 'number' &&
+      typeof entry.at === 'number' &&
+      typeof entry.attempts === 'number' &&
+      entry.item &&
+      typeof entry.item.id === 'string'
+    ) {
+      out[id] = entry
     }
-    return
   }
-  const payload = ratingsPayload(item, score)
-  if (!hasTraktContent(payload)) return
-  try {
-    await traktRequest('/sync/ratings', { method: 'POST', body: JSON.stringify(payload) })
-  } catch (error) {
-    logError('trakt:rating', error)
+  return out
+}
+
+function writeOwedTraktRatings(
+  db: Pick<MediaHubDatabase, 'putCache'>,
+  profile: string,
+  owed: OwedTraktRatings
+): void {
+  db.putCache(owedTraktRatingsKey(profile), owed, HISTORY_PENDING_TTL_MS, { durable: true })
+}
+
+/**
+ * Folds one rating push into what is owed: a push that got through clears
+ * the title, one that failed is owed. Last write wins per title: an outcome
+ * for a rating older than the one on record changes nothing. The same
+ * object back when nothing changed.
+ */
+export function recordTraktRating(
+  owed: OwedTraktRatings,
+  push: { item: TraktPushItem; score: number; mark: string; at: number; error?: string }
+): OwedTraktRatings {
+  const id = String(push.item.id)
+  const current = owed[id]
+  if (current && current.at > push.at) return owed
+  if (push.error === undefined) {
+    if (!current) return owed
+    const next = { ...owed }
+    delete next[id]
+    return next
+  }
+  if (!push.mark) return owed
+  return {
+    ...owed,
+    [id]: {
+      item: push.item,
+      score: push.score,
+      at: push.at,
+      attempts: 0,
+      mark: push.mark,
+      lastError: push.error
+    }
+  }
+}
+
+/**
+ * Sends the owed ratings again: every watch-sync pass and every catch-up,
+ * through pullTraktHistoryNow. Each settles only the entry it read, so a
+ * rating given while it was out wins. A failure counts a try only when Trakt
+ * answered with a refusal that is not about load (historyRetry.ts's
+ * retryFailure): an outage costs no tries, and stops this pass's sends.
+ *
+ * Each one is sent on its title's chain, as pushTraktRating sends, and only
+ * if it is still owed when its turn comes: a rating given since, which got
+ * through, has cleared it, and sending the old score after it would put
+ * that back at Trakt.
+ */
+export async function retryTraktRatings(): Promise<void> {
+  const db = getDatabase()
+  const profile = db.activeProfile()
+  const mark = traktAccountMark()
+  if (!mark) return
+  const owed = readOwedTraktRatings(db, profile, mark)
+  for (const [id, entry] of Object.entries(owed)) {
+    if (db.activeProfile() !== profile || traktAccountMark() !== mark) return
+    let stop = false
+    await titlePushQueue.run(titlePushKey(entry.item), async () => {
+      // Whose ratings and whose account, checked again after the wait for
+      // the chain, as the history retry does (tracking.ts): sent now, a
+      // rating owed to the account signed out in between would go to the
+      // one signed in, and the write-back would erase what that one owes.
+      if (db.activeProfile() !== profile || traktAccountMark() !== mark) return
+      const due = readOwedTraktRatings(db, profile, mark)[id]
+      if (!due || due.at !== entry.at) return
+      const result = await sendTraktRating(due.item, due.score)
+      // And after the send, for the write-back: a switch while it was out
+      // leaves the record to the account signed in now.
+      if (db.activeProfile() !== profile || traktAccountMark() !== mark) return
+      const now = readOwedTraktRatings(db, profile, mark)
+      const still = now[id]
+      // Replaced while it was out: the newer rating is owed, not this one.
+      if (!still || still.at !== due.at) return
+      const failure = result?.error === undefined ? null : retryFailure(result.status)
+      if (!failure) {
+        // Sent, or nothing left that Trakt could be sent.
+        delete now[id]
+      } else {
+        const attempts = still.attempts + (failure.counts ? 1 : 0)
+        // An outage that never ends does not keep it for ever either.
+        const expired = Date.now() - still.at > HISTORY_PENDING_TTL_MS
+        if (attempts >= HISTORY_PENDING_MAX_ATTEMPTS || expired) {
+          logError('trakt:rating-abandoned', new Error(`gave up rating ${id}: ${result?.error}`))
+          delete now[id]
+        } else {
+          now[id] = { ...still, attempts, lastError: result?.error }
+        }
+      }
+      writeOwedTraktRatings(db, profile, now)
+      stop = Boolean(failure?.stopsService)
+    })
+    if (stop) return
   }
 }
 
@@ -500,6 +718,10 @@ async function readAllPages(pathname: string): Promise<{ rows: unknown[]; trunca
   return { rows, truncated: true }
 }
 
+/** Whether the log has been told that, with no Simkl Client ID, Trakt's
+ *  anime is filed as plain series. Once per run is enough. */
+let warnedNoAnimeResolver = false
+
 /**
  * Trakt has no concept of anime as its own category — everything comes
  * back from parseTraktHistory/parseTraktRatings typed 'series', keyed by
@@ -521,9 +743,11 @@ async function imdbToAnimeTargets(
   imdbIds: string[]
 ): Promise<Map<string, { id: string; season: number }>> {
   const kitsuIds = new Map<string, number>()
+  let unanswered = 0
   await mapWithLimit(imdbIds, async (imdbId) => {
-    const kitsuId = await kitsuIdForExternal('imdb', imdbId, 'background')
-    if (kitsuId) kitsuIds.set(imdbId, kitsuId)
+    const lookup = await kitsuIdLookup('imdb', imdbId, 'background')
+    if (lookup.kitsuId) kitsuIds.set(imdbId, lookup.kitsuId)
+    else if (!lookup.answered) unanswered += 1
   })
 
   // Resolved to anime, but with no grouping to resolve them AGAINST: every
@@ -535,10 +759,25 @@ async function imdbToAnimeTargets(
   //
   // Deliberately checked only once something actually resolved to anime:
   // a library with no anime in it has nothing riding on the grouping pass
-  // and has no business being blocked on it.
-  if (kitsuIds.size && !animeGroupingReady()) {
-    throw new Error(
-      'Your anime library is still being organised in the background — run the import again once it has finished.'
+  // and has no business being blocked on it. A lookup Simkl did not answer
+  // is refused the same way, for the same reason (traktFilingHeldBack).
+  const resolverConfigured = Boolean(simklCredentials().clientId)
+  const heldBack = traktFilingHeldBack({
+    resolved: kitsuIds.size,
+    unanswered,
+    groupingReady: animeGroupingReady(),
+    resolverConfigured
+  })
+  if (heldBack) throw new Error(heldBack)
+  if (unanswered && !resolverConfigured && !warnedNoAnimeResolver) {
+    // Filed as plain series, as before: with no Client ID nobody can say
+    // which shows are anime, however long this waits. Said once, in the log.
+    warnedNoAnimeResolver = true
+    logError(
+      'trakt:anime-ids',
+      new Error(
+        'No Simkl Client ID: anime from Trakt is filed as a plain series under its IMDb id. Add one in Settings for it to land on its anime page.'
+      )
     )
   }
 
@@ -610,9 +849,10 @@ function remapAnimeRatings<T extends { id: string; type: 'movie' | 'series' }>(
 
 export interface TraktImportOptions {
   /** Viewings to leave out, in db.history()'s `id:season:episode` form, read
-   *  just before the write. The history pull's first pass passes what is
-   *  held here (traktHistoryPull.ts), so a viewing played here and echoed
-   *  back by Trakt is not a second play; the Import button passes nothing. */
+   *  just before the write. The history pull's first pass and the Import
+   *  button both pass what is held here (traktHistoryPull.ts's
+   *  heldViewings), so a viewing played here and echoed back by Trakt is not
+   *  a second play. */
   skipHeld?: () => ReadonlySet<string>
 }
 
@@ -684,12 +924,18 @@ export async function importTraktLibrary(options: TraktImportOptions = {}): Prom
     ratings: db.importRatings(remappedRatings),
     skipped: plays.skipped + rated.reduce((total, parsed) => total + parsed.skipped, 0)
   }
-  // The account's past is in; the pull takes it from here.
+  // The account's past is in; the pull takes it from here. A truncated read
+  // records the same position: Trakt answers newest first, so what it left
+  // out is the oldest history, which no later pull or import would reach
+  // either, and without a position every pull would read the whole account
+  // again up to the same limit.
   if (traktAccountMark() === account) markTraktHistoryPulled(db, profile, account, startedAt)
 
   // Not silent. See IMPORT_MAX_PAGES — a truncated read that reports success
-  // tells somebody their history is imported when part of it is not.
+  // tells somebody their history is imported when part of it is not. The
+  // summary says so to the Settings line as well as the log.
   if (history.truncated || movieRatings.truncated || showRatings.truncated) {
+    summary.partial = true
     logError(
       'trakt:import',
       new Error(`Stopped after ${IMPORT_MAX_PAGES} pages — the import is partial.`)
@@ -719,7 +965,24 @@ export function pullTraktHistoryNow(
   merged?: (rows: ImportedPlay[]) => void
 ): Promise<TraktPullReport> {
   if (pullInFlight) return pullInFlight
-  const run = pullTraktHistory({
+  // Owed ratings first, on the same passes: a failure there is logged and
+  // never holds up the pull.
+  const run = retryTraktRatings()
+    .catch((error) => logError('trakt:rating-retry', error))
+    .then(() => pullTraktHistoryOnce(priority, removalsOwed, merged))
+    .finally(() => {
+      pullInFlight = null
+    })
+  pullInFlight = run
+  return run
+}
+
+function pullTraktHistoryOnce(
+  priority: TaskPriority,
+  removalsOwed?: () => ReadonlySet<string>,
+  merged?: (rows: ImportedPlay[]) => void
+): Promise<TraktPullReport> {
+  return pullTraktHistory({
     db: getDatabase(),
     account: traktAccountMark,
     lastActivities: () => traktRequest('/sync/last_activities', {}, priority),
@@ -737,11 +1000,7 @@ export function pullTraktHistoryNow(
     },
     now: () => Date.now(),
     log: logError
-  }).finally(() => {
-    pullInFlight = null
   })
-  pullInFlight = run
-  return run
 }
 
 export function registerTraktIpc(): void {
@@ -787,7 +1046,17 @@ export function registerTraktIpc(): void {
     return outcome
   })
 
-  handle<undefined, ImportSummary>(MEDIA_HUB_CHANNELS.traktImport, () => importTraktLibrary())
+  // A viewing held here is left out, as the pull's first pass leaves it out:
+  // every episode played here was pushed to Trakt and comes back stamped with
+  // Trakt's own time, which would otherwise be written as a second play. So
+  // is one whose removal Trakt has not taken yet. tracking.ts imports this
+  // module, hence the import at the call.
+  handle<undefined, ImportSummary>(MEDIA_HUB_CHANNELS.traktImport, async () => {
+    const { removalsHeldBack } = await import('./tracking')
+    return importTraktLibrary({
+      skipHeld: () => heldViewings(getDatabase().history(), removalsHeldBack('trakt'))
+    })
+  })
 
   handle<undefined, { ok: true }>(MEDIA_HUB_CHANNELS.traktDisconnect, () => {
     clearTraktTokens()

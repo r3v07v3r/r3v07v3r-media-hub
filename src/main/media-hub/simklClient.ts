@@ -230,6 +230,17 @@ interface SimklWatchedSnapshot {
 }
 
 /**
+ * How the snapshot's library reads are made: strict about the body, with the
+ * library reads' longer timeout. The lenient default turns a body cut off by
+ * the timeout or a dropped connection into `{}`, which reads as "Simkl has
+ * nothing watched" and was then cached and diffed as a complete answer: every
+ * film watched here showed in Sync review as not watched at Simkl. Strict, a
+ * cut-off read is an error and lands in the stale-cache or `complete: false`
+ * fallback below like any other failure.
+ */
+const WHOLE_READ = { timeoutMs: LIBRARY_TIMEOUT_MS, strictBody: true } as const
+
+/**
  * Flattened, cached view of everything Simkl reports as watched for the
  * connected account (movies + show episodes). Never throws for a Simkl
  * problem — callers merge this into local watch history, and a tracking
@@ -261,12 +272,14 @@ export async function simklWatchedSnapshot(
       simklRequest<SimklMoviesPayload>(
         '/sync/all-items/movies/completed?extended=full',
         {},
-        priority
+        priority,
+        WHOLE_READ
       ),
       simklRequest<SimklShowsPayload>(
         '/sync/all-items/shows/all?extended=full&episode_watched_at=yes',
         {},
-        priority
+        priority,
+        WHOLE_READ
       )
     ])
     // These requests take seconds, and signing out or authorizing someone
@@ -323,7 +336,8 @@ async function simklWatchedMovies(
     const movies = await simklRequest<SimklMoviesPayload>(
       '/sync/all-items/movies/completed?extended=full',
       {},
-      priority
+      priority,
+      WHOLE_READ
     )
     if (simklAccountMark() !== account) return { entries: [], complete: false, fetched: false }
     const entries = watchedFromAllItems(movies)

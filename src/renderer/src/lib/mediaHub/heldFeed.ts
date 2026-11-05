@@ -30,6 +30,8 @@ export type HeldChange = Partial<Pick<MediaItem, 'watched' | 'completed'>>
 
 export interface HoldableFeed {
   recommendations: Recommendation[]
+  /** The Anime library's shelf, held as the row is. */
+  animeRecommendations?: Recommendation[]
   featured: MediaItem[]
   rails: HomeRail[]
   /** The library pages' own shelves — held like `recommendations`. */
@@ -67,7 +69,8 @@ export function holdEntries<T>(
 
 /**
  * The fresh feed with the held titles back in the recommendations, the
- * library pages' per-kind shelves, the hero's pool and the For You rails. A held copy takes its plan state from
+ * Anime library's shelf, the library pages' per-kind shelves, the hero's
+ * pool and the For You rails. A held copy takes its plan state from
  * the fresh answer's tracked ids and its watched state from the recorded
  * change. A rail the fresh feed no longer has is not brought back.
  */
@@ -107,6 +110,14 @@ export function holdTouchedEntries<F extends HoldableFeed>(
     ...next,
     ...(byKind ? { byKind } : {}),
     recommendations: holdRecommendations(previous.recommendations, next.recommendations),
+    ...(next.animeRecommendations
+      ? {
+          animeRecommendations: holdRecommendations(
+            previous.animeRecommendations ?? [],
+            next.animeRecommendations
+          )
+        }
+      : {}),
     featured: holdEntries(previous.featured, next.featured, ids, (media) => media.id, patch),
     rails: next.rails.map((rail) => {
       const before = previousRails.get(rail.id)

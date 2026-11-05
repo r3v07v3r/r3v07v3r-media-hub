@@ -111,8 +111,11 @@ export function localEntryProgress(
 ): Record<string, number> {
   const bySeason = new Map<string, Set<number>>()
   for (const entry of history || []) {
-    if (!Number.isFinite(entry.season) || !Number.isFinite(entry.episode)) continue
-    const key = `${entry.id}:${entry.season}`
+    if (!Number.isFinite(entry.episode)) continue
+    // A row with no season is season 1, as the push counts it
+    // (localSeasonEpisodeCounts). Dropped here, the preview counted less
+    // than the push had just sent and offered to pull those episodes again.
+    const key = `${entry.id}:${Number.isFinite(entry.season) ? entry.season : 1}`
     if (!bySeason.has(key)) bySeason.set(key, new Set())
     bySeason.get(key)!.add(entry.episode as number)
   }
@@ -222,6 +225,33 @@ export function localSeasonEpisodeCounts(history: HistoryEntry[], id: string): M
   }
   return new Map([...seen].map(([season, episodes]) => [season, episodes.size]))
 }
+
+/**
+ * Whether a title's MyAnimeList push has to wait for the anime catalog to
+ * be grouped. Until it is (a fresh install, and for a few minutes after each
+ * crawl) every id is an entry of its own, so planMalPushes would send a
+ * merged show's whole count, every season's episodes together, to its first
+ * season's entry. A merged show is told the way the Simkl push tells it
+ * (simkl.ts's animeRowAwaitsGrouping): the change, or a row held under the
+ * title, is at a season after the first. A title whose rows are all its
+ * first season has the same count either way, and is not held.
+ */
+export function malPushAwaitsGrouping(
+  history: HistoryEntry[],
+  id: string,
+  seasons: Iterable<number>,
+  groupingReady: boolean
+): boolean {
+  if (groupingReady) return false
+  if ([...seasons].some((season) => season >= 2)) return true
+  return (history || []).some(
+    (entry) => String(entry.id) === id && typeof entry.season === 'number' && entry.season >= 2
+  )
+}
+
+/** What a MyAnimeList push held for the grouping says, owed and retried
+ *  like any failed push (tracking.ts's keptMal and its history retry). */
+export const MAL_AWAITING_ANIME_GROUPING = 'Waiting for the anime catalog to be organised.'
 
 /**
  * The pushes one title's change makes at MAL, one per entry.

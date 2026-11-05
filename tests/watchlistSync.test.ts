@@ -12,6 +12,11 @@
 // judgement, not the HTTP around it.
 
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import { registerHooks } from 'node:module'
+import os from 'node:os'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import {
   answeredServices,
@@ -391,3 +396,261 @@ assert.deepEqual(
 )
 
 console.log('ok  watchlist two-way removal rule')
+
+// --- the pull itself, against a real database --------------------------
+//
+// The rules above are only as good as what the pull hands them. These run
+// watchlists.ts's syncPlannedFromServices against a temporary database with
+// the services' answers faked at fetch, for the cases where what came back
+// is not the answer it looks like: a list cut off part way (Trakt, MAL), an
+// anime entry nobody could look up, a merged anime's later season watched
+// here, and an anime un-planned here that Simkl, which is never sent an
+// anime removal, still lists.
+//
+// watchlists.ts reaches Electron through its imports, so 'electron' is the
+// headless stand-in, as tests/accountMarks.test.ts loads it. Tokens are in
+// the settings store's "plain:" form.
+
+process.env.R3_USER_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-watchlist-pull-'))
+process.env.R3_ELECTRON_SHIM = '1'
+const shim = pathToFileURL(
+  path.join(__dirname, '..', 'src', 'headless', 'electronShim', 'index.ts')
+)
+registerHooks({
+  resolve(specifier, context, next) {
+    if (specifier === 'electron') return { url: shim.href, shortCircuit: true }
+    return next(specifier, context)
+  }
+})
+
+const plain = (value: string): string => `plain:${Buffer.from(value, 'utf8').toString('base64')}`
+const DAY = 24 * 60 * 60 * 1000
+
+/** What a fake service says to one request: a JSON body, a body cut off
+ *  part way, or a failure status. */
+type Answer = unknown | { cut: string } | { status: number }
+
+function respond(answer: Answer): Response {
+  const shaped = answer as { cut?: string; status?: number }
+  if (shaped && typeof shaped === 'object' && typeof shaped.cut === 'string') {
+    const bytes = new TextEncoder().encode(shaped.cut)
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes)
+        controller.error(new Error('connection reset'))
+      }
+    })
+    return new Response(stream, { status: 200 })
+  }
+  if (shaped && typeof shaped === 'object' && typeof shaped.status === 'number') {
+    return new Response('', { status: shaped.status })
+  }
+  return new Response(JSON.stringify(answer), { status: 200 })
+}
+
+async function pulls(): Promise<void> {
+  const store = await import('../src/main/media-hub/settingsStore')
+  const { createDatabase } = await import('../src/main/media-hub/database')
+  const { setDatabase } = await import('../src/main/media-hub/dbState')
+  const seasons = await import('../src/main/media-hub/animeSeasons')
+  const watchlists = await import('../src/main/media-hub/watchlists')
+
+  const db = createDatabase(path.join(process.env.R3_USER_DATA!, 'pull.sqlite'), 'profile-pull')
+  setDatabase(db)
+
+  // What each service answers, by path; anything unlisted fails, so a
+  // request the test did not expect cannot quietly pass as an answer.
+  let answers: Record<string, Answer> = {}
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = new URL(String(input instanceof Request ? input.url : input))
+    const key = `${url.host}${url.pathname}`
+    return key in answers ? respond(answers[key]) : new Response('', { status: 503 })
+  }) as typeof fetch
+
+  const connect = (services: { simkl?: boolean; trakt?: boolean; mal?: boolean }): void =>
+    store.writeSettings({
+      ...(services.simkl ? { simklClientId: 'cid', simklAccessToken: plain('simkl') } : {}),
+      ...(services.trakt ? { traktClientId: 'tid', traktAccessToken: plain('trakt') } : {}),
+      ...(services.mal
+        ? { malAccessToken: plain('mal'), malTokenExpiresAt: Date.now() + 30 * DAY }
+        : {})
+    })
+  const reset = (): void => {
+    for (const id of db.tracked().map((item) => String(item.id))) db.untrack(id)
+    for (const key of [
+      'planned:origins',
+      'planned:sources',
+      'planned:pending-removals',
+      'planned:unplanned-anime:v1:profile-pull',
+      'planned:unplanned-anime:v1:profile-b'
+    ]) {
+      db.deleteCache(key)
+    }
+  }
+  /** A title planned here by an earlier pull from `source`. */
+  const pulledEarlier = (
+    id: string,
+    type: 'movie' | 'anime',
+    source: 'simkl' | 'trakt' | 'mal'
+  ) => {
+    db.track({ id, type, title: id })
+    const origins = {
+      [id]: { source, addedAt: Date.now() - DAY, account: store.trackingAccountMarks()[source] }
+    }
+    db.putCache('planned:origins', origins, 365 * DAY, { durable: true })
+  }
+  const SIMKL = 'api.simkl.com'
+  const simklLists = (anime: unknown[]): Record<string, Answer> => ({
+    [`${SIMKL}/sync/all-items/movies/plantowatch`]: { movies: [] },
+    [`${SIMKL}/sync/all-items/shows/plantowatch`]: { shows: [] },
+    [`${SIMKL}/sync/all-items/anime/plantowatch`]: { anime }
+  })
+  const MAL_LIST = 'api.myanimelist.net/v2/users/@me/animelist'
+  /** What idBridge caches for a MAL id: the Kitsu id, or 0 for "none". */
+  const bridged = (malId: number, kitsuId: number): void =>
+    db.putCache(`idbridge:rev:mal:${malId}`, kitsuId, 30 * DAY)
+
+  // ---- Trakt's watchlist cut off part way ---------------------------------
+  reset()
+  connect({ trakt: true })
+  pulledEarlier('tt-from-trakt', 'movie', 'trakt')
+  answers = {
+    'api.trakt.tv/sync/watchlist/movies': { cut: '[{"movie":{"title":"Dune","ids":' },
+    'api.trakt.tv/sync/watchlist/shows': []
+  }
+  let report = await watchlists.syncPlannedFromServices('interactive')
+  const trakt = report.services.find((entry) => entry.service === 'trakt')
+  assert.ok(trakt?.error, 'a cut-off Trakt watchlist is an error')
+  assert.equal(answeredServices(report.services).has('trakt'), false)
+  assert.equal(report.removed, 0)
+  assert.ok(db.isTracked('tt-from-trakt'), 'a cut-off Trakt watchlist un-plans nothing')
+  // The same pass with the list read whole and empty: the removal it is.
+  answers['api.trakt.tv/sync/watchlist/movies'] = []
+  report = await watchlists.syncPlannedFromServices('interactive')
+  assert.equal(report.removed, 1)
+  assert.equal(db.isTracked('tt-from-trakt'), false, 'answered and empty is a removal')
+
+  // ---- MyAnimeList's plan to watch cut off, or with no list in it -----------
+  for (const broken of [{ cut: '{"data":[{"node":{"id":1' }, {}] as Answer[]) {
+    reset()
+    connect({ mal: true })
+    pulledEarlier('kitsu:900', 'anime', 'mal')
+    answers = { [MAL_LIST]: broken }
+    report = await watchlists.syncPlannedFromServices('interactive')
+    assert.ok(report.services.find((entry) => entry.service === 'mal')?.error)
+    assert.equal(answeredServices(report.services).has('mal'), false)
+    assert.ok(db.isTracked('kitsu:900'), 'a MAL list that is not a whole answer un-plans nothing')
+  }
+  answers = { [MAL_LIST]: { data: [], paging: {} } }
+  report = await watchlists.syncPlannedFromServices('interactive')
+  assert.equal(db.isTracked('kitsu:900'), false, 'a whole, empty MAL list is a removal')
+
+  // ---- an anime entry the id bridge could not be asked about ---------------
+  // Simkl lists the anime this app pulled from it, but its MAL id cannot be
+  // looked up (Simkl's search and Kitsu's mapping both fail). Left out of the
+  // pulled set, it looked removed; Simkl must not count as having answered.
+  reset()
+  connect({ simkl: true })
+  pulledEarlier('kitsu:5000', 'anime', 'simkl')
+  db.deleteCache('idbridge:rev:mal:100')
+  answers = simklLists([{ show: { title: 'Planned', ids: { mal: 100 } } }])
+  report = await watchlists.syncPlannedFromServices('interactive')
+  const simkl = report.services.find((entry) => entry.service === 'simkl')
+  assert.match(String(simkl?.error), /could not be looked up/)
+  assert.equal(answeredServices(report.services).has('simkl'), false)
+  assert.ok(db.isTracked('kitsu:5000'), 'an unanswered lookup removes nothing')
+  // Answered with "no Kitsu id" is an answer: counted as unmapped, and the
+  // title it might have been is gone from a list that answered.
+  bridged(100, 0)
+  report = await watchlists.syncPlannedFromServices('interactive')
+  assert.equal(report.services.find((entry) => entry.service === 'simkl')?.unmapped, 1)
+  assert.equal(db.isTracked('kitsu:5000'), false)
+
+  // ---- a merged anime's later season, watched here --------------------------
+  // SHOW fronts a group whose second member is its second season. Its
+  // viewings are kept under SHOW at season 2, never under SEASON_2's own id.
+  const SHOW = 'kitsu:11469'
+  const SEASON_2 = 'kitsu:12268'
+  db.putCache('catalog:v2:anime', [{ id: SHOW, groupedIds: [SEASON_2] }], DAY)
+  db.putCache(seasons.ANIME_GROUPED_KEY, true, DAY)
+  db.putCache('kitsu:tvdb:11469', { seriesId: '305074', season: 1 }, 30 * DAY)
+  db.putCache('kitsu:tvdb:12268', { seriesId: '305074', season: 2 }, 30 * DAY)
+  seasons.invalidateAnimeGroupIndex()
+  assert.deepEqual(seasons.placeAnimeEntry(SEASON_2), { id: SHOW, season: 2 })
+  bridged(201, 12268)
+  const watchedAt = new Date().toISOString()
+  // Only the first season watched: the second is still a plan.
+  reset()
+  connect({ mal: true })
+  db.importWatched([{ id: SHOW, type: 'anime', title: 'Show', season: 1, episode: 1, watchedAt }])
+  answers = {
+    [MAL_LIST]: {
+      data: [{ node: { id: 201, title: 'Season 2' }, list_status: { status: 'plan_to_watch' } }],
+      paging: {}
+    }
+  }
+  report = await watchlists.syncPlannedFromServices('interactive')
+  assert.ok(db.isTracked(SEASON_2), 'an unwatched later season is planned')
+  // Watched here: not planned again, however long MyAnimeList lists it.
+  reset()
+  db.importWatched([{ id: SHOW, type: 'anime', title: 'Show', season: 2, episode: 1, watchedAt }])
+  report = await watchlists.syncPlannedFromServices('interactive')
+  assert.equal(report.added, 0)
+  assert.equal(db.isTracked(SEASON_2), false, 'a watched later season is not planned again')
+
+  // ---- an anime un-planned here that Simkl still lists ----------------------
+  reset()
+  connect({ simkl: true })
+  bridged(300, 7000)
+  const ANIME = { id: 'kitsu:7000', type: 'anime' as const, title: 'Planned at Simkl' }
+  answers = simklLists([{ show: { title: ANIME.title, ids: { mal: 300 } } }])
+  report = await watchlists.syncPlannedFromServices('interactive')
+  assert.ok(db.isTracked(ANIME.id), 'arrives from Simkl')
+  // Un-planned here. Simkl is sent nothing for anime, so it still lists it.
+  db.untrack(ANIME.id)
+  await watchlists.applyLocalPlanChange(ANIME, false)
+  report = await watchlists.syncPlannedFromServices('interactive')
+  assert.equal(db.isTracked(ANIME.id), false, 'not planned again while Simkl still lists it')
+  // Planned here again: the marker goes, so a later un-plan starts afresh.
+  db.track(ANIME)
+  await watchlists.applyLocalPlanChange(ANIME, true)
+  const markers = db.getCache<Record<string, unknown>>('planned:unplanned-anime:v1:profile-pull', {
+    allowExpired: true
+  })
+  assert.equal(markers?.[ANIME.id], undefined, 'planning it here again clears the marker')
+  // Un-planned again, then gone from Simkl: the marker is cleared, so the
+  // anime planned at Simkl afresh later comes back here.
+  db.untrack(ANIME.id)
+  await watchlists.applyLocalPlanChange(ANIME, false)
+  answers = simklLists([])
+  await watchlists.syncPlannedFromServices('interactive')
+  answers = simklLists([{ show: { title: ANIME.title, ids: { mal: 300 } } }])
+  await watchlists.syncPlannedFromServices('interactive')
+  assert.ok(db.isTracked(ANIME.id), 'planned at Simkl afresh after it left, it is planned here')
+  // Un-planned from a card that carried no type, which trackingToggle sends
+  // as a film: still marked, by its Kitsu id, so not planned again.
+  db.untrack(ANIME.id)
+  await watchlists.applyLocalPlanChange({ ...ANIME, type: 'movie' }, false)
+  await watchlists.syncPlannedFromServices('interactive')
+  assert.equal(db.isTracked(ANIME.id), false, 'an anime un-planned as a film is still held back')
+  // Another profile on the same Simkl account: profile-pull's marker is
+  // its own, so the anime Simkl lists is planned in profile-b all the same.
+  db.setActiveProfile('profile-b')
+  try {
+    assert.equal(db.isTracked(ANIME.id), false)
+    await watchlists.syncPlannedFromServices('interactive')
+    assert.ok(db.isTracked(ANIME.id), "one profile's un-plan does not hold back another's plan")
+  } finally {
+    db.setActiveProfile('profile-pull')
+  }
+  // And profile-pull's own marker still holds there.
+  await watchlists.syncPlannedFromServices('interactive')
+  assert.equal(db.isTracked(ANIME.id), false, 'the un-planning profile is still held back')
+
+  console.log('ok  the plan pull against a real database')
+}
+
+pulls().catch((error) => {
+  console.error(error)
+  process.exit(1)
+})

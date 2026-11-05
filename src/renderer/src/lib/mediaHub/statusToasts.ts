@@ -105,3 +105,42 @@ export function dislikedToast(
     action: { label: 'Undo', run: undo }
   }
 }
+
+// --- the launch toast about merged shows ------------------------------------
+//
+// A Sync review row stays until Keep or Use, or 90 days after the last pass
+// that added to it, and the launch check returns every row still there. The
+// toast says episodes "were synced", so naming the same rows at every launch
+// read as new syncs each time. It names only rows a pass added to after the
+// last toast; the bell still holds them all.
+
+const SHOWS_ANNOUNCED_KEY = 'r3.syncShowsAnnouncedAt:'
+
+/** The rows a launch toast should name: those a pass added to (`at`) after
+ *  `announcedAt`, the newest `at` the last toast named. */
+export function showsToAnnounce<T extends { at: number }>(
+  shows: readonly T[],
+  announcedAt: number
+): T[] {
+  return shows.filter((row) => row.at > announcedAt)
+}
+
+/** The newest row time a toast named for this profile, 0 when none has
+ *  (or storage cannot be read, which only means a toast too many). */
+export function readShowsAnnouncedAt(profileId: string): number {
+  try {
+    const value = Number(window.localStorage.getItem(SHOWS_ANNOUNCED_KEY + profileId))
+    return Number.isFinite(value) ? value : 0
+  } catch {
+    return 0
+  }
+}
+
+/** Records that a toast named every row up to `at` for this profile. */
+export function rememberShowsAnnounced(profileId: string, at: number): void {
+  try {
+    window.localStorage.setItem(SHOWS_ANNOUNCED_KEY + profileId, String(at))
+  } catch {
+    // Storage full or blocked: the next launch names these rows again.
+  }
+}

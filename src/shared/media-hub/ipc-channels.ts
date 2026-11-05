@@ -172,8 +172,10 @@ export const MEDIA_HUB_CHANNELS = {
   trackingRestorePlan: 'mediahub:tracking:restore-plan',
   /** Bring this device up to date with the tracking services: the watchlist
    *  pull, then Simkl's watched history taken into the local record. Asked
-   *  for by the phone and TV app, which has no review panel to settle a
-   *  disagreement in — see main/media-hub/simklCatchUp.ts. */
+   *  for by every interface: the phone and TV app, and the desktop on window
+   *  open, focus and a profile switch (useServiceCatchUp, which leaves the
+   *  lists to the job) —
+   *  see main/media-hub/simklCatchUp.ts. */
   trackingCatchUp: 'mediahub:tracking:catch-up',
   /** Whether one title is on the list and which of it has been watched,
    *  from the database alone — see TitleWatchState. */

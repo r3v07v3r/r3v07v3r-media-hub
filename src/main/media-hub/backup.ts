@@ -174,8 +174,21 @@ export function writeBackup(
   // app the person chose the location of) leaves whatever was already there
   // intact instead of truncating it to a half-written backup.
   const temp = `${filePath}.partial`
-  fs.writeFileSync(temp, JSON.stringify(backup), 'utf8')
-  fs.renameSync(temp, filePath)
+  try {
+    fs.writeFileSync(temp, JSON.stringify(backup), 'utf8')
+    fs.renameSync(temp, filePath)
+  } catch (error) {
+    // Nor is the half-written file left beside it. On a full disk it holds
+    // whatever space there was, and the automatic backups name every try
+    // afresh (autoBackup.ts), so each failure would leave one more.
+    try {
+      fs.rmSync(temp, { force: true })
+    } catch {
+      // Left. An automatic backup's is deleted by the rotation once it is a
+      // day old (autoBackup.ts); a manual export's stays where it was written.
+    }
+    throw error
+  }
 }
 
 /** The ledger as the file carries it, or nothing when none is recorded. */

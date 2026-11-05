@@ -23,6 +23,9 @@ export default function Search() {
   // The online catalog for this kind failed or did not answer in time, so
   // `results` holds only what the library already had.
   const [providerUnreachable, setProviderUnreachable] = useState(false)
+  // Which of the two: still running when the library's hits stopped waiting
+  // for it. That catalog was reached, so it is not said to be out of reach.
+  const [providerSlow, setProviderSlow] = useState(false)
   // Bumped on every search kicked off; a response is only applied if it's
   // still the most recent one by the time it lands — discards a stale
   // answer from a query the person has already typed past.
@@ -35,6 +38,7 @@ export default function Search() {
       setResults([])
       setSearched(false)
       setProviderUnreachable(false)
+      setProviderSlow(false)
       setError(null)
       setLoading(false)
       return
@@ -54,6 +58,7 @@ export default function Search() {
         if (requestRef.current !== requestId) return
         setResults(answer.items)
         setProviderUnreachable(answer.providerUnreachable)
+        setProviderSlow(answer.providerReason === 'slow')
         setSearched(true)
         setLoading(false)
       })
@@ -121,13 +126,16 @@ export default function Search() {
       )}
       <LoadingNote loading={loading} />
       {error && <StatusNote tone="error">{error}</StatusNote>}
-      {/* With the online catalog out of reach, an empty or short list is
-          "not in the library yet", not "does not exist", and says so. */}
+      {/* With the online catalog out of reach, or too slow to wait for, an
+          empty or short list is "not in the library yet", not "does not
+          exist", and says so. */}
       {!loading && !error && searched && providerUnreachable && (
         <StatusNote>
-          {results.length
-            ? `The online ${kindLabel(kind).toLowerCase()} catalog could not be reached, so only titles already in the library are shown.`
-            : `The online ${kindLabel(kind).toLowerCase()} catalog could not be reached, and nothing already in the library matched "${query.trim()}".`}
+          {`The online ${kindLabel(kind).toLowerCase()} catalog ${providerSlow ? 'did not answer in time' : 'could not be reached'}${
+            results.length
+              ? ', so only titles already in the library are shown.'
+              : `, and nothing already in the library matched "${query.trim()}".`
+          }`}
         </StatusNote>
       )}
       {!loading && !error && searched && !providerUnreachable && !results.length && (

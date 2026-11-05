@@ -10,12 +10,13 @@ import path from 'node:path'
 
 import { createActivityTracker } from '../activity'
 import { createAdmin } from '../admin'
+import { loadConfig } from '../config'
 import { createCredentials } from '../credentials'
 import { createJobStore } from '../jobs'
 import type { JobRecord } from '../jobs'
 import { createFetcher, shouldRetryAfterFailure } from '../fetcher'
 import { createPairing, deviceIdForToken, isApproved, type Pairing } from '../pairing'
-import { createDaemonServer } from '../server'
+import { createDaemonServer, unclaimedReminder } from '../server'
 import { createItemStore, isEntitled, planEvictions, type StoredItem } from '../storage'
 
 const DAY = 24 * 60 * 60 * 1000
@@ -1061,6 +1062,235 @@ async function claimRouteTest(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------
+// The window --claim-admin opens, as the log shows it.
+//
+// The rule is unchanged: a reopened server lets any device join without
+// approval and lets the first claimer take it. What this pins is that the
+// administrator can see the window in the log — at startup, in the line
+// repeated while it lasts, for every device let in while it lasts (a claim
+// landing mid-approval included), and when a claim closes it — that the
+// current administrator claiming back is not reported as closing it,
+// because it does not, and that a fresh install or a closed server says
+// none of it.
+// ---------------------------------------------------------------------
+
+async function reopenedClaimLogTest(): Promise<void> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-reopened-'))
+  const pairing = createPairing(root)
+  await pairing.load()
+  const admin = createAdmin(root)
+  await admin.load()
+  const lines: string[] = []
+  const build = (pairingDep: Pairing = pairing): ReturnType<typeof createDaemonServer> =>
+    createDaemonServer({
+      storage: createItemStore(root, {
+        idleTtlMs: 60_000,
+        hardMaxMs: 600_000,
+        budgetBytes: 10 ** 9,
+        tombstoneMs: 60_000
+      }),
+      jobs: createJobStore(root),
+      pairing: pairingDep,
+      admin,
+      credentials: createCredentials(root),
+      activity: createActivityTracker(root),
+      updaterStatus: () => ({
+        channel: 'preview',
+        enabled: true,
+        checkedAt: 0,
+        latestSeen: '',
+        staged: '',
+        stagedAt: 0,
+        lastError: ''
+      }),
+      serverName: 'test',
+      version: '0.0.0',
+      diskBudgetBytes: 10 ** 9,
+      log: (message) => lines.push(message)
+    })
+
+  build()
+  assert.equal(lines.length, 0, 'a fresh install is not reported as reopened')
+  // The line main.ts repeats every five minutes while anyone may claim.
+  assert.match(
+    unclaimedReminder(admin) ?? '',
+    /UNCLAIMED — no administrator yet/,
+    'a fresh install is reminded that it has no administrator'
+  )
+
+  const ownerToken = await joinApproved(pairing, 'old admin')
+  await admin.claim(deviceIdForToken(ownerToken))
+  build()
+  assert.equal(lines.length, 0, 'nor is a claimed server')
+  assert.equal(unclaimedReminder(admin), null, 'and a claimed server repeats nothing')
+
+  // What --claim-admin does at the console, then the next start.
+  await admin.reopen()
+  const server = build()
+  assert.equal(lines.length, 1, 'the reopened state is logged at startup')
+  assert.match(lines[0], /REOPENED/)
+  assert.match(lines[0], /--claim-admin/)
+  assert.match(lines[0], /without asking/)
+  assert.match(lines[0], /other than the current administrator/, 'and says who can close it')
+  // The repeated line says the same for as long as the window lasts, and
+  // does not call a server with an administrator a fresh install.
+  const reminder = unclaimedReminder(admin) ?? ''
+  assert.match(reminder, /REOPENED \(--claim-admin\)/)
+  assert.match(reminder, /without asking/)
+  assert.match(reminder, /other than the current administrator/)
+  assert.ok(!reminder.includes('no administrator'), 'the reopened window has an administrator')
+
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+  const pairAt = async (
+    at: string,
+    deviceName: string
+  ): Promise<{ token: string; status: string }> =>
+    (await (
+      await fetch(`${at}/api/pair`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ deviceName })
+      })
+    ).json()) as { token: string; status: string }
+  const pair = (deviceName: string): Promise<{ token: string; status: string }> =>
+    pairAt(base, deviceName)
+
+  try {
+    // The administrator claiming back from the app: a success, as before,
+    // but one that does not spend the reopening, and the log says so.
+    lines.length = 0
+    const reclaimed = await fetch(`${base}/api/admin/claim`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${ownerToken}` }
+    })
+    assert.equal(reclaimed.status, 200, 'the rule is unchanged: claiming back succeeds')
+    assert.equal(lines.length, 1, 'and is logged')
+    assert.match(lines[0], /"old admin" already administers this server/)
+    assert.match(lines[0], /leaves claiming reopened/)
+    assert.ok(!lines[0].includes('claiming closed'), 'it is not reported as closing the window')
+
+    lines.length = 0
+    const stranger = await pair('stranger\nlaptop')
+    assert.equal(stranger.status, 'approved', 'the rule is unchanged: the window lets devices in')
+    assert.equal(lines.length, 1, 'and each one it lets in is logged')
+    assert.match(lines[0], /approved "stranger\\nlaptop" without asking/)
+    assert.ok(!lines[0].includes('\n'), 'a name cannot break the log line')
+
+    lines.length = 0
+    await pair('x'.repeat(5000))
+    assert.equal(lines.length, 1)
+    assert.ok(
+      lines[0].includes(`"${'x'.repeat(64)}"`),
+      'the log names the device as pairing stored it, capped like the device list'
+    )
+    assert.ok(lines[0].length < 300, 'not the five thousand characters the request sent')
+
+    lines.length = 0
+    const claimed = await fetch(`${base}/api/admin/claim`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${stranger.token}` }
+    })
+    assert.equal(claimed.status, 200)
+    assert.equal(lines.length, 1, 'the claim that closes the window is logged')
+    assert.match(lines[0], /claiming closed: "stranger\\nlaptop" is now administrator/)
+    assert.equal(unclaimedReminder(admin), null, 'and the repeated line stops')
+
+    lines.length = 0
+    const later = await pair('after the window')
+    assert.equal(later.status, 'pending', 'once claimed, joining waits for approval again')
+    assert.equal(lines.length, 0, 'and nothing more is logged about the window')
+
+    // A claim that closes the window while a join is being approved. The
+    // device was let in because the window was open, so it is still named,
+    // even though the window has shut by the time the approval is written.
+    await admin.reopen()
+    const closerToken = await joinApproved(pairing, 'closer')
+    const racing = build({
+      ...pairing,
+      setStatus: async (deviceId, status) => {
+        await admin.claim(deviceIdForToken(closerToken))
+        return pairing.setStatus(deviceId, status)
+      }
+    })
+    await new Promise<void>((resolve) => racing.listen(0, '127.0.0.1', resolve))
+    try {
+      lines.length = 0
+      const raced = await pairAt(
+        `http://127.0.0.1:${(racing.address() as { port: number }).port}`,
+        'raced device'
+      )
+      assert.equal(raced.status, 'approved', 'the window was open when it asked')
+      assert.equal(admin.isUnclaimed(), false, 'and shut while it was being approved')
+      assert.equal(lines.length, 1, 'it is logged all the same')
+      assert.match(lines[0], /approved "raced device" without asking/)
+    } finally {
+      await new Promise<void>((resolve) => racing.close(() => resolve()))
+    }
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  }
+  console.log('ok  a reopened claim window is visible in the log')
+}
+
+// ---------------------------------------------------------------------
+// updateChannel "stable": accepted, and said out loud.
+//
+// Stable releases carry no daemon bundle yet, so a daemon on that channel
+// never updates. The value stays valid (it is the right one the day they
+// do); startup says why nothing will arrive.
+// ---------------------------------------------------------------------
+
+async function stableChannelWarningTest(): Promise<void> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-channel-'))
+  const previousDir = process.env.R3_CACHE_DIR
+  const originalWarn = console.warn
+  const warnings: string[] = []
+  console.warn = (...args: unknown[]): void => {
+    warnings.push(args.map(String).join(' '))
+  }
+  try {
+    process.env.R3_CACHE_DIR = root
+    await fsp.writeFile(
+      path.join(root, 'r3-cache.json'),
+      JSON.stringify({ updateChannel: 'preview' })
+    )
+    assert.equal(loadConfig().updateChannel, 'preview')
+    assert.equal(warnings.length, 0, 'preview is the working channel and says nothing')
+
+    // Before the warning below, which is said once per process: with
+    // updates switched off, no channel would update, so there is nothing
+    // to explain and switching to preview would not help.
+    await fsp.writeFile(
+      path.join(root, 'r3-cache.json'),
+      JSON.stringify({ updateChannel: 'stable', autoUpdate: false })
+    )
+    assert.equal(loadConfig().updateChannel, 'stable')
+    assert.equal(warnings.length, 0, 'stable with autoUpdate off says nothing')
+
+    await fsp.writeFile(
+      path.join(root, 'r3-cache.json'),
+      JSON.stringify({ updateChannel: 'stable' })
+    )
+    assert.equal(loadConfig().updateChannel, 'stable', '"stable" is still accepted')
+    assert.equal(warnings.length, 1, 'and warned about')
+    assert.match(warnings[0], /stable/)
+    assert.match(warnings[0], /will not update/)
+    assert.match(warnings[0], /"preview"/)
+
+    loadConfig()
+    assert.equal(warnings.length, 1, 'once per process, not once per loadConfig call')
+  } finally {
+    console.warn = originalWarn
+    if (previousDir === undefined) delete process.env.R3_CACHE_DIR
+    else process.env.R3_CACHE_DIR = previousDir
+    await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  }
+  console.log('ok  updateChannel "stable" warns that the daemon will not update')
+}
+
+// ---------------------------------------------------------------------
 // Approval — a token is no longer the same thing as permission.
 //
 // Before this, "holds a token" and "may use the server" were one state,
@@ -1692,6 +1922,171 @@ async function statusScopeTest(): Promise<void> {
     await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   }
   console.log('ok  status is scoped to the caller')
+}
+
+// ---------------------------------------------------------------------
+// Who owns a queued job when a second device asks for the same title.
+//
+// Ownership is whose TorBox account pays, whose allocation is charged,
+// who the finished item is entitled to and who may cancel it. Any queued
+// job used to change hands to whoever asked for it last, so a housemate
+// naming the same title took all four — and could then cancel a download
+// that was never theirs. A second requester joins now. The job moves only
+// when its owner cannot fetch it at all and the newcomer can.
+// ---------------------------------------------------------------------
+
+async function jobOwnershipTest(): Promise<void> {
+  const hash = 'e'.repeat(40)
+
+  // The store on its own: every combination of who can fetch.
+  {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-owner-store-'))
+    try {
+      const jobs = createJobStore(root)
+      const ownerOf = (key: string): string | undefined =>
+        jobs.list().find((job) => job.contentKey === key)?.ownerDeviceId
+      const queue = (key: string, owner: string | undefined, canFetch?: string[]): void => {
+        jobs.enqueue(
+          { contentKey: key, infoHash: hash, title: key, ownerDeviceId: owner },
+          canFetch ? { canFetch: (id) => canFetch.includes(id) } : undefined
+        )
+      }
+
+      queue('k-1', 'alice')
+      queue('k-1', 'bob')
+      assert.equal(ownerOf('k-1'), 'alice', 'with nothing to go on, the first owner keeps it')
+
+      queue('k-2', 'alice')
+      queue('k-2', 'bob', ['alice', 'bob'])
+      assert.equal(ownerOf('k-2'), 'alice', 'an owner who can fetch keeps the job')
+
+      queue('k-3', 'alice')
+      queue('k-3', 'bob', [])
+      assert.equal(ownerOf('k-3'), 'alice', 'nobody can fetch, so nothing is gained by moving it')
+
+      queue('k-4', 'alice')
+      queue('k-4', 'bob', ['bob'])
+      assert.equal(
+        ownerOf('k-4'),
+        'bob',
+        'a job its owner cannot fetch goes to a requester who can — the case the rule was for'
+      )
+
+      queue('k-5', undefined)
+      queue('k-5', 'bob', ['bob'])
+      assert.equal(ownerOf('k-5'), 'bob', 'an ownerless job is one nobody can fetch, too')
+
+      queue('k-6', 'alice')
+      jobs.update('k-6', { state: 'fetching' })
+      queue('k-6', 'bob', ['bob'])
+      assert.equal(ownerOf('k-6'), 'alice', 'a download already running is never moved')
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+    }
+  }
+
+  // Through the routes, where the takeover was a way to cancel somebody
+  // else's download.
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-owner-'))
+  const store = createItemStore(root, {
+    idleTtlMs: 60_000,
+    hardMaxMs: 600_000,
+    budgetBytes: 10 ** 9,
+    tombstoneMs: 60_000
+  })
+  const pairing = createPairing(root)
+  await pairing.load()
+  const admin = createAdmin(root)
+  await admin.load()
+  const jobs = createJobStore(root)
+
+  // Somebody else administers the box, so neither device below has the
+  // admin's licence to cancel anyone's work.
+  await admin.claim(deviceIdForToken(await joinApproved(pairing, 'the admin')))
+  const firstToken = await joinApproved(pairing, 'first device')
+  const secondToken = await joinApproved(pairing, 'second device')
+  const thirdToken = await joinApproved(pairing, 'third device')
+  const firstId = deviceIdForToken(firstToken)
+  const secondId = deviceIdForToken(secondToken)
+
+  const server = createDaemonServer({
+    storage: store,
+    jobs,
+    pairing,
+    admin,
+    credentials: createCredentials(root),
+    activity: createActivityTracker(root),
+    updaterStatus: () => ({
+      channel: 'preview',
+      enabled: true,
+      checkedAt: 0,
+      latestSeen: '',
+      staged: '',
+      stagedAt: 0,
+      lastError: ''
+    }),
+    serverName: 'test',
+    version: '0.0.0',
+    diskBudgetBytes: 10 ** 9
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+
+  const postAs = (token: string, route: string, body: unknown): Promise<Response> =>
+    fetch(`${base}${route}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+  const queueAs = (token: string, key: string): Promise<Response> =>
+    postAs(token, '/api/jobs', { contentKey: key, infoHash: hash, title: 'A Film' })
+  const ownerOf = (key: string): string | undefined =>
+    jobs.list().find((job) => job.contentKey === key)?.ownerDeviceId
+  const statusAs = async (token: string): Promise<{ jobs: Array<{ contentKey: string }> }> =>
+    (await (
+      await fetch(`${base}/api/status`, { headers: { Authorization: `Bearer ${token}` } })
+    ).json()) as { jobs: Array<{ contentKey: string }> }
+
+  try {
+    await postAs(firstToken, '/api/credentials', { torboxToken: 'first-torbox-token' })
+    await postAs(secondToken, '/api/credentials', { torboxToken: 'second-torbox-token' })
+
+    assert.equal((await queueAs(firstToken, 'k-film')).status, 200)
+    const joined = await queueAs(secondToken, 'k-film')
+    assert.equal(joined.status, 200, 'asking for a title already queued is still a yes')
+    assert.deepEqual(await joined.json(), { state: 'queued' }, 'answered with the existing job')
+    assert.equal(ownerOf('k-film'), firstId, 'and the device that queued it still owns it')
+    assert.equal(jobs.list().filter((job) => job.contentKey === 'k-film').length, 1)
+
+    const cancel = await postAs(secondToken, '/api/jobs/cancel', { contentKey: 'k-film' })
+    assert.equal(cancel.status, 404, 'joining a job does not buy the right to cancel it')
+    assert.equal(
+      jobs.list().find((job) => job.contentKey === 'k-film')?.state,
+      'queued',
+      "and the first device's download is still there"
+    )
+    assert.ok(
+      (await statusAs(firstToken)).jobs.some((job) => job.contentKey === 'k-film'),
+      "it stays in the owner's own queue"
+    )
+    assert.equal(
+      (await statusAs(secondToken)).jobs.some((job) => job.contentKey === 'k-film'),
+      false,
+      "and does not appear in the second device's as if it were theirs"
+    )
+
+    // The case the old rule was written for still works: the owner has no
+    // TorBox access, so the job could never be fetched as it stands.
+    await postAs(firstToken, '/api/credentials', { torboxToken: '' })
+    await queueAs(thirdToken, 'k-film')
+    assert.equal(ownerOf('k-film'), firstId, 'a requester who cannot fetch it either gains nothing')
+    await queueAs(secondToken, 'k-film')
+    assert.equal(ownerOf('k-film'), secondId, 'one who can fetch it takes over the stuck job')
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  }
+  console.log('ok  a second requester joins a queued job, it does not take it')
 }
 
 // ---------------------------------------------------------------------
@@ -2647,10 +3042,13 @@ void main()
   .then(indistinguishabilityTest)
   .then(claimTests)
   .then(claimRouteTest)
+  .then(reopenedClaimLogTest)
+  .then(stableChannelWarningTest)
   .then(approvalTests)
   .then(deviceRouteTests)
   .then(quotaStoreTest)
   .then(budgetRoomTest)
   .then(statusScopeTest)
+  .then(jobOwnershipTest)
   .then(sharingRouteTest)
   .then(myItemsTest)

@@ -64,16 +64,16 @@ override with `R3_CACHE_DIR`. An
 optional `r3-cache.json` in that directory overrides defaults; it is never
 required:
 
-| Key             | Default                                                         |
-| --------------- | --------------------------------------------------------------- |
-| `port`          | `8945`                                                          |
-| `diskBudgetGb`  | 80% of the free space each time the daemon starts, capped at 50 |
-| `idleTtlDays`   | `14`                                                            |
-| `hardMaxDays`   | `30`                                                            |
-| `tombstoneDays` | `60` (how long an expired title is not queued again)            |
-| `serverName`    | the machine's hostname                                          |
-| `updateChannel` | `"preview"` (`"stable"` is accepted but never finds an update)  |
-| `autoUpdate`    | `true`                                                          |
+| Key             | Default                                                                   |
+| --------------- | ------------------------------------------------------------------------- |
+| `port`          | `8945`                                                                    |
+| `diskBudgetGb`  | 80% of the free space each time the daemon starts, capped at 50           |
+| `idleTtlDays`   | `14`                                                                      |
+| `hardMaxDays`   | `30`                                                                      |
+| `tombstoneDays` | `60` (how long an expired title is not queued again)                      |
+| `serverName`    | the machine's hostname                                                    |
+| `updateChannel` | `"preview"` (`"stable"` gets no daemon updates yet, and warns at startup) |
+| `autoUpdate`    | `true`                                                                    |
 
 A title removed to make room, or removed by hand from **What you have
 cached**, is not held back and can be queued again straight away.
@@ -185,9 +185,10 @@ The console window shows the same banner as above.
   daemon's data directory, keyed by device (file permissions, not an OS
   keychain). A fetch is always made with the account of whoever asked for
   that title; the daemon never bills one household member for another's
-  watchlist. A job whose owner has not shared a key waits; if anyone else
-  asks for the same title while it is still queued, the job becomes theirs
-  and is fetched with their key.
+  watchlist. A job whose owner has not shared a key waits; if somebody who
+  has shared one asks for the same title while it is still queued, the job
+  becomes theirs and is fetched with their key. Any other second request
+  leaves the job with the device that queued it.
 - **Leaving.** **Leave** in the app forgets the server on this device and,
   if the server answers at that moment, withdraws your TorBox key. The
   device stays in the administrator's list, with any key the server did not

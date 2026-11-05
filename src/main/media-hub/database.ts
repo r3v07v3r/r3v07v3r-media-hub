@@ -13,7 +13,13 @@ import {
   type StatementSync
 } from 'node:sqlite'
 import type { AnimeGroupRecord, AnimeHistoryMove, HeldSeason } from './animeRegroup'
-import { readBackup, restoreBackup, writeBackup, type RestoreSummary } from './backup'
+import {
+  readBackup,
+  restoreBackup,
+  writeBackup,
+  type BackupFile,
+  type RestoreSummary
+} from './backup'
 import { migrate } from './migrations'
 import { logError } from './logger'
 import { MAX_RATING, MIN_RATING, ratingWeight } from '../../shared/media-hub/rating'
@@ -488,6 +494,10 @@ export type LaterSeasons = ReadonlyMap<string, { id: string; season: number }>
  */
 const LATER_SEASON_SQL = 'catalog_index.id NOT IN (SELECT value FROM json_each(@laterSeasons))'
 
+/** LATER_SEASON_SQL turned round: only those rows. For the search that
+ *  finds a later season by its own name and answers with its show. */
+const ONLY_LATER_SEASON_SQL = 'catalog_index.id IN (SELECT value FROM json_each(@laterSeasons))'
+
 /**
  * The ORDER BY for one sort key.
  *
@@ -670,8 +680,11 @@ export interface MediaHubDatabase {
     options: { appVersion: string; profiles: Record<string, unknown>[]; activeProfileId: string }
   ): void
   /** Replaces every backed-up table with the file's contents, or changes
-   *  nothing. Also not profile-scoped, for the same reason. */
-  importBackup(filePath: string): RestoreSummary
+   *  nothing. Also not profile-scoped, for the same reason. Takes the path,
+   *  or the file readBackup already read from it: backup:import (appIpc.ts)
+   *  passes the one it read before its safety backup, whose rotation can
+   *  delete the very file being restored when it is an automatic one. */
+  importBackup(source: string | BackupFile): RestoreSummary
   track(item: Partial<CatalogItem> & { id: unknown }, now?: Date): TrackedItem
   untrack(id: string | number): boolean
   /** The active profile's tracked row for `id` as stored, every column,
@@ -781,14 +794,15 @@ export interface MediaHubDatabase {
    * season on them is only what labelled the entry when they were written:
    * a 1 from the old sync, Kitsu's own label (often already 2 or 3) from
    * the season's own page. The episode number is the entry's own either way.
+   * A special (season 0) is not one of the season's episodes and stays.
    *
    * One exception, per profile: an id whose rows hold the SAME episode
-   * number under more than one season. Those are not one entry's episodes.
-   * The id once fronted the whole show, before the grouping changed which
-   * member does, and its seasons were the group's in an order nothing
-   * records any more. Only its season 1 — the id's own entry — can be
-   * placed; the rest stay where they are rather than be guessed onto one
-   * season, where they would collide and be dropped.
+   * number under more than one season, specials aside. Those are not one
+   * entry's episodes. The id once fronted the whole show, before the
+   * grouping changed which member does, and its seasons were the group's in
+   * an order nothing records any more. Only its season 1 — the id's own
+   * entry — can be placed; the rest stay where they are rather than be
+   * guessed onto one season, where they would collide and be dropped.
    *
    * Deliberately not profile-scoped, unlike almost everything above: this
    * repairs rows written under an id nothing reads any more (see
@@ -842,11 +856,15 @@ export interface MediaHubDatabase {
   /**
    * The rows held under an id that once fronted a whole show, by profile
    * and season: only the profiles where some episode number is there under
-   * two seasons, which is what tells a whole show's rows from one entry's.
+   * two seasons (specials aside), which is what tells a whole show's rows
+   * from one entry's.
    */
   wholeShowRowsUnder(id: string): { profileId: string; seasons: HeldSeason[] }[]
   /** Every Kitsu id any profile has history or plays under. */
   animeHistoryIds(): string[]
+  /** Every Kitsu id any profile has history, plays, a rating or a resume
+   *  point under: all the rows an anime regroup moves. */
+  animeRowIds(): string[]
   /**
    * Folds every row keyed by `fromId` into `toId` — watch history, plays,
    * rating and plan, across every profile — keeping each row's type, season
@@ -943,9 +961,11 @@ export interface MediaHubDatabase {
    * assigned. indexUpsert cannot be used for this: it writes rank and source
    * unconditionally, so a detail-page resolve would demote every title it
    * touched to rank 0. Also how deep-scanned and household-synced rows,
-   * which are add-only, pick up an anime's English name once it is opened.
-   * A no-op for a title the index does not hold; empties and nulls never
-   * erase.
+   * which are add-only, pick up an anime's English name once it is opened,
+   * and how a row written with no artwork (a watchlist pull's) gets the
+   * poster, background and logo it lacks: blanks only, never replacing art
+   * the row already has. A no-op for a title the index does not hold;
+   * empties and nulls never erase.
    */
   indexRefreshFromMetadata(kind: MediaKind, item: CatalogItem, now?: number): void
   /**
@@ -992,12 +1012,16 @@ export interface MediaHubDatabase {
    *  match first — the local half of catalog:search. This is what makes a
    *  title the crawl has already seen findable with no request at all,
    *  and findable offline. Empty for a query with no words in it.
-   *  `laterSeasons` leaves those anime rows out, as indexQuery does. */
+   *  `laterSeasons` leaves those anime rows out, as indexQuery does;
+   *  `onlyLaterSeasons` asks for those rows and no others, which is how a
+   *  search finds a later season's own name with no provider to ask
+   *  (catalog.ts folds them into their shows). */
   indexSearch(
     kind: MediaKind,
     query: string,
     limit?: number,
-    laterSeasons?: LaterSeasons
+    laterSeasons?: LaterSeasons,
+    onlyLaterSeasons?: boolean
   ): CatalogItem[]
   /** The genre/year/status values that actually occur for one kind — the
    *  filter bar's dropdown contents, over the whole library rather than
@@ -1075,6 +1099,7 @@ interface PreparedQueries {
   landPositions: StatementSync
   heldSeasons: StatementSync
   animeHistoryIds: StatementSync
+  animeRowIds: StatementSync
   animeGroupLedger: StatementSync
   recordAnimeGroupLedger: StatementSync
   track: StatementSync
@@ -1345,6 +1370,12 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     // any of them, and whether an id's rows are one entry's or a whole
     // show's (@onlyFirst) is a fact about each profile's own rows.
     //
+    // Never a special (season 0). It is not an episode of the season the
+    // rows land on: relabelled, it would read as that season's episode of
+    // the same number, or take the real one's place and be the copy kept.
+    // It stays under the old id, as a special does in the regroup's moves
+    // onto one season (LIFTED).
+    //
     // Three things have to change together, and missing any one leaves a
     // row that is moved in name only:
     //
@@ -1366,14 +1397,14 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
               json_set(metadata_json,'$.id',@to,'$.type','anime')
          FROM watch_history
         WHERE content_id=@from AND profile_id=@profile
-          AND season IS NOT NULL AND episode IS NOT NULL
+          AND season>=1 AND episode IS NOT NULL
           AND (@onlyFirst=0 OR season=1)
        ON CONFLICT(profile_id,watch_key) DO NOTHING`
     ),
     dropPlacedWatched: sql.prepare(
       `DELETE FROM watch_history
         WHERE content_id=@from AND profile_id=@profile
-          AND season IS NOT NULL AND episode IS NOT NULL
+          AND season>=1 AND episode IS NOT NULL
           AND (@onlyFirst=0 OR season=1)`
     ),
     // Every profile with rows under the old id, in either table.
@@ -1382,13 +1413,16 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
        UNION SELECT profile_id FROM plays WHERE content_id=@from`
     ),
     // The profiles whose rows under it are a whole show's, not one entry's:
-    // some episode number is there under two different seasons.
+    // some episode number is there under two different seasons. Seasons
+    // proper only: a special numbered like one of the entry's episodes is
+    // not a second season, and counted as one it made a later season's own
+    // rows look like a whole show's, so none of them were ever moved.
     remapSplitProfiles: sql.prepare(
       `SELECT DISTINCT a.profile_id FROM watch_history a
          JOIN watch_history b
            ON b.profile_id=a.profile_id AND b.content_id=a.content_id
           AND b.episode=a.episode AND b.season<>a.season
-        WHERE a.content_id=@from`
+        WHERE a.content_id=@from AND a.season>0 AND b.season>0`
     ),
     dropRemappedWatched: sql.prepare('DELETE FROM watch_history WHERE content_id=?'),
     // The type-preserving sibling of remapWatched, for mergeContentId. The
@@ -1414,13 +1448,13 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
               json_set(metadata_json,'$.id',@to,'$.type','anime')
          FROM plays
         WHERE content_id=@from AND profile_id=@profile
-          AND season IS NOT NULL AND episode IS NOT NULL
+          AND season>=1 AND episode IS NOT NULL
           AND (@onlyFirst=0 OR season=1)`
     ),
     dropPlacedPlays: sql.prepare(
       `DELETE FROM plays
         WHERE content_id=@from AND profile_id=@profile
-          AND season IS NOT NULL AND episode IS NOT NULL
+          AND season>=1 AND episode IS NOT NULL
           AND (@onlyFirst=0 OR season=1)`
     ),
     dropRemappedPlays: sql.prepare('DELETE FROM plays WHERE content_id=?'),
@@ -1567,6 +1601,12 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     animeHistoryIds: sql.prepare(
       `SELECT content_id FROM watch_history WHERE content_id LIKE 'kitsu:%'
        UNION SELECT content_id FROM plays WHERE content_id LIKE 'kitsu:%'`
+    ),
+    animeRowIds: sql.prepare(
+      `SELECT content_id FROM watch_history WHERE content_id LIKE 'kitsu:%'
+       UNION SELECT content_id FROM plays WHERE content_id LIKE 'kitsu:%'
+       UNION SELECT content_id FROM ratings WHERE content_id LIKE 'kitsu:%'
+       UNION SELECT content_id FROM playback_positions WHERE content_id LIKE 'kitsu:%'`
     ),
     animeGroupLedger: sql.prepare('SELECT groups_json FROM anime_group_ledger WHERE id=1'),
     recordAnimeGroupLedger: sql.prepare(
@@ -1831,9 +1871,9 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       }
     },
 
-    importBackup(filePath) {
+    importBackup(source) {
       try {
-        const summary = restoreBackup(sql, readBackup(filePath))
+        const summary = restoreBackup(sql, typeof source === 'string' ? readBackup(source) : source)
         // Not a cache invalidation but a correctness one: `preferredGenres`
         // and everything else derived from history is computed on demand, so
         // there is nothing stale to clear here — the restored rows are simply
@@ -2717,6 +2757,14 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       }
     },
 
+    animeRowIds() {
+      try {
+        return q.animeRowIds.all().map((row) => String((row as Row).content_id))
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
     unmarkWatched(id, season, episode) {
       try {
         const seasonValue = Number.isFinite(season) ? (season as number) : null
@@ -3043,12 +3091,19 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       const counts = indexEpisodeCounts(item, now)
       const title = String(item.title || '').trim()
       try {
+        // The artwork the other way round from the title: the row's own
+        // wins, and the resolve's only fills a blank. A row a watchlist pull
+        // wrote has a name and a year and no art, and a crawl that never
+        // lists the title would leave it a blank tile in every grid.
         sql
           .prepare(
             `UPDATE catalog_index SET
                title=COALESCE(NULLIF(@title,''),title),
                title_sort=COALESCE(NULLIF(@titleSort,''),title_sort),
                title_key=COALESCE(NULLIF(@titleKey,''),title_key),
+               poster=COALESCE(NULLIF(poster,''),NULLIF(@poster,''),poster),
+               background=COALESCE(NULLIF(background,''),NULLIF(@background,''),background),
+               logo=COALESCE(NULLIF(logo,''),NULLIF(@logo,''),logo),
                total_seasons=COALESCE(@totalSeasons,total_seasons),
                total_episodes=COALESCE(@totalEpisodes,total_episodes),
                aired_episodes=COALESCE(@airedEpisodes,aired_episodes),
@@ -3061,6 +3116,9 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
             title,
             titleSort: title ? titleSortKey(title) : '',
             titleKey: title ? comparableTitle(title) : '',
+            poster: String(item.poster || '').trim(),
+            background: String(item.background || '').trim(),
+            logo: String(item.logo || '').trim(),
             totalSeasons: counts.totalSeasons,
             totalEpisodes: counts.totalEpisodes,
             airedEpisodes: counts.airedEpisodes,
@@ -3343,7 +3401,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       }
     },
 
-    indexSearch(kind, query, limit = 100, laterSeasons) {
+    indexSearch(kind, query, limit = 100, laterSeasons, onlyLaterSeasons = false) {
       // Matched against title_key, the title in the query's own form
       // (comparableTitle, migration 5): lowercased, diacritics folded,
       // punctuation flattened to spaces — so "amelie" finds "Amélie",
@@ -3363,6 +3421,8 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       // form — which is the whole reason the column exists.
       const tokens = searchTokens(query)
       if (!tokens.length) return []
+      // Nothing is a later season while nothing is grouped.
+      if (onlyLaterSeasons && (kind !== 'anime' || !laterSeasons?.size)) return []
       try {
         const values: Record<string, SQLInputValue> = {
           kind,
@@ -3378,8 +3438,10 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         // A later season is found as its show, not as a result of its own:
         // the same rows the grid leaves out (LATER_SEASON_SQL), left out
         // before the LIMIT so they take no place another title could have.
+        // Asked for on their own (ONLY_LATER_SEASON_SQL), under a limit of
+        // their own, they are what the caller folds into their shows.
         if (kind === 'anime' && laterSeasons?.size) {
-          clauses.push(LATER_SEASON_SQL)
+          clauses.push(onlyLaterSeasons ? ONLY_LATER_SEASON_SQL : LATER_SEASON_SQL)
           values.laterSeasons = JSON.stringify([...laterSeasons.keys()])
         }
         const rows = sql

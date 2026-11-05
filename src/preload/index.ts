@@ -4,7 +4,6 @@
 // which is what keeps api.ts loadable by a renderer running outside the shell.
 
 import { contextBridge, ipcRenderer } from 'electron'
-import { electronAPI } from '@electron-toolkit/preload'
 import { createApi, type ApiTransport } from './api'
 
 export type { Api } from './api'
@@ -24,19 +23,18 @@ const transport: ApiTransport = {
 
 const api = createApi(transport)
 
-// Use `contextBridge` APIs to expose Electron APIs to
-// renderer only if context isolation is enabled, otherwise
-// just add to the DOM global.
+// Use `contextBridge` to expose the typed api to the renderer only if context
+// isolation is enabled, otherwise just add it to the DOM global. Only `api`
+// goes across: the toolkit's `electronAPI` would hand the page a raw
+// ipcRenderer on any channel, which is what the transport above exists to
+// avoid, and nothing in the renderer uses it.
 if (process.contextIsolated) {
   try {
-    contextBridge.exposeInMainWorld('electron', electronAPI)
     contextBridge.exposeInMainWorld('api', api)
   } catch (error) {
     console.error(error)
   }
 } else {
-  // @ts-ignore (define in dts)
-  window.electron = electronAPI
   // @ts-ignore (define in dts)
   window.api = api
 }

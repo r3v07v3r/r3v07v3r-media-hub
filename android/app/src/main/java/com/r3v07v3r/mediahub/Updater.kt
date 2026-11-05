@@ -21,9 +21,10 @@ import java.net.URL
  *
  * Releases are the desktop app's own GitHub releases: every preview and every
  * stable release carries `r3-media-hub-android.apk`, built at that version
- * (.github/workflows/build-and-release.yml). The phone follows the same
- * channel as the desktop it was linked to; before it is linked, preview —
- * the app is in its preview phase and there is no stable APK yet.
+ * (.github/workflows/build-and-release.yml). Before it is linked the phone
+ * follows preview. A phone linked to a Stable desktop follows Stable once a
+ * stable release carries the APK, and stays on preview until then: the app
+ * is in its preview phase and there is no stable APK yet.
  *
  * Android never lets an app replace itself silently: the last step is always
  * the system's own "Update this app?" confirmation. And it only accepts an
@@ -64,7 +65,8 @@ object Updater {
         return if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
     }
 
-    /** 'stable' only when the linked desktop said so; see the class note. */
+    /** 'stable' only when the linked desktop said so. findUpdate holds to it
+     *  only once a stable release carries the APK; see the class note. */
     private fun channel(context: Context): String {
         val file = File(context.filesDir, "userdata/media-hub-settings.json")
         return try {
@@ -80,9 +82,21 @@ object Updater {
      *  main thread. */
     fun findUpdate(context: Context): Release? {
         return try {
-            val stableOnly = channel(context) == "stable"
             val installed = installedCode(context)
             val releases = JSONArray(get(RELEASES))
+            // Stable only once a stable release carries the APK. A desktop on
+            // its default sends 'stable', and until then a phone holding to
+            // it would skip every release it could install and never update.
+            var stableHasApk = false
+            for (i in 0 until releases.length()) {
+                val release = releases.getJSONObject(i)
+                if (release.optBoolean("draft") || release.optBoolean("prerelease")) continue
+                val assets = release.optJSONArray("assets") ?: continue
+                for (j in 0 until assets.length()) {
+                    if (assets.getJSONObject(j).optString("name") == ASSET) stableHasApk = true
+                }
+            }
+            val stableOnly = channel(context) == "stable" && stableHasApk
             var best: Release? = null
             for (i in 0 until releases.length()) {
                 val release = releases.getJSONObject(i)

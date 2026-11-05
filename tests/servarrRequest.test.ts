@@ -1,4 +1,4 @@
-// The Sonarr/Radarr add payload.
+// The Sonarr/Radarr add payload, and the queue count the Services card shows.
 //
 // There is no live Servarr instance to exercise this against, and the failure
 // modes are all quiet: a payload that drops the server's own lookup fields
@@ -8,7 +8,7 @@
 
 import assert from 'node:assert/strict'
 
-import { servarrAddPayload } from '../src/renderer/src/lib/api/servarr'
+import { servarrAddPayload, servarrQueueTotal } from '../src/renderer/src/lib/api/servarr'
 
 const options = { qualityProfileId: 4, rootFolderPath: '/data/media', searchNow: true }
 
@@ -90,6 +90,18 @@ const movieLookup = {
   assert.deepEqual(servarrAddPayload('radarr', movieLookup, quiet).addOptions, {
     searchForMovie: false
   })
+}
+
+// ---------------------------------------------------------------------
+// The "In queue" count is the server's total, not the length of one page.
+// ---------------------------------------------------------------------
+{
+  const page = Array.from({ length: 25 }, (_, i) => ({ id: i + 1 }))
+  assert.equal(servarrQueueTotal({ records: page, totalRecords: 140 }), 140)
+  assert.equal(servarrQueueTotal({ records: [], totalRecords: 0 }), 0)
+  // A server that leaves the total out still gets the page it sent counted.
+  assert.equal(servarrQueueTotal({ records: page.slice(0, 3) }), 3)
+  assert.equal(servarrQueueTotal(undefined), 0)
 }
 
 console.log('servarr request tests passed')

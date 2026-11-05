@@ -116,3 +116,17 @@
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
 }
+
+/* A film marked Not interested: dimmed and named, as on MediaCard. */
+.entryDisliked .artImage {
+  filter: grayscale(0.85) brightness(0.6);
+}
+.dislikedNote {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}

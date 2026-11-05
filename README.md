@@ -301,15 +301,16 @@ pause and stop, and Simkl allows an account 500 requests a day, shared with a li
 
 A mark, un-mark, season or whole title that does not reach a service (offline, the service down, a
 rate limit) is kept and sent again with each sync: every half hour, on **Sync now**, and a few
-seconds after a choice in **Sync review**. After ten failed tries (a try made while offline does not
-count), or 30 days of tries made only while offline, it is given up on: it leaves the count and goes
-into the log, and nothing else says so. On the desktop the show-by-show comparison below sends a
-show's missing episodes again the next time it reads that service's record (Trakt's whenever it
+seconds after a choice in **Sync review**. After ten tries the service refused (a try made while
+offline, rate-limited or while the service is failing does not count), or 30 days, it is given up
+on: it leaves the count and goes into the log, and nothing else says so. A rating Trakt does not
+take is kept and given up on the same terms. On the desktop the show-by-show comparison below sends
+a show's missing episodes again the next time it reads that service's record (Trakt's whenever it
 changes; Simkl's after it changes, at most every six hours), and an un-mark that never reached
 Simkl can come back from Simkl.
 
-What is waiting belongs to the sign-in it failed under: connecting the service again, or Trakt or
-MyAnimeList renewing its sign-in on its own, drops it unsent.
+What is waiting belongs to the sign-in it failed under: connecting the service again drops it
+unsent. Trakt and MyAnimeList renewing their sign-in on their own does not.
 
 The Watchlists panel under Accounts → Tracking says how many are still waiting, counting each
 episode once for every service it has not reached (MyAnimeList once per season): a 12-episode season
@@ -326,10 +327,9 @@ season that keeps its own tile is sent as an entry of its own when marked on its
 are in [docs/WATCHLIST-SYNC.md](docs/WATCHLIST-SYNC.md#when-a-members-place-is-not-its-season).
 
 **While the anime catalog is being regrouped** (see **Merged anime** under Discover), a later season
-marked or un-marked on the show's page is not sent to Simkl and is not kept for another try; on the
-desktop a missed mark goes out the next time the show is compared with Simkl, and a missed un-mark
-never does. In that window a mark or un-mark on a merged anime sends MyAnimeList the count of every
-episode watched under the whole show, on the first season's entry.
+marked or un-marked on the show's page is kept with the other changes still owed and sent to Simkl
+once the catalog is organised. A MyAnimeList change on a merged anime with a later season involved
+waits the same way, rather than sending the first season's entry the count of the whole show.
 
 **Apply sync** with MyAnimeList places each episode it brings in again rather than trusting the
 preview: one that can no longer be placed is counted among the failed ones (preview again to see
@@ -337,10 +337,8 @@ where it stands now). Ratings and the counts sent to MyAnimeList are applied as 
 them. The preview already lists a show's own entry the app cannot place as unmatched, and nothing
 is done with it. If the anime catalog is being regrouped, Apply refuses altogether and asks you to
 preview again. With Simkl connected, Apply also marks the episodes it brings in on your Simkl
-account. That copy is sent once: if it fails it is written to the log and not kept for another try,
-and the episode comparison sends it the next time it reads your Simkl anime list (at most every six
-hours, once that list has changed). When some entries fail, the line under the button says how
-many failed but not which ones or why.
+account; a copy that does not get through is kept and sent again like a mark (above). When some
+entries fail, the line under the button says how many failed but not which ones or why.
 
 On the desktop, the watched episodes of each show are also compared with Simkl's and Trakt's whole
 record of that show whenever either changes (Simkl's at most every six hours), and the two are
@@ -392,14 +390,14 @@ The phone and TV app take in only what Simkl holds and have no such panel. The r
   time its history is pulled. After that, what you watch on Trakt comes in by itself, but only
   viewings dated within three days of the last check; one added on Trakt with an older date, such as
   one marked as watched on its release date, stays there until you press **Import my Trakt library**
-  again. **Import my Trakt library** does not skip what is held here: a viewing played here and sent
-  to Trakt comes back with Trakt's time as a second play (see
+  again. **Import my Trakt library** skips a viewing already held here, as the first pull does, so
+  pressing it again does not turn what you played here into a second play (see
   [docs/WATCHLIST-SYNC.md](docs/WATCHLIST-SYNC.md#trakts-history)).
 - **Back up your library** to a single file and restore it on another machine, from the same card. A
   restore replaces the whole library on this machine, every profile's, with what the file holds
-  rather than merging: anything watched, rated or listed here since the backup was taken is gone,
-  and nothing is saved first, so save a backup before restoring if you may want today's library
-  back. Service credentials stay on the machine that holds them.
+  rather than merging: anything watched, rated or listed here since the backup was taken is gone.
+  The library it replaces is saved first as an automatic backup (below), so a restore from the
+  wrong file can be undone. Service credentials stay on the machine that holds them.
 
 ### 6. Together — Watch Party needs nothing on a LAN; Rooms need a relay
 
@@ -449,12 +447,14 @@ over to its second face. It is where the installation is configured and watched:
 
 - **A backup is taken automatically** into the `backups` folder in the app's data folder
   (`%APPDATA%\r3v07v3r-media-hub\backups` on Windows) before anything rewrites watch history on its
-  own: an anime regroup, a Trakt import, the MyAnimeList apply, and, at most once a day each, the
-  Trakt pull and the desktop's episode comparison (before it takes in a Trakt account's episodes, or
-  before a **Sync review** choice removes episodes here). Simkl's take-in writes none.
+  own: an anime regroup or repair that moves rows held here, a Trakt import, the MyAnimeList apply,
+  a restore, and, at most once a day each, the Trakt pull and the desktop's episode comparison
+  (before it takes in a Trakt account's episodes, or before a **Sync review** choice removes
+  episodes here). Simkl's take-in writes none.
 - **Keeping one.** Each file is named `auto-`, the UTC time and what it preceded, for example
-  `auto-2026-10-11T12-34-56-789Z-trakt-pull.json`. Five are kept in all, so on a busy library the
-  oldest goes within days; copy one elsewhere or rename it without the `auto-` prefix to keep it.
+  `auto-2026-10-11T12-34-56-789Z-trakt-pull.json`. The newest five are kept, and the newest of each
+  of those seven kinds on top, so the one taken before a rare step stays until that step runs again;
+  copy one elsewhere or rename it without the `auto-` prefix to keep it.
   Restore it from **Your library** (**Restore…** does not open in that folder, so browse to it).
 - **Ask Sonarr or Radarr for a title** straight from its page, picking the quality profile and
   folder, with a search starting as soon as it is added. Movies and series only; anime is
@@ -756,10 +756,11 @@ What the app does when the player hangs is under
 <details>
 <summary><strong>Subtitles do not appear automatically</strong></summary>
 
-Only an embedded track in the subtitle language chosen on the Settings page appears by itself; the
-**Show subtitles automatically** switch has no effect (see [Known limitations](#known-limitations)).
-For online subtitles, connect SubDL and/or OpenSubtitles under **Control centre → Accounts →
-Subtitles**, then open the player's Subtitles menu and pick a result.
+An embedded track in the subtitle language chosen on the Settings page is turned on by itself. An
+online subtitle is fetched by itself only when the copy that plays has neither your audio language
+nor a subtitle track in your subtitle language, and only while **Show subtitles automatically** is
+on (the Settings page). Otherwise connect SubDL and/or OpenSubtitles under **Control centre →
+Accounts → Subtitles**, open the player's Subtitles menu and pick a result.
 
 If neither service is connected, the menu says so. If every connected service fails (a bad key, an
 outage, a rate limit), the menu shows the error. With both connected and only one failing, the menu
@@ -867,10 +868,9 @@ and the half-hourly watchlist pull under `job:planned-sync`.
 
 - A partly downloaded title can only resume from the source it came from, so it still needs that
   source connected.
-- Some sync changes are let go without a message: a mark or un-mark given up after ten failed tries
-  or 30 days offline, what is still waiting when a service's sign-in changes, a failed Trakt rating,
-  the Simkl copy of a MyAnimeList apply, and a later anime season marked or un-marked on its show's
-  page while the anime catalog is being regrouped (see
+- Some sync changes are let go without a message: a mark, an un-mark, a Trakt rating or the Simkl
+  copy of a MyAnimeList apply given up after ten refused tries or 30 days, and what is still waiting
+  when a service is signed out or connected again (see
   [Sync](#5-sync--optional-one-account-per-service)).
 - **Merged anime and the tracking services.** For a long entry that TMDB splits into several
   seasons, such as Naruto: Shippuden, its episodes taken in from Simkl, MyAnimeList or Trakt past
@@ -890,8 +890,6 @@ and the half-hourly watchlist pull under `job:planned-sync`.
   not a lock: the app reopens on whichever profile was last in use, and from another profile the
   PIN can be removed, or the profile deleted, without it. A **Kids** profile shows a badge next to
   its name and restricts nothing.
-- **Show subtitles automatically** on the Settings page is saved but has no effect.
-- A Watch Party's Queue tab stays empty: nothing in the app adds a title to it.
 
 ## License
 

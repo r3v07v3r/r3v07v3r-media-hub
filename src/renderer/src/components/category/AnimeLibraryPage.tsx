@@ -31,7 +31,11 @@ import { titleUnreleased } from '@renderer/lib/mediaHub/releaseDate'
 import { CategoryFilterBar } from './CategoryFilterBar'
 import { TitleStatusButton } from '@renderer/components/media/TitleStatusButton'
 import { titleStatusOf } from '@renderer/lib/mediaHub/titleStatus'
-import { resolveLibrarySelection } from '@renderer/lib/mediaHub/librarySelection'
+import {
+  libraryMembershipKey,
+  resolveLibrarySelection,
+  stampLibrarySelection
+} from '@renderer/lib/mediaHub/librarySelection'
 import { passOverVisible } from '@renderer/lib/mediaHub/passOver'
 import styles from './AnimeLibraryPage.module.css'
 import { RatingBadge } from '@renderer/components/detail/RatingBadge'
@@ -828,6 +832,10 @@ function LibrarySimilar({
   config: CategoryConfig
   onOpen: (media: MediaItem) => void
 }) {
+  // catalog:related is not filtered by Hide Disliked, so a title marked Not
+  // interested can be suggested here. It stays, dimmed and named as the
+  // grid's tiles are, so the list does not read as if it were never marked.
+  const { dislikedIds } = useAppState()
   if (status === 'loading') {
     return (
       <div className={styles.similarList} aria-busy="true">
@@ -851,11 +859,12 @@ function LibrarySimilar({
     <ul className={styles.similarList}>
       {items.slice(0, 10).map((item) => {
         const artwork = resolveArtwork(item)
+        const disliked = dislikedIds.has(item.id)
         return (
           <li key={item.id}>
             <button
               type="button"
-              className={styles.similarRow}
+              className={`${styles.similarRow} ${disliked ? styles.similarRowDisliked : ''}`}
               data-media-id={item.id}
               onClick={() => onOpen(item)}
             >
@@ -868,6 +877,12 @@ function LibrarySimilar({
                 sizes="46px"
               />
               <span className={styles.similarCopy}>
+                {disliked && (
+                  <em className={styles.tileDislikedNote}>
+                    <Icon name="thumbs-down" size={10} />
+                    Not interested
+                  </em>
+                )}
                 <span className={styles.similarTitle}>{item.title}</span>
                 <span className={styles.similarMeta}>
                   {item.releaseYear ?? 'New'}
@@ -890,13 +905,15 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
     refreshCatalog,
     continueWatching,
     recommendations,
+    animeRecommendations,
     recommendationsByKind,
     refreshHomeFeed,
     categorySearch,
     clearCategorySearch,
     mediaHubSettings,
     openDetail,
-    pendingRestore
+    pendingRestore,
+    dislikedIds
   } = useAppState()
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
@@ -928,6 +945,18 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
   )
   const kindState = catalogKindStates[config.kind]
   const searchActive = categorySearch.kind === config.kind && categorySearch.query.trim().length > 0
+  // How the online catalog fell short of a search, in the notes below: still
+  // running when the library's own hits stopped waiting for it is not the
+  // same as out of reach.
+  const providerShortfall =
+    categorySearch.providerReason === 'slow' ? 'did not answer in time' : 'could not be reached'
+  // The page's query: its filters, Hide toggles and search, not its sort. A
+  // selection last made or seen under another one is shown only while its
+  // title is still on the page (librarySelection.ts), so a filter that hides
+  // it moves the panel on. Stamped during render below, as AppStateContext
+  // resets its review state, so no frame shows a stale stamp.
+  const queryKey = libraryMembershipKey(filters, searchActive ? categorySearch.query.trim() : '')
+  const [selectedUnder, setSelectedUnder] = useState({ selection, query: queryKey })
   // STAGE 3: the browse grid pages from the index (catalog:query) — SQL
   // filters, SQL sort, exact totals — instead of filtering the loaded
   // array. The array (`library`) remains only for the curated rails and
@@ -1141,15 +1170,23 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
   // Series, and anime on Anime — drawn from the whole ranking for that kind
   // (recommendationsByKind). Narrowing Home's mixed row instead left the
   // Movies page four films on a mostly-anime evening, the same four for
-  // days. The narrowed row stays as the fallback until the feed answers.
+  // days. Before the feed answers per kind, Anime falls back to its own
+  // list from the whole ranking (the anime among the Home row came to a
+  // handful of tiles once a merged show's seasons left it), and every kind
+  // to the narrowed Home row.
   const recommended = useMemo(
     () =>
       uniqueItems(
-        (recommendationsByKind[config.kind] ?? recommendations)
+        (
+          recommendationsByKind[config.kind] ??
+          (config.kind === 'anime' && animeRecommendations.length
+            ? animeRecommendations
+            : recommendations)
+        )
           .map((recommendation) => recommendation.media)
           .filter((media) => matchesCategoryKind(media, config.kind))
       ).slice(0, 18),
-    [recommendations, recommendationsByKind, config.kind]
+    [animeRecommendations, recommendations, recommendationsByKind, config.kind]
   )
   // Seeds EverythingSection's reveal batch past wherever the previously-
   // focused tile falls, rounded up to a clean batch boundary, so a
@@ -1212,16 +1249,39 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
       cancelled = true
     }
   }, [restorePendingHere, browseLoading, pendingRestore, ensureItem])
+  // What the page shows, for the side panel's hold: the grid and the shelves
+  // drawn beside it, Popular included, since a title picked there and still
+  // there after a filter change is still on the page. A search draws only
+  // its results and the hero, so a title on a shelf it hides is not.
+  const selectionPools = useMemo(
+    () =>
+      searchActive
+        ? [browseItems, heroItems]
+        : [browseItems, continuing, recommended, popular, heroItems],
+    [searchActive, browseItems, continuing, recommended, popular, heroItems]
+  )
+  // Which titles are on the page is not known while the grid's first page
+  // (or the search) for a new query is loading: the grid is empty then, not
+  // filtered. The selection is held through the wait, not handed to the hero
+  // and back once the page arrives.
+  const membershipKnown = searchActive ? !categorySearch.loading : arrayFallback || !browse.loading
+  const selectionStamp = stampLibrarySelection(selectedUnder, selectionPools, selection, queryKey)
+  if (selectionStamp !== selectedUnder) setSelectedUnder(selectionStamp)
   const selected = useMemo(
     () =>
       resolveLibrarySelection(
-        [browseItems, continuing, recommended, heroItems],
+        selectionPools,
         selection,
-        activeHero
+        activeHero,
+        membershipKnown && selectionStamp.query !== queryKey
       ),
-    [activeHero, browseItems, continuing, heroItems, recommended, selection]
+    [activeHero, selectionPools, selection, membershipKnown, selectionStamp.query, queryKey]
   )
   const heroArt = activeHero ? resolveArtwork(activeHero) : null
+  // The hero ranks the filtered library, so with Hide Disliked on it never
+  // features a title marked Not interested. With it off it can, and then it
+  // is dimmed and named like the grid's tiles rather than shown as a pick.
+  const heroDisliked = activeHero ? dislikedIds.has(activeHero.id) : false
 
   // Exact figures from the index, however deep it grows — the loaded
   // array only ever bounded these. Falls back to the array's own counts
@@ -1240,12 +1300,14 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
     <div className={styles.page}>
       <main className={styles.library}>
         <section
-          className={`${styles.hero} ${activeHero ? styles.heroClickable : ''} glass-panel`}
+          className={`${styles.hero} ${activeHero ? styles.heroClickable : ''} ${
+            heroDisliked ? styles.heroDisliked : ''
+          } glass-panel`}
           role={activeHero ? 'link' : undefined}
           tabIndex={activeHero ? 0 : undefined}
           aria-label={
             activeHero
-              ? `Open full details for ${activeHero.title}`
+              ? `Open full details for ${activeHero.title}${heroDisliked ? ', not interested' : ''}`
               : `${config.label} library spotlight`
           }
           onClick={() => {
@@ -1334,6 +1396,12 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
           {activeHero && (
             <div className={styles.featuredCopy}>
               <span>Featured now</span>
+              {heroDisliked && (
+                <em className={styles.tileDislikedNote} aria-hidden="true">
+                  <Icon name="thumbs-down" size={10} />
+                  Not interested
+                </em>
+              )}
               <h2>{activeHero.title}</h2>
               <p>
                 <Icon name="star" size={14} />
@@ -1393,14 +1461,18 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
         {/* The online catalog failed or did not answer in time, so the
             results are only what the library already had. Said above a
             short list as well as in place of an empty one: either way the
-            missing title may simply not be in the library yet. */}
+            missing title may simply not be in the library yet. A slow
+            catalog was reached, and is not said to be out of reach. */}
         {searchActive &&
           !categorySearch.loading &&
           categorySearch.providerUnreachable &&
           searchResults.length > 0 && (
             <div className={`${styles.offlineBanner} ${styles.searchBanner}`} role="status">
-              <Icon name="wifi-off" size={15} />
-              {`The online ${config.pluralLabel} catalog could not be reached, so only titles already in the library are shown.`}
+              <Icon
+                name={categorySearch.providerReason === 'slow' ? 'clock' : 'wifi-off'}
+                size={15}
+              />
+              {`The online ${config.pluralLabel} catalog ${providerShortfall}, so only titles already in the library are shown.`}
             </div>
           )}
         {searchActive ? (
@@ -1417,7 +1489,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
                 : categorySearch.error
                   ? `The ${config.pluralLabel} search could not be reached. Try again.`
                   : categorySearch.providerUnreachable
-                    ? `The online ${config.pluralLabel} catalog could not be reached, and nothing already in the library matched.`
+                    ? `The online ${config.pluralLabel} catalog ${providerShortfall}, and nothing already in the library matched.`
                     : `No ${config.pluralLabel} matched that search.`
             }
           />

@@ -21,6 +21,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { createDatabase } from '../src/main/media-hub/database'
 import {
   CLOSE_MATCH_RANK,
+  combinedShortfall,
   comparableTitle,
   mergeSearchResults,
   searchTokens,
@@ -298,6 +299,30 @@ check('the limit bounds the answer but never drops the best match', () => {
   assert.deepEqual(db.indexSearch('series', 'foundation', 0), [])
 })
 
+check('a later season of a merged anime is left out, and can be asked for on its own', () => {
+  // kitsu:11 is the second season of the show kitsu:10 fronts. Its own name
+  // is in no row but its own, so the search that answers with its show
+  // (catalog.ts) has to be able to find that row with no provider.
+  seed('anime', [
+    item('kitsu:10', 'Naruto', { type: 'anime' }),
+    item('kitsu:11', 'Naruto Shippuuden', { type: 'anime' })
+  ])
+  const later = new Map([['kitsu:11', { id: 'kitsu:10', season: 2 }]])
+  assert.deepEqual(ids(db.indexSearch('anime', 'shippuuden', 100, later)), [])
+  assert.deepEqual(ids(db.indexSearch('anime', 'naruto', 100, later)), ['kitsu:10'])
+  assert.deepEqual(ids(db.indexSearch('anime', 'shippuuden', 100, later, true)), ['kitsu:11'])
+  assert.deepEqual(
+    ids(db.indexSearch('anime', 'naruto', 100, later, true)),
+    ['kitsu:11'],
+    'the later seasons and nothing else'
+  )
+  assert.deepEqual(db.indexSearch('anime', 'shippuuden', 0, later, true), [], 'its own limit')
+  // Nothing is a later season while nothing is grouped, or outside anime.
+  assert.deepEqual(db.indexSearch('anime', 'shippuuden', 100, undefined, true), [])
+  assert.deepEqual(db.indexSearch('anime', 'shippuuden', 100, new Map(), true), [])
+  assert.deepEqual(db.indexSearch('series', 'foundation', 100, later, true), [])
+})
+
 check(
   'an exact title survives the candidate limit however many better-ranked rows share its words',
   () => {
@@ -377,15 +402,42 @@ async function providerChecks(): Promise<void> {
   await checkAsync('a provider that fails is unreachable, not an empty answer', async () => {
     const failed = Promise.reject(Object.assign(new Error('Request failed (429)'), { status: 429 }))
     const outcome = await settleProvider<CatalogItem>(failed)
-    assert.deepEqual(outcome, { items: [], unreachable: true })
+    assert.deepEqual(outcome, { items: [], unreachable: true, reason: 'failed' })
   })
 
-  await checkAsync('a provider still out when the grace ends is unreachable', async () => {
+  // A slow link answers, just not while the index's hits wait for it: the
+  // screens say it did not answer in time, not that it could not be reached.
+  await checkAsync('a provider still out when the grace ends is slow, not failed', async () => {
     const started = Date.now()
     const outcome = await settleProvider(never, 50)
-    assert.deepEqual(outcome, { items: [], unreachable: true })
+    assert.deepEqual(outcome, { items: [], unreachable: true, reason: 'slow' })
     assert.ok(Date.now() - started < 1_000, 'the grace bounds the wait')
   })
+
+  await checkAsync('a provider that fails inside the grace is failed, not slow', async () => {
+    const failed = Promise.reject(new TypeError('fetch failed'))
+    const outcome = await settleProvider<CatalogItem>(failed, 1_000)
+    assert.deepEqual(outcome, { items: [], unreachable: true, reason: 'failed' })
+  })
+
+  // The assistant asks the three kinds at once and says one thing: "could
+  // not be reached" if any one failed, "did not answer in time" only when
+  // every one that fell short was just slow.
+  await checkAsync(
+    'several answers report failed over slow, and nothing when all answered',
+    async () => {
+      const ok = { providerUnreachable: false }
+      const slow = { providerUnreachable: true, providerReason: 'slow' as const }
+      const failed = { providerUnreachable: true, providerReason: 'failed' as const }
+      assert.equal(combinedShortfall([ok, ok, ok]), undefined)
+      assert.equal(combinedShortfall([ok, slow, ok]), 'slow')
+      assert.equal(combinedShortfall([slow, slow, ok]), 'slow')
+      assert.equal(combinedShortfall([slow, failed, ok]), 'failed')
+      // An answer with no reason is from an older backend: failed.
+      assert.equal(combinedShortfall([slow, { providerUnreachable: true }]), 'failed')
+      assert.equal(combinedShortfall([]), undefined)
+    }
+  )
 
   await checkAsync('with no grace the provider is waited for until it settles', async () => {
     const late = new Promise<CatalogItem[]>((resolve) =>

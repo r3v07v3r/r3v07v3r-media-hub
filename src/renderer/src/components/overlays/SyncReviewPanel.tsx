@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import type { EpisodeSyncService, ShowSyncRow } from '@shared/media-hub/types'
@@ -22,30 +22,101 @@ const SIDE_NAMES: Record<ShowSyncSideKey, string> = { local: 'Here', ...SERVICE_
  *  cache still costs a round trip each time. */
 const listedCache = new Map<string, SeasonEpisodes>()
 
+/** How many metadata lookups the panel has out at once. A first Trakt
+ *  comparison can list hundreds of shows, and asking for all of them
+ *  together puts that many lookups ahead of whatever the person opens next
+ *  (a detail page, Play) in main's scheduler. */
+const LOOKUPS_AT_ONCE = 4
+let lookupsRunning = 0
+const waitingLookups: Array<() => void> = []
+
+function startWaitingLookups(): void {
+  while (lookupsRunning < LOOKUPS_AT_ONCE && waitingLookups.length > 0) {
+    waitingLookups.shift()!()
+  }
+}
+
+/** Runs `lookup` when a slot is free. The returned function takes it back
+ *  out of the queue if it has not started, so a row whose panel is closed
+ *  before its turn costs nothing. */
+function queueLookup(lookup: () => Promise<void>): () => void {
+  const start = (): void => {
+    lookupsRunning += 1
+    const done = (): void => {
+      lookupsRunning -= 1
+      startWaitingLookups()
+    }
+    lookup().then(done, done)
+  }
+  waitingLookups.push(start)
+  startWaitingLookups()
+  return () => {
+    const index = waitingLookups.indexOf(start)
+    if (index >= 0) waitingLookups.splice(index, 1)
+  }
+}
+
 /** The title's episodes per season, from its metadata, once it has loaded;
  *  an empty map until then and when the lookup fails (no season turns green
- *  without one). */
-function useSeasonEpisodes(row: ShowSyncRow): SeasonEpisodes {
+ *  without one). Nothing is asked until the row is on screen (`visible`). */
+function useSeasonEpisodes(row: ShowSyncRow, visible: boolean): SeasonEpisodes {
   const [listed, setListed] = useState<SeasonEpisodes>(() => listedCache.get(row.id) ?? new Map())
   useEffect(() => {
     // The initial state already read the cache; a row is keyed by its id.
-    if (listedCache.has(row.id)) return
+    if (!visible || listedCache.has(row.id)) return
     const api = window.api?.mediaHub?.catalog
     if (!api) return
     let current = true
-    api
-      .meta(row.type, row.id)
-      .then((item) => {
-        const next = seasonEpisodes(item.videos)
-        listedCache.set(row.id, next)
-        if (current) setListed(next)
-      })
-      .catch(() => {})
+    const drop = queueLookup(() =>
+      api
+        .meta(row.type, row.id)
+        .then((item) => {
+          const next = seasonEpisodes(item.videos)
+          listedCache.set(row.id, next)
+          if (current) setListed(next)
+        })
+        .catch(() => {})
+    )
     return () => {
       current = false
+      drop()
     }
-  }, [row.id, row.type])
+  }, [row.id, row.type, visible])
   return listed
+}
+
+/** Whether the element the returned ref is attached to is on screen (or
+ *  close to it) inside the panel's scrolling list. Once seen it stays true:
+ *  the lookup it gates is wanted once, not again on every scroll. A callback
+ *  ref, as in MediaGrid, so the observer follows the node itself. */
+function useSeenOnScreen(): [(node: HTMLElement | null) => void, boolean] {
+  const [seen, setSeen] = useState(false)
+  const observerRef = useRef<IntersectionObserver | null>(null)
+  const ref = useCallback((node: HTMLElement | null) => {
+    observerRef.current?.disconnect()
+    observerRef.current = null
+    if (!node) return
+    if (typeof IntersectionObserver === 'undefined') {
+      setSeen(true)
+      return
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setSeen(true)
+          observer.disconnect()
+        }
+      },
+      // The list the row sits in is the root, not the viewport: the list
+      // scrolls on its own and clips the rows below it, so a margin on the
+      // viewport never reached them and a row was asked for only once it
+      // was already showing.
+      { root: node.parentElement, rootMargin: '300px' }
+    )
+    observer.observe(node)
+    observerRef.current = observer
+  }, [])
+  return [ref, seen]
 }
 
 function bubbleTitle(bubble: SeasonBubble, side: string): string {
@@ -83,10 +154,13 @@ function Bubble({ bubble, side }: { bubble: SeasonBubble; side: string }) {
 }
 
 /** A show the automatic step merged: a line per side with what that side
- *  held on its own, and Use beside each to make every other side match it. */
+ *  held on its own, and Use beside each to bring the other sides back to
+ *  that line as far as each service allows (a service keeps what it
+ *  recorded on its own). */
 function ShowRow({ row }: { row: ShowSyncRow }) {
   const { decideSyncShow } = useAppState()
-  const listed = useSeasonEpisodes(row)
+  const [rowRef, onScreen] = useSeenOnScreen()
+  const listed = useSeasonEpisodes(row, onScreen)
   const sides = showSyncSides(row, listed)
   const serviceNames = sides
     .filter((side) => side.key !== 'local')
@@ -106,7 +180,7 @@ function ShowRow({ row }: { row: ShowSyncRow }) {
       : `Make here match ${name}`
   }
   return (
-    <div className={styles.showRow}>
+    <div ref={rowRef} className={styles.showRow}>
       <div className={styles.row}>
         {row.poster && <img className={styles.poster} src={row.poster} alt="" />}
         <div className={styles.info}>
@@ -119,7 +193,7 @@ function ShowRow({ row }: { row: ShowSyncRow }) {
             type="button"
             className={styles.ignoreButton}
             aria-label={`Keep ${row.title} as merged`}
-            title="Keep as merged: every side now has everything"
+            title="Keep as merged: every side keeps what it has now"
             onClick={() => decideSyncShow(row, 'keep')}
           >
             <Icon name="x" size={13} />
@@ -207,8 +281,10 @@ export function SyncReviewPanel() {
             <span className={styles.title}>Sync review</span>
             <span className={styles.subtitle}>
               Where this app and your tracking services differed. For a show, each line is what one
-              side had before they were merged: Use makes the others match it, the x keeps the
-              merge. Films wait for you to pick which side is right, or to be ignored.
+              side had before they were merged. Use brings the others back to that line as far as
+              each service allows: a service keeps episodes it recorded on its own, and a dashed
+              season cannot be sent there. The x keeps the merge as it is. Films wait for you to
+              pick which side is right, or to be ignored.
             </span>
           </div>
           <button

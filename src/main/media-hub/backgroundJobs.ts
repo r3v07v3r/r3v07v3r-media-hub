@@ -304,12 +304,17 @@ export function startBackgroundJobs(): void {
   registerRecurringJob({
     name: 'anime-sync-repair',
     label: 'Repairing anime watch history',
-    // A recurring job for work that happens at most once, because what it
-    // is really waiting for is the anime-grouping pass, and there is no
-    // event to hang that on — see animeSyncRepair.ts. Every run after the
-    // repair lands is one settings read that returns immediately.
+    // Two things. The repair is work that finishes once: after its first
+    // real run it runs again only for ids still waiting on a TheTVDB lookup
+    // (animeSyncRepair.ts's pendingRepairIds). It is a recurring job because
+    // what it is really waiting for is the anime-grouping pass, and there is
+    // no event to hang that on — see animeSyncRepair.ts. Once it has
+    // finished, its part of a run is one settings read. The other part runs
+    // every time (see run below): keepAnimeHistoryWithShows builds the group
+    // records from the catalog and compares them with the ledger, and moves
+    // rows only when the two differ.
     //
-    // Hourly rather than tighter for the same reason: on the one launch
+    // Hourly rather than tighter for the same reason: on the launches
     // where it has something to do, grouping takes minutes, so the cost of
     // arriving late is that the repair happens on the NEXT launch instead
     // — invisible either way, since the rows have already been wrong for
@@ -336,8 +341,8 @@ export function startBackgroundJobs(): void {
       // main-to-renderer "history changed" broadcast (the Trakt import
       // gets away without one because the renderer refreshes when its own
       // call returns) — so the grids pick this up the next time they
-      // fetch, which for a pass that runs once, at idle, minutes into a
-      // session is the next navigation or the next launch.
+      // fetch, which for a pass that runs at idle, minutes into a session,
+      // is the next navigation or the next launch.
       if (result.repaired) requestRecommendationsRebuild()
     }
   })

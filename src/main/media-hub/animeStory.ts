@@ -103,8 +103,15 @@ export async function storyForShow(
     storyForAnime(showId, priority),
     storyForAnime(members[members.length - 1], priority)
   ])
+  // The films, OVAs and specials filed with the show are listed between its
+  // seasons, in the timeline that comes with either order below. A link to
+  // one from the first or last season would list it a second time, under
+  // Watch before or Alongside.
+  const extras = new Set((animeShowParts(showId)?.extras ?? []).map((extra) => String(extra.id)))
   const story: AnimeStoryResult = {
-    links: mergedShowStoryLinks(members, first.links, last.links),
+    links: mergedShowStoryLinks(members, first.links, last.links).filter(
+      (link) => !extras.has(String(link.item?.id))
+    ),
     // Unchecked at either end is unchecked: with the last season's answer
     // missing, "no sequel listed" would be a claim nobody looked up.
     checked: first.checked && last.checked

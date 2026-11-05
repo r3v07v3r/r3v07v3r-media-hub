@@ -20,6 +20,7 @@ import assert from 'node:assert/strict'
 
 import { animeGroupIndexesOf, laterSeasonsOf } from '../src/main/media-hub/animeSeasons'
 import {
+  animeRowAwaitsGrouping,
   batchHistoryPayload,
   hasSimklContent,
   historyPayload,
@@ -37,7 +38,6 @@ import {
 import { bySeason } from '../src/main/media-hub/titleStatusRules'
 import {
   animeEntryTarget,
-  animeHistoryCoordinates,
   animeSeasonMembers,
   animeSeasonOf,
   animeSeasonOfMember,
@@ -256,41 +256,14 @@ check('it belongs to its show; a show and an unmerged title belong to nothing', 
   assert.equal(animeSeasonOf(ALONE, targetOf), null)
 })
 
-check('an episode written under it is kept under the show, at its season there', () => {
-  // Whatever season it arrived with: that is Kitsu's label for the one
-  // entry, and the episode number is already the entry's own.
-  for (const season of [1, 2, undefined]) {
-    assert.deepEqual(animeHistoryCoordinates({ id: SEASON_2, season, episode: 4 }, targetOf), {
-      id: SHOW,
-      season: 2,
-      episode: 4
-    })
-  }
-  assert.deepEqual(animeHistoryCoordinates({ id: SEASON_3, season: 1, episode: 1 }, targetOf), {
-    id: SHOW,
-    season: 3,
-    episode: 1
-  })
-})
-
-check('which is where the same episode comes back from Simkl', () => {
-  const kept = animeHistoryCoordinates({ id: SEASON_2, season: 1, episode: 4 }, targetOf)
+check('an episode kept under the show is where the same episode comes back from Simkl', () => {
+  // Where tracking.ts's underShow keeps an episode played from the season's
+  // own card: under the show, at the season it is there.
+  const kept = { id: SHOW, season: 2, episode: 4 }
   const sent = toSimklAnimeEpisode(kept, membersOf)
   assert.deepEqual(sent, { id: SEASON_2, episode: 4 }, "still the season's own entry")
   assert.ok(sent)
   assert.deepEqual(fromSimklAnimeEpisode(sent, targetOf), kept)
-})
-
-check('a show, an unmerged title and a row with no episode stay as they are', () => {
-  for (const local of [
-    { id: SHOW, season: 2, episode: 4 },
-    { id: SHOW, season: 0, episode: 1 },
-    { id: ALONE, season: 2, episode: 4 },
-    { id: SEASON_2, season: null, episode: null },
-    { id: SEASON_2 }
-  ]) {
-    assert.deepEqual(animeHistoryCoordinates(local, targetOf), local)
-  }
 })
 
 // ---------------------------------------------------------------------------
@@ -740,6 +713,34 @@ check('before the catalog is grouped a later season is not sent', () => {
   })
 })
 
+check('a later season left out before grouping is owed, not unsendable', () => {
+  // What tracking.ts keeps for the retry instead of dropping: the rows the
+  // body above left out only because the catalog is not grouped yet.
+  assert.equal(animeRowAwaitsGrouping(show, { season: 2, episode: 5 }, undefined), true)
+  assert.equal(animeRowAwaitsGrouping(show, { season: 3, episode: 1 }, undefined), true)
+  // Once grouped, the rules have answered: sent, or known to have no entry.
+  assert.equal(animeRowAwaitsGrouping(show, { season: 2, episode: 5 }, membersOf), false)
+  assert.equal(animeRowAwaitsGrouping(show, { season: 4, episode: 1 }, membersOf), false)
+  // A first season goes out either way; a special, a row with no episode,
+  // a series and an id Simkl cannot be told never do.
+  for (const row of [
+    { season: 1, episode: 5 },
+    { season: null, episode: 5 },
+    { season: 0, episode: 1 },
+    { season: 2, episode: null }
+  ]) {
+    assert.equal(animeRowAwaitsGrouping(show, row, undefined), false, JSON.stringify(row))
+  }
+  assert.equal(
+    animeRowAwaitsGrouping({ ...show, type: 'series' }, { season: 2, episode: 5 }, undefined),
+    false
+  )
+  assert.equal(
+    animeRowAwaitsGrouping({ ...show, id: 'local:1' }, { season: 2, episode: 5 }, undefined),
+    false
+  )
+})
+
 check('a scrobble names the entry and the flat episode, with no season', () => {
   assert.deepEqual(scrobblePayload(show, { season: 2, episode: 5 }, 42, membersOf), {
     progress: 42,
@@ -751,8 +752,13 @@ check('a scrobble names the entry and the flat episode, with no season', () => {
     anime: { title: 'Bleach', year: 2004, ids: { kitsu: 100 } },
     episode: { number: 5 }
   })
-  // A one-off with no episode coordinate is its entry's only episode.
-  assert.deepEqual(scrobblePayload(alone, {}, 10, membersOf)?.episode, { number: 1 })
+  // A play with no episode number scrobbles nothing, as its history mark
+  // sends nothing: a stop is a watched write, and taking it for episode 1
+  // told Simkl of a viewing nothing here records.
+  assert.deepEqual(historyPayload(alone, {}, membersOf), {})
+  assert.equal(scrobblePayload(alone, {}, 10, membersOf), null)
+  assert.equal(scrobblePayload(alone, {}, 90), null)
+  assert.deepEqual(scrobblePayload(alone, { episode: 3 }, 90, membersOf)?.episode, { number: 3 })
   assert.equal(scrobblePayload(show, { season: 0, episode: 1 }, 42, membersOf), null)
   assert.equal(scrobblePayload(show, { season: 4, episode: 1 }, 42, membersOf), null)
 })

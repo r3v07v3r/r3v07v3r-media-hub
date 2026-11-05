@@ -148,14 +148,19 @@ async function main(): Promise<void> {
     assert.equal(bob?.state, 'queued', "bob's job waits — it never borrows alice's account")
     assert.match(bob?.lastError ?? '', /not shared TorBox access/)
 
-    // Ownership healing: alice also wants the title, so the job adopts her
-    // (credentialed) device and becomes fetchable.
-    jobs.enqueue({
-      contentKey: 'tt43::',
-      infoHash: 'e'.repeat(40),
-      title: 'Unfunded Movie',
-      ownerDeviceId: 'device-alice'
-    })
+    // Ownership healing: alice also wants the title, and bob cannot fetch it
+    // at all, so the job adopts her (credentialed) device and becomes
+    // fetchable. canFetch is the test POST /api/jobs passes; without it a
+    // queued job keeps the device that queued it.
+    jobs.enqueue(
+      {
+        contentKey: 'tt43::',
+        infoHash: 'e'.repeat(40),
+        title: 'Unfunded Movie',
+        ownerDeviceId: 'device-alice'
+      },
+      { canFetch: (deviceId) => Boolean(credentials.tokenForDevice(deviceId)) }
+    )
     assert.equal(
       jobs.list().find((candidate) => candidate.contentKey === 'tt43::')?.ownerDeviceId,
       'device-alice',

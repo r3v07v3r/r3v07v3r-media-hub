@@ -14,8 +14,10 @@
 
 import assert from 'node:assert'
 import fs from 'node:fs'
+import { registerHooks } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import type {
   AnimeStoryLink,
   AnimeTimelineEntry,
@@ -40,6 +42,22 @@ import {
   invalidateAnimeGroupIndex,
   isSeasonEntry
 } from '../src/main/media-hub/animeSeasons'
+
+// animeStory.ts (storyForShow, the page's catalog:story) imports 'electron'
+// through ipcGuard, so it is loaded further down with that name pointed at
+// the headless stand-in (src/headless/electronShim), as catalogSearch.test.ts
+// loads catalog.ts.
+process.env.R3_USER_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-anime-story-data-'))
+process.env.R3_ELECTRON_SHIM = '1'
+const shim = pathToFileURL(
+  path.join(__dirname, '..', 'src', 'headless', 'electronShim', 'index.ts')
+)
+registerHooks({
+  resolve(specifier, context, next) {
+    if (specifier === 'electron') return { url: shim.href, shortCircuit: true }
+    return next(specifier, context)
+  }
+})
 
 let pass = 0
 async function checkAsync(name: string, fn: () => Promise<void>): Promise<void> {
@@ -563,6 +581,43 @@ async function pageChecks(): Promise<void> {
       `movie:${FILM.id}`,
       'season 3'
     ])
+  })
+
+  await checkAsync('a film filed with the show is not listed again among its links', async () => {
+    const { storyForShow } = await import('../src/main/media-hub/animeStory')
+    // Every part's links, cached so nothing is asked of Kitsu, with the
+    // first season linking the film filed with the show.
+    const linked: Record<string, AnimeStoryLink[]> = {
+      ...story,
+      [S1.id]: [
+        storyLinkTo('prequel', PREQUEL),
+        storyLinkTo('side_story', FILM),
+        storyLinkTo('sequel', S2)
+      ]
+    }
+    for (const [id, links] of Object.entries(linked)) {
+      db.putCache(`story:v2:anime:${id}`, { links, checked: true }, 60_000)
+    }
+    const requests: string[] = []
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (url: string | URL) => {
+      requests.push(String(url))
+      throw new TypeError('no request is expected')
+    }) as typeof fetch
+    for (const order of ['release', 'story'] as const) {
+      const answer = await storyForShow(S1.id, 'interactive', order)
+      assert.deepEqual(
+        answer.links.map((link) => `${link.relation}:${link.item.id}`),
+        [`prequel:${PREQUEL.id}`, `sequel:${NEXT.id}`],
+        order
+      )
+      assert.ok(
+        shape(answer.timeline ?? []).includes(`movie:${FILM.id}`),
+        `${order}: listed between the seasons instead`
+      )
+    }
+    globalThis.fetch = realFetch
+    assert.deepEqual(requests, [])
   })
   db.close()
 }

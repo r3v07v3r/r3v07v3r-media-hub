@@ -217,13 +217,14 @@ written before stamps existed name no account and are treated the same
 way — unattributable, and therefore safe.
 
 The mark comes from the sign-in, not the person: it is a hash of the access
-token. Connecting again counts as a different account whenever the service
-hands out a new token, even for the same account. At Trakt and MyAnimeList
-so does each automatic token refresh (Trakt's in the week before its token
-expires, MyAnimeList's in the last five minutes). Simkl's tokens are not
-refreshed, so there only a reconnect does it. Linking the phone again with
-the desktop's unchanged Simkl token keeps the same mark. Under a new mark,
-everything stamped under the old one is inert:
+token the connection was signed in with. Connecting again counts as a
+different account whenever the service hands out a new token, even for the
+same account. An automatic token refresh at Trakt and MyAnimeList (Trakt's
+in the week before its token expires, MyAnimeList's in the last five
+minutes) does not: it keeps the mark the sign-in had
+(`carryAccountMarkThroughRefresh`). Simkl's tokens are not refreshed.
+Linking the phone again with the desktop's unchanged Simkl token keeps the
+same mark. Under a new mark, everything stamped under the old one is inert:
 
 - A title planned from that service can no longer be removed by a removal
   there.
@@ -402,28 +403,32 @@ stamped with the account it was owed to.
 
 It is sent again at the start of every half-hourly pass and every
 **Sync now**, one request per service, title and direction, on the title's
-own push chain. Every try the service answers counts, a 429 or a 5xx
-included; after ten the change is let go (the log says
-`history:push-abandoned`). A try that never reached the service (offline, a
-timeout) is not counted, but the first such try after an entry is 30 days
-old lets it go.
+own push chain. Only a refusal counts as a try: an answer in the 4xx range
+other than 429. After ten the change is let go (the log says
+`history:push-abandoned`). A try answered with a 429 or a 5xx, or that
+never reached the service (offline, a timeout), says something about the
+service rather than the change and is free, but the first such try after
+an entry is 30 days old lets it go.
 
-A try answered with a 429 or a 5xx, or that never reached the service,
-stops that service for the rest of the pass, so a service that is down
-holds up **Sync now** for one request, not one per title, and the other
-titles owed to it wait their turn. With only the half-hourly pass running,
-the first change owed to a service answering 5xx or 429 is let go after
-about four and a half hours; the ones behind it take proportionally longer.
+A free try also stops that service for the rest of the pass, so a service
+that is down holds up **Sync now** for one request, not one per title, and
+the other titles owed to it wait their turn. The entry it was for moves to
+the back of the record, so one change the service keeps failing on does
+not go first on every pass and hold up the rest for the whole 30 days. A
+spent Simkl daily allowance or an outage of a few hours therefore costs
+the owed changes nothing; they go once the service answers again.
 
 A later push for the same episode replaces it, whichever way it went, and
 one that got through clears it. An owed change local has since moved away
 from (an add for an episode no longer watched here, a removal for one
-watched again) is dropped rather than replayed. A retried add carries no
-watched date, so the service records the viewing at the time of the retry
-rather than when it happened. While a removal is owed to Simkl or Trakt, or
-still on its way there, the catch-up and the Trakt history pull do not take
-that viewing back in from that service. The Watchlists panel (Control
-centre → Accounts → Tracking) shows how many changes are still owed.
+watched again) is dropped rather than replayed. A retried add carries the
+time the viewing was watched here, so a push that waited out an outage is
+not dated the day it got through. A viewing with no time here goes undated,
+and so does a film retried to Trakt; MyAnimeList takes a count, not dates.
+While a removal is owed to Simkl or Trakt, or still on its way there, the
+catch-up and the Trakt history pull do not take that viewing back in from
+that service. The Watchlists panel (Control centre → Accounts → Tracking)
+shows how many changes are still owed.
 
 **Scrobbles are off unless turned on.** The player's start, pause and stop
 messages to Simkl and Trakt are sent only when "Scrobble while playing" is
@@ -472,15 +477,19 @@ Local", and "Use Simkl" is the way to settle it.
 
 **Who asks.** Every interface, through `tracking.catchUp`. The phone and TV
 app ask when the app opens, when it comes back to the front, and straight
-after linking to a desktop. The desktop asks when its window opens and when
-it comes back to the front, but for focus at most every ten minutes
-(`useServiceCatchUp.ts`), because a desktop window gains focus far more
-often than a phone resumes and each pass that gets through is a Simkl
-request. A call within two minutes of the last pass, or while one is
-running, is answered with that pass's report; nothing runs while something
-is playing; a fresh link skips the two-minute wait. All of that is per
-profile: a pass for one profile never answers for another, which gets its
-own.
+after linking to a desktop, and again on their own three minutes after a
+pass that failed or reported an error, each wait twice the last, up to five
+asks (`librarySync.ts`). A call answered with the last pass's report
+again, as the rules below answer some, counts as neither a failure nor a
+recovery. The desktop asks when its window opens, when it comes back to
+the front and when the profile is switched, but for focus and a switch at
+most every ten minutes per profile (`useServiceCatchUp.ts`), because a
+desktop window gains focus far more often than a phone resumes and each
+pass that gets through is a Simkl request. A call within two minutes of the
+last pass, or while one is running, is answered with that pass's report;
+nothing runs while something is playing; a fresh link skips the two-minute
+wait. All of that is per profile: a pass for one profile never answers for
+another, which gets its own.
 
 **What it reads.** First the watchlist pull above, so the plan is settled
 before any history lands: the pull refuses to plan anything with local
@@ -593,8 +602,8 @@ Planned tab read the catalog index, and wait for it.
   became of later seasons pushed before it existed.
 - A local un-watch is not taken back in while its removal at Simkl is
   still on its way or owed after a failure (see "History pushes that fail
-  are kept"). Once it has been given up on after ten tries, it can come
-  back when that title next has activity there.
+  are kept"). Once it has been given up on (ten refusals, or 30 days), it
+  can come back when that title next has activity there.
 - A film Sync review's "Use Local" ruled not watched is not taken
   back in while that decision is still queued for Simkl, nor once the
   queue has given up on it (90 days). Taken in, the next flush would find
@@ -604,12 +613,11 @@ Planned tab read the catalog index, and wait for it.
 ## Trakt's history
 
 The "Import my Trakt library" button reads a whole Trakt account once:
-every viewing with its date, and every rating. Pressed again, it adds
-nothing already brought in from Trakt, but it does not skip what is held
-here: a viewing played here and sent to Trakt since then comes back with
-Trakt's own time and is recorded as a second play. The episode stays
-watched once, but History lists it twice and play counts take it as a
-rewatch. Somebody who connects Trakt and never presses it still gets their
+every viewing with its date, and every rating. It leaves out every viewing
+already held here, and every one whose removal Trakt has not taken yet, the
+same as the pull's first pass (below), so a viewing played here and sent to
+Trakt does not come back as a second play, and pressing it again is safe.
+Somebody who connects Trakt and never presses it still gets their
 past: the pull below runs the same import once on its first pass (see "It
 starts with the account's past").
 
@@ -637,7 +645,7 @@ account, durably, like Simkl's stamps.
   one, or when Simkl does not answer, an anime watched on Trakt comes in as
   a series under its IMDb id, does not show as watched on its anime page,
   and later passes do not move it.
-- **A viewing already held here is skipped**, unlike the import. Every
+- **A viewing already held here is skipped**, as the import skips it. Every
   episode played here is pushed to Trakt and comes back on the next pull
   with Trakt's own time, and would otherwise be recorded as a second play.
   A rewatch on Trakt of something already watched here therefore adds no
@@ -661,7 +669,9 @@ account, durably, like Simkl's stamps.
 - The import reads at most 20,000 viewings, newest first, and up to 20,000
   ratings of each kind. An account with more brings in only its newest
   20,000. The older viewings are not brought in by pressing Import again or
-  by the pull, and only the log says the import stopped short.
+  by the pull. The log says the import stopped short, and so does the line
+  under the Import button when it was pressed there; the pull's first pass
+  says so only in the log.
 - A backup is written before it writes rows, at most once a day (see
   "When the grouping changes" for the backups).
 
@@ -701,15 +711,15 @@ pass where nothing moved costs nothing beyond what the pulls already asked.
 
 - Episodes held here that the service lacks are sent to it as an add, on
   the title's own push chain, so a failure is kept and retried like any
-  history push. Each goes with the time it was watched here, so a backlog
-  does not land as watched today; a retried push goes undated, and so does
-  an anime sent to Simkl, since its numbers there are the entry's.
+  history push. Each goes with the time it was watched here, a retried
+  push and an anime sent to Simkl included, so a backlog does not land as
+  watched today; an episode with no time here goes undated.
 - Not sent: an episode marked here in the last fifteen minutes (its own
   push may still be on the way, and a second add is a second play at
   Trakt); one with a change owed to that service; one that arrived from
   that service and has since gone from it (it was removed there); and one
   already sent under the same account (still missing, it was not taken, was
-  removed since, or its send was let go after ten failed tries).
+  removed since, or its send was let go after ten refusals or 30 days).
 - At most twenty shows per list per comparison, each one request. Simkl's
   series and anime lists are counted apart, so one comparison can send
   Simkl forty shows and Trakt twenty. A comparison that left shows over is
@@ -831,11 +841,12 @@ backup at most once a day. A choice that cannot be written down changes
 nothing and says so. The changes go out three seconds after the last
 choice with the other owed pushes, one request per service, title and
 direction, and again with every half-hourly pass and **Sync now** until
-they land, on that record's terms: ten tries, offline tries free, let go
-after 30 days. The shows' changes are history pushes and are kept like the
-others. A push that fails does not bring the row back, or the episodes
-back here. While a removal is owed, the catch-up, the Trakt pull and the
-comparison do not take that episode back in from that service.
+they land, on that record's terms: ten refusals, tries that met a rate
+limit, an outage or no connection free, let go after 30 days. The shows'
+changes are history pushes and are kept like the others. A push that fails
+does not bring the row back, or the episodes back here. While a removal is
+owed, the catch-up, the Trakt pull and the comparison do not take that
+episode back in from that service.
 
 **Known limits.**
 
@@ -880,10 +891,10 @@ whole title, a scrobble) is translated first, by `toSimklAnimeEpisode` in
   franchise and belong to no entry this app can name.
 - A season the group has no member for is not sent.
 - While the anime catalog is still being organised into its seasons, only a
-  first season is sent. A later one is skipped rather than queued. It
-  reaches Simkl when it is next marked or, on the desktop, with the next
-  episode comparison against Simkl ("Episodes, show by show"); a missed
-  un-mark does not.
+  first season is sent. A later one waits in the retry queue ("History
+  pushes that fail are kept", above), a mark or an un-mark alike, without
+  spending a try, and is sent by the first retry after the catalog is
+  organised; the 30-day limit still applies.
 - A later season's entry is named by its id alone. The title and year in
   hand are the show's, and Simkl matches on those when it cannot place an
   id, which would land on the first season.
@@ -906,10 +917,13 @@ total goes with it:
 - Clearing the whole title sends each touched season a count of 0, with
   plan_to_watch when the title is on the plan here and no status otherwise.
 
-MyAnimeList is not held back while the catalog is being organised. In that
-window a merged show is one entry, and its first season's entry is sent the
-count of every episode watched in the show, all seasons together; it is put
-right the next time the first season changes here.
+MyAnimeList is held back while the catalog is being organised, for a title
+whose change, or any row held under it, is at a season after the first. In
+that window a merged show would be one entry, and its first season's entry
+would be sent the count of every episode watched in the show, all seasons
+together. The push waits in the retry queue instead, without spending a
+try, until the catalog is organised. A title whose rows are all its first
+season sends the same count either way, and is not held.
 
 The catch-up reads the same mapping backwards (`placeAnimeEntry` in
 `animeSeasons.ts`, then `animeEntryTarget` in `serviceIds.ts`): episode _e_
@@ -1271,17 +1285,18 @@ the whole library into a `backups` folder in its data folder
 (`autoBackup.ts`). So do the Trakt import, the Trakt pull (at most once a
 day), and the MyAnimeList apply before they write, and the desktop's
 episode comparison (at most once a day, before it takes episodes in and
-before a Sync review choice removes them here). The regroup writes one
-whenever a change of grouping calls for moving rows or a rating, whether or
-not anyone has watched the shows involved, and does not space them out; a
-change that moves nothing, such as a re-order of a show numbered by TMDB,
-writes none.
+before a Sync review choice removes them here), and a restore before it
+replaces the library. The regroup writes one whenever a change of grouping
+moves rows held here, for any profile (history, plays, a rating or a
+resume point), and does not space them out; a change that moves nothing,
+such as a re-order of a show numbered by TMDB, or one to shows no profile
+here holds any such row under, writes none.
 
 These are ordinary backups that **Restore** reads. Each one written is a
 line in the log, and one that cannot be written is logged and does not
-stop the step. The newest five are kept, shared by every step, so a show
-that keeps splitting and re-forming can push out a backup taken before a
-Trakt import or a MyAnimeList apply.
+stop the step. The newest five are kept, and the newest of each kind of
+step on top, so a show that keeps splitting and re-forming cannot push out
+the backup taken before the last Trakt import or MyAnimeList apply.
 
 **Rows from before the ledger.** The first run only records the grouping;
 it has nothing to compare it with. An id that fronted its show before then

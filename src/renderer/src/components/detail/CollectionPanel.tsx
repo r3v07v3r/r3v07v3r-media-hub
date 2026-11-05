@@ -12,6 +12,7 @@
 
 import { useEffect, useState } from 'react'
 
+import { Icon } from '@renderer/components/icons/Icon'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { WatchStatusBadge } from '@renderer/components/media/WatchStatusBadge'
 import { useAppState } from '@renderer/context/AppStateContext'
@@ -71,11 +72,17 @@ export function CollectionPanel({ media }: { media: MediaItem }) {
           // has nothing else to come from.
           const item = catalogItemToMediaItem(part, { trackedIds: myList, dislikedIds, watchedIds })
           const artwork = resolveArtwork(item)
+          // This list is not filtered by Hide Disliked, so a film marked Not
+          // interested is dimmed and named here, as on MediaCard and the
+          // Similar row on the same page.
+          const disliked = dislikedIds.has(item.id)
           return (
             <li key={part.id}>
               <button
                 type="button"
-                className={`${styles.entry} ${current ? styles.current : ''}`}
+                className={`${styles.entry} ${current ? styles.current : ''} ${
+                  disliked ? styles.entryDisliked : ''
+                }`}
                 aria-current={current ? 'true' : undefined}
                 disabled={current}
                 // The film currently on screen, as the label for the back
@@ -84,7 +91,7 @@ export function CollectionPanel({ media }: { media: MediaItem }) {
                 // detail route, whose id it cannot turn into a title — and
                 // every sequel opened from here read "Back to Browse".
                 onClick={() => openDetail(item, media.title)}
-                aria-label={`Open ${item.title}`}
+                aria-label={`Open ${item.title}${disliked ? ', not interested' : ''}`}
               >
                 <span className={styles.art}>
                   <ArtworkImage
@@ -107,6 +114,12 @@ export function CollectionPanel({ media }: { media: MediaItem }) {
                     {part.year || ''}
                     {current ? (part.year ? ' · ' : '') + 'You are here' : ''}
                   </span>
+                  {disliked && (
+                    <span className={styles.dislikedNote} aria-hidden="true">
+                      <Icon name="thumbs-down" size={10} />
+                      Not interested
+                    </span>
+                  )}
                 </span>
               </button>
             </li>

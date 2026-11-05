@@ -86,7 +86,7 @@ export interface FetchScheduling {
    * read cut off by the timeout or a dropped connection would come back as
    * an empty library, and a caller that then records "library read" has
    * skipped everything in it. An empty body still reads as `{}` — that is
-   * how an empty library is spelled.
+   * how an empty library is spelled. A body of `null` rejects.
    */
   strictBody?: boolean
 }
@@ -197,7 +197,8 @@ async function request<T>(
  * `strict` (FetchScheduling.strictBody) rejects the other two as well: a
  * read that failed part way — the timeout firing mid-stream, a connection
  * dropped — and text that is there but does not parse. Only a body with
- * nothing in it still reads as `{}`.
+ * nothing in it still reads as `{}`. A body of `null` is `{}` lenient and
+ * rejected strict (see below).
  */
 async function readJsonBody(
   response: Response,
@@ -211,12 +212,26 @@ async function readJsonBody(
     if (error instanceof ResponseTooLargeError || strict) throw error
     return {}
   }
+  let parsed: unknown
   try {
-    return JSON.parse(text)
+    parsed = JSON.parse(text)
   } catch (error) {
     if (strict && text.trim()) throw error
     return {}
   }
+  // A body of `null` parses, and request() reads fields off whatever comes
+  // back, so passed on it threw a TypeError: on a failed status that came
+  // before the status was set, and a 429 lost its retry. Lenient, it is the
+  // `{}` an empty body is. Strict, it is refused: no service here is known
+  // to answer an empty list with `null` (an empty one is `{}`), and read as
+  // empty, a `null` meant as anything else would remove every title that
+  // came from it. If one is found to, that service's read should take it as
+  // `{}`.
+  if (parsed === null) {
+    if (strict) throw new Error('The service answered with null.')
+    return {}
+  }
+  return parsed
 }
 
 /**

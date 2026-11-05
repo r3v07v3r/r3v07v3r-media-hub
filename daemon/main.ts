@@ -30,7 +30,7 @@ import { createMdnsAnnouncer } from './mdns'
 import { createAdmin } from './admin'
 import { createPairing, deviceIdForToken, isApproved } from './pairing'
 import { createRoomsHop } from './roomsHop'
-import { createDaemonServer } from './server'
+import { createDaemonServer, unclaimedReminder } from './server'
 import { createItemStore } from './storage'
 import { createTitleCrawler } from './titleCrawler'
 import { createTitleStore } from './titles'
@@ -316,11 +316,13 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     // unclaimed one sitting for a week is claimable by whoever finds it.
     // Saying it once at startup would scroll away in a log nobody reads;
     // repeating it is what makes an operator notice they never finished
-    // setting the thing up.
+    // setting the thing up. A server --claim-admin reopened is unclaimed
+    // too, but it has an administrator, so it is not described as a fresh
+    // install: unclaimedReminder picks the line for each state.
     if (admin.isUnclaimed()) {
       const warn = (): void => {
-        if (!admin.isUnclaimed()) return
-        log('UNCLAIMED — no administrator yet. Open the app on this network and claim it.')
+        const reminder = unclaimedReminder(admin)
+        if (reminder) log(reminder)
       }
       warn()
       const timer = setInterval(warn, 5 * 60_000)

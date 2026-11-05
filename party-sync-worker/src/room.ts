@@ -700,14 +700,30 @@ export class PartyRoom {
     }
 
     // Retain this connection's latest message for future joiners. Still
-    // never decrypted — we store exactly the bytes we forward.
-    ws.serializeAttachment({
-      ...attachment,
-      last: body,
-      lastAt: now,
+    // never decrypted — we store exactly the bytes we forward. The runtime
+    // refuses an attachment over 16 KiB once serialized, far below the
+    // 60 KiB a message may be, and that refusal used to throw before the
+    // fan-out below, so the message reached nobody and the sender got no
+    // close code. A body that does not fit is relayed but not retained, and
+    // the older retained body goes with it: replaying that would hand a
+    // joiner a state this member has since moved past.
+    const counters = {
       rateWindowStartedAt: rate.windowStartedAt,
       rateWindowMessageCount: rate.windowMessageCount
-    } satisfies SocketAttachment)
+    }
+    try {
+      ws.serializeAttachment({
+        ...attachment,
+        ...counters,
+        last: body,
+        lastAt: now
+      } satisfies SocketAttachment)
+    } catch {
+      const kept: SocketAttachment = { ...attachment, ...counters }
+      delete kept.last
+      delete kept.lastAt
+      ws.serializeAttachment(kept)
+    }
 
     const envelope = JSON.stringify({
       type: 'relay',

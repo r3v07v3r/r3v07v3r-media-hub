@@ -1,11 +1,19 @@
 import assert from 'node:assert'
+import fs from 'node:fs'
+import { registerHooks } from 'node:module'
+import os from 'node:os'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import {
   computeReconciliation,
   localEntryProgress,
   localSeasonEpisodeCounts,
+  MAL_AWAITING_ANIME_GROUPING,
+  malPushAwaitsGrouping,
   malStatusForProgress,
   planMalPushes
 } from '../src/main/media-hub/mal'
+import type { HistoryEntry } from '../src/shared/media-hub/types'
 
 let pass = 0
 function check(name: string, fn: () => void): void {
@@ -250,9 +258,179 @@ check('the import counts an entry where it is kept, never at its place in the gr
   )
 })
 
+check('a row with no season counts as season 1, in the preview as in the push', () => {
+  // markWatched and an import store a null season when none is given. The
+  // push counted such a row as season 1 and the preview dropped it, so the
+  // next preview read the first season as behind MAL by exactly the
+  // episodes the push had just sent, and offered to pull them again.
+  const show = 'kitsu:40'
+  const rows = [
+    { id: show, season: 1, episode: 1 },
+    { id: show, season: null, episode: 2 },
+    { id: show, season: undefined, episode: 3 },
+    { id: show, season: 2, episode: 1 }
+  ] as unknown as HistoryEntry[]
+  const pushed = planMalPushes(
+    rows,
+    { id: show, members: ['kitsu:41', 'kitsu:42'] },
+    {
+      seasons: [1]
+    }
+  )
+  assert.deepEqual(pushed, [{ id: 'kitsu:41', watchedEpisodes: 3 }])
+  assert.deepEqual(
+    localEntryProgress([{ kitsuId: 'kitsu:41', target: { id: show, season: 1 } }], rows),
+    { 'kitsu:41': 3 }
+  )
+})
+
+check('a merged show waits for the grouping rather than send its sum to season 1', () => {
+  // Before the catalog is grouped the show is one entry, so the push would
+  // be the whole show's count on the first season's entry: 6 here, where
+  // MAL's first season has 2. Held instead (and owed, by its error).
+  const ungrouped = planMalPushes(history, { id: canonical }, { seasons: [1] })
+  assert.notDeepEqual(ungrouped, [{ id: canonical, watchedEpisodes: 2 }])
+  assert.equal(malPushAwaitsGrouping(history, canonical, [1], false), true)
+  assert.equal(malPushAwaitsGrouping(history, canonical, [2], false), true)
+  // Grouped, it goes out season by season as planMalPushes says.
+  assert.equal(malPushAwaitsGrouping(history, canonical, [1], true), false)
+  // A title whose rows are all its first season has the same count either
+  // way, and is not held up.
+  const single = [
+    { id: 'kitsu:9', season: 1, episode: 1 },
+    { id: 'kitsu:9', season: null, episode: 2 }
+  ] as unknown as HistoryEntry[]
+  assert.equal(malPushAwaitsGrouping(single, 'kitsu:9', [1], false), false)
+  assert.ok(MAL_AWAITING_ANIME_GROUPING.length > 0)
+})
+
 check('an ungrouped title is one entry over every row, judged against its own total', () => {
   const pushes = planMalPushes(history, { id: canonical, totalEpisodes: 5 }, { seasons: [2] })
   assert.deepEqual(pushes, [{ id: 'kitsu:1', watchedEpisodes: 5, status: 'completed' }])
 })
 
-console.log(`\n${pass} passed`)
+// The MyAnimeList Apply writes the episodes MAL is ahead by, then sends them
+// to Simkl. That send used to be made once and a failure only logged; it is
+// now kept in the record of owed pushes the history retry works through
+// (historyRetry.ts). malSync.ts reaches Electron, so it is loaded with the
+// headless stand-in, as tests/accountMarks.test.ts loads settingsStore.
+async function applyOwed(): Promise<void> {
+  console.log('\nthe Apply’s Simkl push')
+  process.env.R3_USER_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-mal-apply-'))
+  process.env.R3_ELECTRON_SHIM = '1'
+  const shim = pathToFileURL(
+    path.join(__dirname, '..', 'src', 'headless', 'electronShim', 'index.ts')
+  )
+  registerHooks({
+    resolve(specifier, context, next) {
+      if (specifier === 'electron') return { url: shim.href, shortCircuit: true }
+      return next(specifier, context)
+    }
+  })
+  const { createDatabase } = await import('../src/main/media-hub/database')
+  const { readHistoryPending, historyRetryBatches } =
+    await import('../src/main/media-hub/historyRetry')
+  const { noteApplySimklPush } = await import('../src/main/media-hub/malSync')
+  const db = createDatabase(path.join(process.env.R3_USER_DATA, 'apply.sqlite'), 'profile-a')
+  const marks = { simkl: 'simkl-1', trakt: '', mal: 'mal-1' }
+  const item = { id: 'kitsu:1', type: 'anime' as const, title: 'Show' }
+
+  // Simkl down during the Apply: both episodes are owed, to this account.
+  noteApplySimklPush(db, 'profile-a', marks, marks, {
+    item,
+    season: 2,
+    episodes: [3, 4],
+    error: 'Simkl is down',
+    now: 1000
+  })
+  const owed = readHistoryPending(db, 'profile-a', marks)
+  assert.deepEqual(
+    Object.values(owed)
+      .map((entry) => [entry.service, entry.action, entry.season, entry.episode, entry.mark])
+      .sort(),
+    [
+      ['simkl', 'add', 2, 3, 'simkl-1'],
+      ['simkl', 'add', 2, 4, 'simkl-1']
+    ]
+  )
+  // The retry picks them up as one Simkl add for the title.
+  const { batches } = historyRetryBatches(owed, new Set(['kitsu:1:2:3', 'kitsu:1:2:4']))
+  assert.equal(batches.length, 1)
+  assert.equal(batches[0].service, 'simkl')
+  assert.equal(batches[0].rows.length, 2)
+  pass++
+  console.log('  ok  a failed send is owed and retried')
+
+  // Another profile's record is untouched, and a send that gets through
+  // clears what an earlier one left owing.
+  assert.deepEqual(readHistoryPending(db, 'profile-b', marks), {})
+  noteApplySimklPush(db, 'profile-a', marks, marks, {
+    item,
+    season: 2,
+    episodes: [3, 4],
+    now: 2000
+  })
+  assert.deepEqual(readHistoryPending(db, 'profile-a', marks), {})
+  pass++
+  console.log('  ok  a send that gets through owes nothing')
+
+  // With no Simkl account connected, nothing is kept: nobody to owe it to.
+  noteApplySimklPush(
+    db,
+    'profile-a',
+    { simkl: '' },
+    { ...marks, simkl: '' },
+    {
+      item,
+      season: 2,
+      episodes: [5],
+      error: 'not connected',
+      now: 3000
+    }
+  )
+  assert.deepEqual(readHistoryPending(db, 'profile-a', marks), {})
+  pass++
+  console.log('  ok  nothing is owed to an account that is not connected')
+
+  // A different Simkl account connected while the request was out: the
+  // outcome belongs to the old account and is dropped. A failure is not
+  // queued under the new account's mark, and a success does not clear what
+  // the new account is owed.
+  const switched = { ...marks, simkl: 'simkl-2' }
+  noteApplySimklPush(db, 'profile-a', marks, switched, {
+    item,
+    season: 2,
+    episodes: [6],
+    error: 'Simkl is down',
+    now: 4000
+  })
+  assert.deepEqual(readHistoryPending(db, 'profile-a', switched), {})
+  noteApplySimklPush(db, 'profile-a', switched, switched, {
+    item,
+    season: 2,
+    episodes: [7],
+    error: 'Simkl is down',
+    now: 5000
+  })
+  const owedNew = readHistoryPending(db, 'profile-a', switched)
+  assert.deepEqual(
+    Object.values(owedNew).map((entry) => [entry.episode, entry.mark]),
+    [[7, 'simkl-2']]
+  )
+  noteApplySimklPush(db, 'profile-a', marks, switched, {
+    item,
+    season: 2,
+    episodes: [7],
+    now: 6000
+  })
+  assert.deepEqual(readHistoryPending(db, 'profile-a', switched), owedNew)
+  pass++
+  console.log('  ok  an account switch during the request records nothing')
+}
+
+applyOwed()
+  .catch((error) => {
+    console.log(`FAIL  the Apply’s Simkl push\n      ${(error as Error).message}`)
+    process.exitCode = 1
+  })
+  .finally(() => console.log(`\n${pass} passed`))

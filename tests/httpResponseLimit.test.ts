@@ -198,6 +198,26 @@ async function main(): Promise<void> {
         )
     )
   })
+  // A body of `null` parses, and request() reads fields off it: it threw a
+  // TypeError, and on a failed status that came before the status was set.
+  await check('a null body reads as {}', async () => {
+    const body = await withFetch(
+      () => new Response('null'),
+      () => fetchJson('https://example.test/n1')
+    )
+    assert.deepEqual(body, {})
+  })
+  await check('a 429 with a null body keeps its status and Retry-After', async () => {
+    await withFetch(
+      () => new Response('null', { status: 429, headers: { 'retry-after': '2' } }),
+      () =>
+        assert.rejects(
+          () => fetchJson('https://example.test/n2', {}, { strictBody: true }),
+          (error: unknown) =>
+            (error as HttpError).status === 429 && (error as HttpError).retryAfterMs === 2000
+        )
+    )
+  })
   await check('a body over the per-call cap rejects as a request error', async () => {
     await withFetch(
       () => chunkedResponse([new TextEncoder().encode('{"big":"'), new Uint8Array(64)]),
@@ -236,6 +256,17 @@ async function main(): Promise<void> {
       () => fetchJson('https://example.test/j', {}, { strictBody: true })
     )
     assert.deepEqual(body, {})
+  })
+  await check('a null body rejects rather than reading as an empty answer', async () => {
+    await withFetch(
+      () => new Response('null'),
+      () =>
+        assert.rejects(
+          () => fetchJson('https://example.test/n3', {}, { strictBody: true }),
+          (error: unknown) =>
+            !(error instanceof TypeError) && /answered with null/.test((error as Error).message)
+        )
+    )
   })
   await check('a whole JSON body is read as usual', async () => {
     const body = await withFetch(

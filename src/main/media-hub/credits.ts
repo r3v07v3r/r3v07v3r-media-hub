@@ -184,16 +184,10 @@ export function titlesFeaturing(
  * name means that exact name, and a person typing one is part-way through it.
  * Ordered so a match ON A NAME beats a match on a story label — somebody
  * typing "drive" wants the film before everything tagged "driving".
+ *
+ * Over credits already read (creditsFor): searchPool.ts holds them in memory
+ * between searches instead of reading them per search.
  */
-export function searchCredits(
-  ids: Iterable<string>,
-  query: string
-): { people: string[]; labels: string[] } {
-  return matchCredits(creditsFor(ids), query)
-}
-
-/** searchCredits over credits already read — for searchPool.ts, which holds
- *  them in memory between searches instead of reading them per search. */
 export function matchCredits(
   credits: Iterable<[string, TitleCredits]>,
   query: string
