@@ -336,7 +336,7 @@ async function applyOwed(): Promise<void> {
   const item = { id: 'kitsu:1', type: 'anime' as const, title: 'Show' }
 
   // Simkl down during the Apply: both episodes are owed, to this account.
-  noteApplySimklPush(db, 'profile-a', marks, {
+  noteApplySimklPush(db, 'profile-a', marks, marks, {
     item,
     season: 2,
     episodes: [3, 4],
@@ -364,7 +364,12 @@ async function applyOwed(): Promise<void> {
   // Another profile's record is untouched, and a send that gets through
   // clears what an earlier one left owing.
   assert.deepEqual(readHistoryPending(db, 'profile-b', marks), {})
-  noteApplySimklPush(db, 'profile-a', marks, { item, season: 2, episodes: [3, 4], now: 2000 })
+  noteApplySimklPush(db, 'profile-a', marks, marks, {
+    item,
+    season: 2,
+    episodes: [3, 4],
+    now: 2000
+  })
   assert.deepEqual(readHistoryPending(db, 'profile-a', marks), {})
   pass++
   console.log('  ok  a send that gets through owes nothing')
@@ -373,6 +378,7 @@ async function applyOwed(): Promise<void> {
   noteApplySimklPush(
     db,
     'profile-a',
+    { simkl: '' },
     { ...marks, simkl: '' },
     {
       item,
@@ -385,6 +391,41 @@ async function applyOwed(): Promise<void> {
   assert.deepEqual(readHistoryPending(db, 'profile-a', marks), {})
   pass++
   console.log('  ok  nothing is owed to an account that is not connected')
+
+  // A different Simkl account connected while the request was out: the
+  // outcome belongs to the old account and is dropped. A failure is not
+  // queued under the new account's mark, and a success does not clear what
+  // the new account is owed.
+  const switched = { ...marks, simkl: 'simkl-2' }
+  noteApplySimklPush(db, 'profile-a', marks, switched, {
+    item,
+    season: 2,
+    episodes: [6],
+    error: 'Simkl is down',
+    now: 4000
+  })
+  assert.deepEqual(readHistoryPending(db, 'profile-a', switched), {})
+  noteApplySimklPush(db, 'profile-a', switched, switched, {
+    item,
+    season: 2,
+    episodes: [7],
+    error: 'Simkl is down',
+    now: 5000
+  })
+  const owedNew = readHistoryPending(db, 'profile-a', switched)
+  assert.deepEqual(
+    Object.values(owedNew).map((entry) => [entry.episode, entry.mark]),
+    [[7, 'simkl-2']]
+  )
+  noteApplySimklPush(db, 'profile-a', marks, switched, {
+    item,
+    season: 2,
+    episodes: [7],
+    now: 6000
+  })
+  assert.deepEqual(readHistoryPending(db, 'profile-a', switched), owedNew)
+  pass++
+  console.log('  ok  an account switch during the request records nothing')
 }
 
 applyOwed()

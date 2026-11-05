@@ -305,15 +305,24 @@ function watchedIds(
  * list (cleared by the pull) or is planned here again (cleared by
  * applyPlanChange). Stamped with the Simkl account, like everything else
  * here (rule 7): another account's list says nothing about these.
+ *
+ * Kept per profile, like the tracked rows they hold back: two profiles on
+ * the same Simkl account plan separately, and one un-planning an anime
+ * must not stop it being planned in the other. Markers written before this
+ * was per profile (under the bare 'planned:unplanned-anime' key) are not
+ * read: whose plan they came from is not known, and the cost of dropping
+ * them is one re-plan from Simkl's list, which un-planning again re-marks.
  */
-const UNPLANNED_CACHE_KEY = 'planned:unplanned-anime'
+function unplannedKey(profile: string): string {
+  return `planned:unplanned-anime:v1:${profile}`
+}
 const UNPLANNED_TTL_MS = 365 * 24 * 60 * 60 * 1000
 
 type UnplannedAnime = Record<string, { account: string; at: number }>
 
-/** The markers made under the Simkl account connected now. */
-function unplannedAnime(): UnplannedAnime {
-  const stored = getDatabase().getCache<UnplannedAnime>(UNPLANNED_CACHE_KEY, {
+/** The profile's markers made under the Simkl account connected now. */
+function unplannedAnime(profile: string): UnplannedAnime {
+  const stored = getDatabase().getCache<UnplannedAnime>(unplannedKey(profile), {
     allowExpired: true
   })
   const account = trackingAccountMarks().simkl
@@ -325,8 +334,8 @@ function unplannedAnime(): UnplannedAnime {
   return out
 }
 
-function writeUnplannedAnime(markers: UnplannedAnime): void {
-  getDatabase().putCache(UNPLANNED_CACHE_KEY, markers, UNPLANNED_TTL_MS, { durable: true })
+function writeUnplannedAnime(profile: string, markers: UnplannedAnime): void {
+  getDatabase().putCache(unplannedKey(profile), markers, UNPLANNED_TTL_MS, { durable: true })
 }
 
 /**
@@ -889,7 +898,7 @@ async function pullPlanned(
   // Anime un-planned here that Simkl still lists: Simkl is never sent an
   // anime removal (watchlistPush.ts's simklPlan), so without this its next
   // read would plan them again. Held back while only Simkl lists them.
-  const unplanned = unplannedAnime()
+  const unplanned = unplannedAnime(profile)
   const listedBeyondSimkl = new Set(
     entries.filter((entry) => entry.source !== 'simkl').map((entry) => entry.id)
   )
@@ -926,7 +935,7 @@ async function pullPlanned(
     const gone = Object.keys(unplanned).filter((id) => !onSimkl.has(id))
     if (gone.length) {
       for (const id of gone) delete unplanned[id]
-      writeUnplannedAnime(unplanned)
+      writeUnplannedAnime(profile, unplanned)
     }
   }
 
@@ -1150,15 +1159,18 @@ async function applyPlanChange(
   // well as its type: a card that carried no type is un-planned as a film
   // (tracking.ts's trackingToggle), and the marker must still be made.
   if (item.type === 'anime' || String(item.id).startsWith('kitsu:')) {
-    const markers = unplannedAnime()
+    // The profile whose plan changed: the tracked row this marker holds
+    // back is that profile's.
+    const profile = getDatabase().activeProfile()
+    const markers = unplannedAnime(profile)
     const onSimkl = (plannedSources()[item.id] ?? []).includes('simkl')
     const account = trackingAccountMarks().simkl
     if (planned && markers[item.id]) {
       delete markers[item.id]
-      writeUnplannedAnime(markers)
+      writeUnplannedAnime(profile, markers)
     } else if (!planned && onSimkl && account) {
       markers[item.id] = { account, at: Date.now() }
-      writeUnplannedAnime(markers)
+      writeUnplannedAnime(profile, markers)
     }
   }
   // A show with viewings recorded here never sends the unscoped removal,

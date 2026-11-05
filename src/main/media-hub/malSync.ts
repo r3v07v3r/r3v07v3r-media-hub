@@ -344,10 +344,19 @@ export async function pushMalTitleProgress(
  * a success clears whatever an earlier push of those episodes left owing.
  * It used to be sent once and a failure only logged, so a Simkl outage
  * during an Apply left those episodes missing at Simkl for good.
+ *
+ * `sentUnder` is the account marks read before the request went out and
+ * `marks` the ones read after it came back. A different Simkl account
+ * connected in between makes the outcome nobody's: recorded, a failure
+ * would be owed under the new account's mark and the retry would send the
+ * old account's episodes to it, and a success would clear what the new one
+ * is owed. So it is dropped, as pushTraktRating drops a rating's outcome
+ * (traktClient.ts).
  */
 export function noteApplySimklPush(
   db: Pick<MediaHubDatabase, 'getCache' | 'putCache'>,
   profile: string,
+  sentUnder: { simkl: string },
   marks: { simkl: string; trakt: string; mal: string },
   push: {
     item: { id: string; type: MediaKind; title: string }
@@ -357,6 +366,7 @@ export function noteApplySimklPush(
     now: number
   }
 ): void {
+  if (marks.simkl !== sentUnder.simkl) return
   const pending = readHistoryPending(db, profile, marks)
   const next = recordHistoryPush(
     pending,
@@ -656,6 +666,9 @@ export function registerMalIpc(): void {
           )
           if (simklCredentials().accessToken && hasSimklContent(simklBody)) {
             let simklError: string | undefined
+            // The account this is sent to, checked again when its outcome
+            // is recorded (noteApplySimklPush).
+            const sentUnder = trackingAccountMarks()
             try {
               await simklRequest('/sync/history', {
                 method: 'POST',
@@ -667,7 +680,7 @@ export function registerMalIpc(): void {
             }
             // Kept and retried like any other push that did not reach Simkl,
             // rather than only logged and lost.
-            noteApplySimklPush(getDatabase(), profile, trackingAccountMarks(), {
+            noteApplySimklPush(getDatabase(), profile, sentUnder, trackingAccountMarks(), {
               item: media,
               season: target.season,
               episodes: episodeNumbers,

@@ -481,7 +481,8 @@ async function pulls(): Promise<void> {
       'planned:origins',
       'planned:sources',
       'planned:pending-removals',
-      'planned:unplanned-anime'
+      'planned:unplanned-anime:v1:profile-pull',
+      'planned:unplanned-anime:v1:profile-b'
     ]) {
       db.deleteCache(key)
     }
@@ -613,7 +614,7 @@ async function pulls(): Promise<void> {
   // Planned here again: the marker goes, so a later un-plan starts afresh.
   db.track(ANIME)
   await watchlists.applyLocalPlanChange(ANIME, true)
-  const markers = db.getCache<Record<string, unknown>>('planned:unplanned-anime', {
+  const markers = db.getCache<Record<string, unknown>>('planned:unplanned-anime:v1:profile-pull', {
     allowExpired: true
   })
   assert.equal(markers?.[ANIME.id], undefined, 'planning it here again clears the marker')
@@ -632,6 +633,19 @@ async function pulls(): Promise<void> {
   await watchlists.applyLocalPlanChange({ ...ANIME, type: 'movie' }, false)
   await watchlists.syncPlannedFromServices('interactive')
   assert.equal(db.isTracked(ANIME.id), false, 'an anime un-planned as a film is still held back')
+  // Another profile on the same Simkl account: profile-pull's marker is
+  // its own, so the anime Simkl lists is planned in profile-b all the same.
+  db.setActiveProfile('profile-b')
+  try {
+    assert.equal(db.isTracked(ANIME.id), false)
+    await watchlists.syncPlannedFromServices('interactive')
+    assert.ok(db.isTracked(ANIME.id), "one profile's un-plan does not hold back another's plan")
+  } finally {
+    db.setActiveProfile('profile-pull')
+  }
+  // And profile-pull's own marker still holds there.
+  await watchlists.syncPlannedFromServices('interactive')
+  assert.equal(db.isTracked(ANIME.id), false, 'the un-planning profile is still held back')
 
   console.log('ok  the plan pull against a real database')
 }
