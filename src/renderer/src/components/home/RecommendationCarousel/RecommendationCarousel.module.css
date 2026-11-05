@@ -374,6 +374,15 @@
   width: 13px;
   height: 13px;
 }
+/* One-click Not interested, beside the menu that also has it. Worn with
+   .moreButton, which supplies the shape and the hover reveal. */
+.moreButton.dislikeButton {
+  right: 42px;
+}
+.moreButton.dislikeButton[aria-pressed='true'] {
+  opacity: 1;
+  color: var(--accent-red, #ff6b6b);
+}
 
 .cardOverlay {
   position: absolute;
@@ -402,6 +411,16 @@
   font-weight: 700;
   letter-spacing: 0.3px;
   color: var(--text-primary);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.7);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Which season of the series this card is — a collection's season stop. */
+.cardPart {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
   text-shadow: 0 2px 10px rgba(0, 0, 0, 0.7);
   white-space: nowrap;
   overflow: hidden;
@@ -516,6 +535,9 @@
      alone on a 160px one the title alone would take half the artwork. */
   .cardTitle {
     font-size: 14.5px;
+  }
+  .cardPart {
+    font-size: 11.5px;
   }
   .cardRatings {
     font-size: 11px;
@@ -664,6 +686,31 @@
   text-decoration: underline;
 }
 
+/* "Show me others" — takes the right-hand space See all used to, and See
+   all sits after it. */
+.showOthers {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-secondary);
+}
+.showOthers:hover:not(:disabled) {
+  color: var(--accent-cyan);
+}
+.showOthers:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+.showOthers + .seeAll {
+  margin-left: 0;
+}
+
 /* What a title IS, for lists that hold films, series and anime at once.
    Quieter than the planned chip beside it: the kind is context, not
    news. */
@@ -693,4 +740,41 @@
   letter-spacing: 0.4px;
   text-transform: uppercase;
   color: var(--text-secondary);
+}
+
+/* A title that is not out yet carries its date where the play button would
+   be, and carries it ALWAYS — not on hover, since "when" is the fact worth
+   reading at a glance — in place of a Play that could only fail (see
+   titleUnreleased in lib/mediaHub/releaseDate.ts). */
+.unreleasedChip {
+  position: absolute;
+  z-index: 2;
+  bottom: 14px;
+  right: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: #fff;
+  background: rgba(4, 8, 15, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  backdrop-filter: blur(6px);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.unreleasedChip svg {
+  width: 12px;
+  height: 12px;
+}
+@media (max-width: 1439px) {
+  .unreleasedChip {
+    bottom: 10px;
+    right: 10px;
+    padding: 4px 8px;
+    font-size: 10.5px;
+  }
 }

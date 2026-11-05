@@ -756,10 +756,11 @@ What the app does when the player hangs is under
 <details>
 <summary><strong>Subtitles do not appear automatically</strong></summary>
 
-Only an embedded track in the subtitle language chosen on the Settings page appears by itself. An
-online subtitle is applied only when you pick one from the player's Subtitles menu: connect SubDL
-and/or OpenSubtitles under **Control centre → Accounts → Subtitles**, then open that menu and pick
-a result.
+An embedded track in the subtitle language chosen on the Settings page is turned on by itself. An
+online subtitle is fetched by itself only when the copy that plays has neither your audio language
+nor a subtitle track in your subtitle language, and only while **Show subtitles automatically** is
+on (the Settings page). Otherwise connect SubDL and/or OpenSubtitles under **Control centre →
+Accounts → Subtitles**, open the player's Subtitles menu and pick a result.
 
 If neither service is connected, the menu says so. If every connected service fails (a bad key, an
 outage, a rate limit), the menu shows the error. With both connected and only one failing, the menu

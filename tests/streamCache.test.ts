@@ -19,7 +19,8 @@ import {
   fillBudgetBytes,
   inspectRangeReply,
   shouldAdoptAsPlayhead,
-  findReusableSession
+  findReusableSession,
+  sweepRoot
 } from '../src/main/media-hub/streamCache'
 
 let pass = 0
@@ -572,6 +573,35 @@ async function main(): Promise<void> {
       await fsp.writeFile(path.join(root, TOKEN_B, 'meta.json'), 'not json')
       assert.equal(await findReusableSession(root, { title: 'Dune', catalogId: 'tt1' }, 5000), '')
     })
+  })
+
+  await checkAsync('cleanup sweeps stray root chunks and leaves everything else', async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-sweep-'))
+    try {
+      // What pre-#153 builds left behind: chunks in the root itself.
+      await fsp.writeFile(path.join(root, 'chunk-12.bin'), Buffer.alloc(1000))
+      await fsp.writeFile(path.join(root, 'chunk-13.bin.tmp'), Buffer.alloc(500))
+      // Not ours by shape: must survive any sweep.
+      await fsp.writeFile(path.join(root, 'notes.txt'), 'keep')
+      await fsp.mkdir(path.join(root, 'someone-elses'))
+      await writeSession(root, TOKEN_A, { title: 'Old' })
+      await writeSession(root, TOKEN_B, { title: 'Recent' })
+      const old = new Date(Date.now() - 48 * 3600_000)
+      await fsp.utimes(path.join(root, TOKEN_A), old, old)
+
+      // The hourly prune: strays go, a recent session stays, a stale one goes.
+      await sweepRoot(root, { cutoff: Date.now() - 24 * 3600_000, countBytes: false })
+      const afterPrune = (await fsp.readdir(root)).sort()
+      assert.deepEqual(afterPrune, [TOKEN_B, 'notes.txt', 'someone-elses'].sort())
+
+      // Clear: every idle session, with the bytes counted.
+      await fsp.writeFile(path.join(root, 'chunk-1.bin'), Buffer.alloc(2000))
+      const freed = await sweepRoot(root, { cutoff: null, countBytes: true })
+      assert.ok(freed >= 2000, `counted ${freed} bytes`)
+      assert.deepEqual((await fsp.readdir(root)).sort(), ['notes.txt', 'someone-elses'])
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true })
+    }
   })
 
   await checkAsync('a missing cache root is not an error', async () => {

@@ -37,6 +37,18 @@ export function NotificationLayer() {
               {n.action.label}
             </button>
           )}
+          {n.secondaryAction && (
+            <button
+              type="button"
+              className={styles.toastAction}
+              onClick={() => {
+                dismissNotification(n.id)
+                n.secondaryAction?.run()
+              }}
+            >
+              {n.secondaryAction.label}
+            </button>
+          )}
           <button
             type="button"
             className={styles.toastClose}

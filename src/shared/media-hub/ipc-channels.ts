@@ -23,6 +23,7 @@ export const MEDIA_HUB_CHANNELS = {
   anime4kStatus: 'mediahub:anime4k:status-event', // push event
   settingsSetAnime4kEnabled: 'mediahub:settings:set-anime4k-enabled',
   settingsSetAnime4kMode: 'mediahub:settings:set-anime4k-mode',
+  settingsSetAutoSubtitles: 'mediahub:settings:set-auto-subtitles',
   settingsSetAutoplayNext: 'mediahub:settings:set-autoplay-next',
   settingsSetWatchRegion: 'mediahub:settings:set-watch-region',
   settingsSetNotifications: 'mediahub:settings:set-notifications',
@@ -45,6 +46,8 @@ export const MEDIA_HUB_CHANNELS = {
   lanCachePair: 'mediahub:lancache:pair',
   lanCacheUnpair: 'mediahub:lancache:unpair',
   lanCacheStatus: 'mediahub:lancache:status',
+  /** Push event: see LanCacheAppEvent. */
+  lanCacheEvent: 'mediahub:lancache:event',
   /** Poll while a pairing request waits for the server's administrator. */
   lanCachePairStatus: 'mediahub:lancache:pair-status',
   /** Take Super Admin of an unclaimed cache server. */
@@ -70,6 +73,13 @@ export const MEDIA_HUB_CHANNELS = {
   trackingSetScrobble: 'mediahub:tracking:set-scrobble',
   /** Named lists somebody built in Trakt or Simkl, read-only. */
   listsRemote: 'mediahub:lists:remote',
+  /** The Collections page: lists added from Trakt and collections taken
+   *  off the page; searching Trakt's public lists; add, remove, restore. */
+  collectionsState: 'mediahub:collections:state',
+  collectionsSearch: 'mediahub:collections:search',
+  collectionsAdd: 'mediahub:collections:add',
+  collectionsRemove: 'mediahub:collections:remove',
+  collectionsRestore: 'mediahub:collections:restore',
   /** The caller's own cached titles, and the sharing control over them. */
   lanCacheMyItems: 'mediahub:lancache:my-items',
   lanCacheSetSharing: 'mediahub:lancache:set-sharing',
@@ -149,7 +159,12 @@ export const MEDIA_HUB_CHANNELS = {
    *  rather than polling, so a rebuild that finishes mid-session reaches
    *  the row without waiting for the next launch. */
   recommendationsChanged: 'mediahub:recommendations:changed', // push event
+  /** "Show me others": the suggestions on screen go to the back of the row
+   *  for a few weeks — see main/media-hub/recommendations.ts. */
+  recommendationsPassOver: 'mediahub:recommendations:pass-over',
   trackingList: 'mediahub:tracking:list',
+  /** tracking:list's history alone, from the database — see TrackingHistoryResult. */
+  trackingHistory: 'mediahub:tracking:history',
   trackingToggle: 'mediahub:tracking:toggle',
   /** The Undo on the "off your plan" toast: puts back the tracked row the
    *  toggle just removed, its date, episode baseline and details as they
@@ -219,7 +234,9 @@ export const MEDIA_HUB_CHANNELS = {
   // Streaming / playback
   streamResolve: 'mediahub:stream:resolve',
   playStream: 'mediahub:play:stream',
+  streamRejectCurrent: 'mediahub:stream:reject-current',
   playbackStop: 'mediahub:playback:stop',
+  playbackLanguageSettle: 'mediahub:playback:language-settle',
   playbackPrepareProgress: 'mediahub:playback:prepare-progress', // push event
   playbackThumbnail: 'mediahub:playback:thumbnail',
   playbackSkipTimes: 'mediahub:playback:skip-times',

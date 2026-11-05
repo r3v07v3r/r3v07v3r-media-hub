@@ -52,8 +52,14 @@ export function buildSearchParams(
     languages: String(playback.language || 'en').toLowerCase()
   }
   const imdbMatch = String(item?.id || '').match(/^tt(\d+)$/)
+  const episodic =
+    item?.type !== 'movie' && Number.isFinite(playback.season) && Number.isFinite(playback.episode)
   if (imdbMatch && item?.type !== 'anime') {
-    params.imdb_id = imdbMatch[1]
+    // A show's IMDb id is the PARENT of its episodes: OpenSubtitles files an
+    // episode's subtitles under the episode's own imdb_id, so the show's id
+    // there finds the show's own (usually empty) record, not episode 7.
+    if (episodic) params.parent_imdb_id = imdbMatch[1]
+    else params.imdb_id = imdbMatch[1]
   } else {
     params.query = String(item?.title || '').trim()
   }

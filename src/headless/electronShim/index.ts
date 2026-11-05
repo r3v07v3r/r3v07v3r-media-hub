@@ -314,6 +314,24 @@ function masterKey(): Buffer | null {
 }
 
 export const safeStorage = {
+  // The async trio is what the service layer calls (see
+  // src/main/media-hub/secretStorage.ts); the sync methods stay because
+  // settings sealed by an older backend are opened through
+  // decryptStringAsync, which reads the same format.
+  async isAsyncEncryptionAvailable(): Promise<boolean> {
+    return safeStorage.isEncryptionAvailable()
+  },
+
+  async encryptStringAsync(plainText: string): Promise<Buffer> {
+    return safeStorage.encryptString(plainText)
+  },
+
+  async decryptStringAsync(
+    encrypted: Buffer
+  ): Promise<{ shouldReEncrypt: boolean; result: string }> {
+    return { shouldReEncrypt: false, result: safeStorage.decryptString(encrypted) }
+  },
+
   isEncryptionAvailable(): boolean {
     return masterKey() !== null
   },

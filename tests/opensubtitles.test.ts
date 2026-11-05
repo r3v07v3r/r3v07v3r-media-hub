@@ -31,7 +31,7 @@ assert.deepEqual(
     { id: 'tt11280740', type: 'series', title: 'Severance' },
     { season: 2, episode: 7 }
   ),
-  { languages: 'en', imdb_id: '11280740', season_number: 2, episode_number: 7 }
+  { languages: 'en', parent_imdb_id: '11280740', season_number: 2, episode_number: 7 }
 )
 assert.deepEqual(
   buildSearchParams({ id: 'tt1160419', type: 'movie', title: 'Dune' }, { season: 1, episode: 1 }),

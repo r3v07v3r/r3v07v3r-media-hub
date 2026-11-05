@@ -50,6 +50,8 @@ import {
   type SubtitleStyle
 } from '../../shared/media-hub/subtitleStyle'
 import { getDatabase } from './dbState'
+import { languageMatches } from '../../shared/media-hub/language'
+import type { MediaTracks } from '../../shared/media-hub/types'
 import {
   normalizeVideoScaling,
   scalerPropertiesFor,
@@ -158,7 +160,10 @@ async function recoverFromHang(): Promise<void> {
   const load = lastLoad
   const snapshot = sessionSnapshot
   if (!load) {
-    logError('media-hub:player', new Error('mpv stopped answering and was killed; nothing was playing'))
+    logError(
+      'media-hub:player',
+      new Error('mpv stopped answering and was killed; nothing was playing')
+    )
     return
   }
   const position = lastTimePos
@@ -173,7 +178,9 @@ async function recoverFromHang(): Promise<void> {
   hangRecoveredUrl = load.url
   logError(
     'media-hub:player',
-    new Error(`mpv stopped answering and was killed; reloading the title at ${position.toFixed(1)}s`)
+    new Error(
+      `mpv stopped answering and was killed; reloading the title at ${position.toFixed(1)}s`
+    )
   )
   try {
     await startPlayerSession(load.url, { ...load.options, startSeconds: position })
@@ -1058,6 +1065,48 @@ export async function addSubtitleFileToPlayer(filePath: string): Promise<number>
 }
 
 /**
+ * Counts subtitle choices — every apply of a downloaded file, and every
+ * track picked from the menu — so a slow automatic fetch can tell that
+ * someone chose something after it started, and keep out of the way. See
+ * playbackSession.ts's fetchSubtitlesForShortfall.
+ */
+let subtitleChoices = 0
+
+export function noteSubtitleChoice(): number {
+  return ++subtitleChoices
+}
+
+export function subtitleChoiceCount(): number {
+  return subtitleChoices
+}
+
+/**
+ * Turns on the first subtitle track in `language`, if the file has one and
+ * none is showing. For a copy played in the wrong audio language: mpv's own
+ * `slang` choice only applies when a subtitle language is set, and someone
+ * who only ever set an audio language still needs to read what is said.
+ * Best-effort; returns whether a track was turned on.
+ */
+export async function ensureSubtitleLanguage(
+  tracks: MediaTracks,
+  language: string
+): Promise<boolean> {
+  if (!player.running) return false
+  const ordinal = tracks.subtitle.findIndex((track) =>
+    languageMatches(String(track.language ?? ''), language)
+  )
+  if (ordinal < 0) return false
+  // Left alone only when what is showing is already in that language. With
+  // no subtitle language set, mpv may have turned on a default or forced
+  // track in another one, and that is not what the toast will promise.
+  const sid = await player.get('sid').catch(() => undefined)
+  const showing = tracks.subtitle[ordinalForMpvTrackId(sid)]
+  if (showing && languageMatches(String(showing.language ?? ''), language)) return false
+  await player.set('sid', mpvTrackIdForOrdinal(ordinal)).catch(() => {})
+  return true
+}
+
+/**
  * Keeps mpv's window glued to the app's content area, and in the right place
  * in the z-order.
  *
@@ -1170,6 +1219,7 @@ async function runCommand(command: PlayerCommand): Promise<PlayerCommandOutcome>
       await player.set('aid', mpvTrackIdForOrdinal(Number(command.ordinal)))
       return
     case 'set-subtitle-track':
+      noteSubtitleChoice()
       await player.set('sid', mpvTrackIdForOrdinal(Number(command.ordinal)))
       return
     case 'set-volume': {

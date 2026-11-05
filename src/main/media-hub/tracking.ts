@@ -48,16 +48,19 @@ import type {
   TitleWatchState,
   TrackedItem,
   TrackedItemEnriched,
+  TrackingHistoryResult,
   TrackingListResult,
   WatchStatusDiscrepancy
 } from '../../shared/media-hub/types'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import {
   applyPushOutcome,
+  markPushed,
   queuePendingPush,
   reviewRemovalsOwed,
   splitForFlush,
   traktFollowUps,
+  verifyPushed,
   withPushedRemoteState
 } from '../../shared/media-hub/reconcileQueue'
 import {
@@ -69,13 +72,16 @@ import {
 import { toSimklAnimeEpisode, watchedLaterSeasons } from '../../shared/media-hub/serviceIds'
 import {
   abandonedIds,
-  animeShelf,
   liveExclusions,
+  passedOverIds,
+  passedOverLast,
+  passOverRecommendations,
   readStoredRecommendations,
   reasonsFor,
   recommendable,
   requestRecommendationsRebuild,
   storeRecommendations,
+  topByKind,
   SERVED_COUNT
 } from './recommendations'
 import {
@@ -166,6 +172,7 @@ import type { RemoteList } from '../../shared/media-hub/types'
 import {
   animeRowAwaitsGrouping,
   batchHistoryPayload,
+  completedListPayload,
   hasExpressibleSimklId,
   hasSimklContent,
   historyPayload,
@@ -183,6 +190,7 @@ import {
   forgetSimklWatchedCache,
   invalidateSimklWatchedCache,
   simklActivities,
+  simklCompletedAnimeImdbIds,
   simklLibrary,
   simklRequest,
   simklUrl,
@@ -1304,11 +1312,15 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
   // write the exact opposite of the local truth this pass exists to
   // defend. Presence in history is what "watched" means for a movie,
   // which is all this pass ever queues (see the header comment).
-  const locallyWatched = new Set(
-    getDatabase()
-      .history()
-      .map((entry) => String(entry.id))
-  )
+  const localHistory = getDatabase().history()
+  const locallyWatched = new Set(localHistory.map((entry) => String(entry.id)))
+  /** When each film was watched here, for the list move below. */
+  const watchedAtOf = new Map<string, string>()
+  for (const entry of localHistory) {
+    if (entry.type === 'movie' && entry.watchedAt) {
+      watchedAtOf.set(String(entry.id), entry.watchedAt)
+    }
+  }
 
   // Local has since come round to what the remote already said, so the
   // two sides now agree on their own — which is also how a "Use Simkl"
@@ -1345,6 +1357,23 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
         priority
       )
       const unmatched = new Set(unmatchedCatalogIds(response, items))
+      // A history add alone leaves a film the account has dropped exactly
+      // where it is (see completedListPayload). The list move is sent for
+      // the whole add group, matched items only, and a failure here fails
+      // the group the same way the add's own would: the history write
+      // stood, and is repeated harmlessly on the retry.
+      if (watched) {
+        const matched = items.filter((item) => !unmatched.has(String(item.id)))
+        const list = completedListPayload(matched, (id) => watchedAtOf.get(id))
+        if (list.movies?.length) {
+          if (disowned()) return new Set()
+          await simklRequest(
+            '/sync/add-to-list',
+            { method: 'POST', body: JSON.stringify(list) },
+            priority
+          )
+        }
+      }
       for (const entry of group) {
         if (unmatched.has(entry.id)) {
           failed.add(entry.id)
@@ -1452,14 +1481,21 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
   // Re-read rather than reusing `queue` — anything queued while the
   // requests above were in flight belongs to the next flush, not this
   // one's verdict.
+  // Settled entries leave; confirmed ones do NOT — a 200 from Simkl is an
+  // acceptance, not a sighting, and the entry stays queued (flagged, see
+  // markPushed) until a read of the account shows what was sent. Until
+  // then its title stays out of the review list and the flush leaves it
+  // alone; computeMovieDiscrepancies is where it is let go of, or counted
+  // as a failed attempt and sent again.
   const { queue: remaining, abandoned } = applyPushOutcome(
     // The captured profile, like every other queue touch in this function:
     // this read happens after the requests above and would otherwise pick up
     // whichever profile is active by now.
     pendingPushes(profile),
-    [...confirmed, ...settled],
+    settled,
     failed
   )
+  const landed = new Map([...pushedValue].filter(([id]) => confirmed.has(id)))
 
   // Suppression BEFORE the queue write, not after. Giving up on a push
   // and then asking about the same title again — in this very pass,
@@ -1478,7 +1514,7 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
 
   // Entries that were pushed and stayed queued now know something new
   // about the remote side — see withPushedRemoteState.
-  const kept = withPushedRemoteState([...remaining, ...stillHeld], pushedValue)
+  const kept = markPushed(withPushedRemoteState([...remaining, ...stillHeld], pushedValue), landed)
   const persisted = writePendingPushes(kept, profile)
   // A successful write only vouches for what THIS flush corrected. An
   // entry carrying staleness from an earlier one was written straight
@@ -1526,7 +1562,11 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
   // queued and this flush did not send it, a wake-up is armed for the
   // earliest moment it could be. Bounded by the attempt cap — entries
   // that keep failing are let go of, and an empty queue arms nothing.
-  if (onDisk.length) {
+  // Entries awaiting verification are not waiting on a flush — a wake-up
+  // would find nothing to send — so they arm nothing here. The next diff
+  // (a launch, the half-hourly pass, a focus) is what moves them on.
+  const waiting = onDisk.filter((entry) => !entry.pushed)
+  if (waiting.length) {
     // Which wake-up depends on what is actually eligible, because the
     // eligibility rule above and this one have to agree or they park
     // work that could go out now. An entry still at zero attempts has
@@ -1534,10 +1574,56 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
     // the batch timer that every fresh decision uses; parking it behind
     // the failure cooldown would sit on a corrected decision for five
     // minutes. The cooldown is for entries that actually failed.
-    if (onDisk.some((entry) => entry.attempts === 0)) scheduleFlush()
+    if (waiting.some((entry) => entry.attempts === 0)) scheduleFlush()
     else scheduleRetry(retryPacingDeadline(profile) - Date.now())
   }
   return confirmed
+}
+
+/**
+ * Settles the pushes Simkl accepted against a read of the account made
+ * after they went out — see verifyPushed for the rule, and
+ * PendingWatchStatusPush.pushed for why a 200 is not the end of a push.
+ * One the read confirms leaves the queue quietly. One it does not goes
+ * back to being sendable with an attempt spent, and is said out loud as a
+ * retry; at the cap it is given up on and reported like any other
+ * failure, with the title suppressed before the queue write for the same
+ * reason the flush suppresses first (see addAbandonedReconcileId's
+ * read-back). Nothing is sent from here: the retry is armed and the next
+ * flush sends it.
+ */
+function verifyAcceptedPushes(profile: string, remoteWatched: (id: string) => boolean): void {
+  const before = pendingPushes(profile)
+  if (!before.some((entry) => entry.pushed)) return
+  const { queue, verified, abandoned } = verifyPushed(before, remoteWatched)
+  const letGo: PendingWatchStatusPush[] = []
+  const stillHeld: PendingWatchStatusPush[] = []
+  for (const entry of abandoned) {
+    ;(addAbandonedReconcileId(entry.id, profile) ? letGo : stillHeld).push(entry)
+  }
+  const kept = [...queue, ...stillHeld]
+  const persisted = writePendingPushes(kept, profile)
+  if (!persisted) {
+    logError('reconcile:queue-write', new Error('Could not record which pushes Simkl kept.'))
+  }
+  const retrying = (persisted ? kept : before).filter(
+    (entry) => !entry.pushed && entry.attempts > 0
+  )
+  logError(
+    'reconcile:verify',
+    `verified=${verified.map((e) => e.id).join(',') || '-'} ` +
+      `retrying=${retrying.map((e) => e.id).join(',') || '-'} ` +
+      `abandoned=${(persisted ? letGo : []).map((e) => e.id).join(',') || '-'}`
+  )
+  if (retrying.length || (persisted && letGo.length)) {
+    sendToRenderer(MEDIA_HUB_CHANNELS.trackingReconcileSync, {
+      pushed: [],
+      retrying: retrying.map((entry) => entry.title),
+      abandoned: persisted ? letGo.map((entry) => entry.title) : [],
+      error: 'Simkl accepted the change but did not keep it.'
+    } satisfies ReconcileSyncReport)
+  }
+  if (retrying.length) scheduleRetry(Math.max(0, retryPacingDeadline(profile) - Date.now()))
 }
 
 /**
@@ -1812,6 +1898,27 @@ async function computeMovieDiscrepancies(
   const remoteMovies = new Map(
     snapshot.entries.filter((h) => h.type === 'movie').map((h) => [h.id, h] as const)
   )
+  // A film watched here that Simkl's movies list lacks may be a film Simkl
+  // files as anime (see simklCompletedAnimeImdbIds): completed there, it
+  // is watched at Simkl, and saying otherwise asked about the same two
+  // films on every launch. Read only when there is such a film, and only
+  // ever to confirm a local movie — a completed TV anime is not a film
+  // Simkl has watched that this library lacks, and must not become a row.
+  const missingAtSimkl = [...localMovies.keys()].filter((id) => !remoteMovies.has(id))
+  if (missingAtSimkl.length) {
+    const completedAnime = await simklCompletedAnimeImdbIds(priority)
+    for (const id of missingAtSimkl) {
+      const local = localMovies.get(id)
+      if (local && completedAnime?.has(id)) remoteMovies.set(id, local)
+    }
+  }
+  // Pushes Simkl accepted earlier, checked against this read of the account
+  // — a read made just now, after the flush that sent them, which is what
+  // `fetched` says. The snapshot's own cache is expired when a push is
+  // confirmed (invalidateSimklWatchedCache), so the next diff reads afresh;
+  // one served from the cache or a stale fallback predates the push and
+  // can say nothing about it, and the entries wait for one that can.
+  if (snapshot.fetched) verifyAcceptedPushes(db.activeProfile(), (id) => remoteMovies.has(id))
   const ids = new Set([...localMovies.keys(), ...remoteMovies.keys()])
   const out: WatchStatusDiscrepancy[] = []
   for (const id of ids) {
@@ -2271,6 +2378,17 @@ export function registerTrackingIpc(): void {
       history,
       plannedSources: plannedSources(),
       // Where a later season's card finds its episodes: under the show.
+      laterSeasons: watchedLaterSeasons(history, animeSeasonMembersWhenGrouped())
+    }
+  })
+
+  /** The same history and laterSeasons as tracking:list, with none of its
+   *  metadata lookups — for the watched badges and season stops, which
+   *  otherwise sat unticked for seconds behind a long tracked list. */
+  handle<undefined, TrackingHistoryResult>(MEDIA_HUB_CHANNELS.trackingHistory, () => {
+    const history = getDatabase().history()
+    return {
+      history,
       laterSeasons: watchedLaterSeasons(history, animeSeasonMembersWhenGrouped())
     }
   })
@@ -3254,6 +3372,19 @@ export function registerTrackingIpc(): void {
     }
   )
 
+  // "Show me others" on the suggestion row: the titles on screen go to the
+  // back for a few weeks (recommendations.ts's PASSED_OVER_MS). A read-time
+  // reorder, so no rebuild is asked for; the caller refetches the feed.
+  handle<{ ids: string[] }, { passed: number }>(
+    MEDIA_HUB_CHANNELS.recommendationsPassOver,
+    (_e, payload) => {
+      const ids = Array.isArray(payload?.ids)
+        ? payload.ids.filter((id): id is string => typeof id === 'string' && id.length > 0)
+        : []
+      return { passed: ids.length ? passOverRecommendations(ids.slice(0, 100)) : 0 }
+    }
+  )
+
   handle<undefined, HomePersonalizedResult>(MEDIA_HUB_CHANNELS.homePersonalized, async () => {
     const db = getDatabase()
     // Which profile this whole response is about, captured before the first
@@ -3278,17 +3409,15 @@ export function registerTrackingIpc(): void {
     // waiting for eighteen rows it could have read from disk.
     const stored = readStoredRecommendations(exclusions, history)
     let recommendations: CatalogItem[]
-    // The Anime library's own shelf, from the whole ranking: the anime among
-    // the row's 36 came to a handful once later seasons left it.
-    let animeRecommendations: CatalogItem[]
     let recommendationReasons: Record<string, RecommendationReason>
     let recommendationRails: RecommendationRail[]
+    let recommendationsByKind: HomePersonalizedResult['recommendationsByKind']
     let preferredGenres: string[]
     let catalogError: string | undefined
 
     if (stored) {
       recommendations = stored.items
-      animeRecommendations = stored.anime
+      recommendationsByKind = stored.byKind
       recommendationReasons = stored.reasons
       recommendationRails = stored.rails
       preferredGenres = stored.preferredGenres
@@ -3314,9 +3443,9 @@ export function registerTrackingIpc(): void {
         // stored, so the next call tries the catalogs again.
         catalogError = 'All catalog sources are currently unavailable.'
         recommendations = []
-        animeRecommendations = []
         recommendationReasons = {}
         recommendationRails = []
+        recommendationsByKind = {}
       } else {
         const dropped = abandonedIds()
         const candidates = all.filter((item) => recommendable(item, exclusions))
@@ -3350,17 +3479,27 @@ export function registerTrackingIpc(): void {
         storeRecommendations(full, preferredGenres, { announce: false, profile })
         // Through the same cadence pass the stored path uses, so the row is
         // ordered the same way whichever branch produced it.
-        recommendations = applyCadence(full, watchCadenceProfile(history), SERVED_COUNT)
-        animeRecommendations = animeShelf(full)
+        const ordered = passedOverLast(full, passedOverIds())
+        recommendations = applyCadence(ordered, watchCadenceProfile(history), SERVED_COUNT)
+        recommendationsByKind = topByKind(ordered)
         // Thinner than the stored path's, and knowingly so. This branch ranks
         // without credits or a taste profile (see the comment above), so the
         // only reasons it can produce are the ones the catalog alone
         // supports — a franchise continuation, a genre, a release year. The
         // background rebuild fills in the rest within minutes.
-        recommendationReasons = reasonsFor([...recommendations, ...animeRecommendations], full)
+        recommendationReasons = reasonsFor(
+          [...recommendations, ...Object.values(recommendationsByKind).flat()],
+          full
+        )
         recommendationRails = groupRecommendationRails(full)
       }
     }
+
+    // The Anime library's own shelf, from the whole ranking: the anime among
+    // the row's 36 came to a handful once later seasons left it. The same
+    // list as the per-kind shelf, so it keeps the pass-over order too; still
+    // sent under its own name for a renderer that reads only this field.
+    const animeRecommendations = recommendationsByKind?.anime ?? []
 
     // The id a tracked title's viewings are kept under. A merged anime's
     // later season is planned under its own Kitsu id and watched under the
@@ -3422,6 +3561,7 @@ export function registerTrackingIpc(): void {
       animeRecommendations,
       recommendationReasons,
       recommendationRails,
+      recommendationsByKind,
       preferredGenres,
       // Read here rather than fetched: it is whatever the last pull
       // recorded, so tagging a card costs nothing on this path.
@@ -3434,8 +3574,10 @@ export function registerTrackingIpc(): void {
       completedIds: db.indexByIds([
         ...new Set([
           ...recommendations.map((item) => String(item.id)),
-          ...animeRecommendations.map((item) => String(item.id)),
-          ...recommendationRails.flatMap((rail) => rail.items.map((item) => String(item.id)))
+          ...recommendationRails.flatMap((rail) => rail.items.map((item) => String(item.id))),
+          ...Object.values(recommendationsByKind ?? {}).flatMap((list) =>
+            (list ?? []).map((item) => String(item.id))
+          )
         ])
       ]).completedIds,
       ...(catalogError ? { catalogError } : {})

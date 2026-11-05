@@ -110,6 +110,10 @@ export function ArtworkImage({
           src={src as string}
           alt={alt}
           loading={priority ? 'eager' : 'lazy'}
+          // Decode off the main thread: a grid scroll brings in dozens of
+          // w500 posters at once, and synchronous decode is scroll jank.
+          // The fade-in already waits for onLoad, so nothing paints half-done.
+          decoding="async"
           onLoad={() => setLoad((s) => nextArtworkState(s, 'load'))}
           onError={() => setLoad((s) => nextArtworkState(s, 'error'))}
           className={`${styles.img} ${status === 'loaded' ? styles.imgLoaded : ''} ${imageClassName ?? ''}`}

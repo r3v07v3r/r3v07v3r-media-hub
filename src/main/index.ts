@@ -2,7 +2,7 @@ import { app, shell, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-import { startBackend, stopBackend } from './backend'
+import { prepareBackend, startBackend, stopBackend } from './backend'
 import { APP_SCHEME, registerAppSchemeAsPrivileged, registerAppSchemeHandler } from './appProtocol'
 import { setActiveWindow, sendToRenderer } from './media-hub/rendererBridge'
 import { isAllowedExternalUrl } from './media-hub/security'
@@ -164,7 +164,7 @@ function watchFullscreenShortcut(window: BrowserWindow): void {
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   registerAppSchemeHandler()
 
   // Before any window exists, so there is no window-shaped gap at startup
@@ -183,7 +183,9 @@ app.whenReady().then(() => {
   })
 
   // Every IPC handler, and the database they read — see backend.ts, which
-  // the headless backend shares.
+  // the headless backend shares. The credentials' key first: no handler may
+  // exist before a secret can be read.
+  await prepareBackend()
   startBackend()
 
   createWindow()

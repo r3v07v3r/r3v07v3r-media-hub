@@ -7,6 +7,12 @@
 /** mDNS service type the daemon announces and the app browses for. */
 export const LANCACHE_SERVICE_TYPE = '_r3cache._tcp.local'
 
+/** The daemon's default HTTP port. One fixed default so mDNS, the app's
+ *  subnet probe and manual entry all agree on where to look; a server
+ *  moved off it by r3-cache.json is still found over mDNS, which carries
+ *  the port in its SRV record. */
+export const LANCACHE_DEFAULT_PORT = 8945
+
 export interface LanCachePingResponse {
   product: 'r3-cache'
   serverName: string

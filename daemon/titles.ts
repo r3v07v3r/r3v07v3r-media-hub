@@ -17,6 +17,8 @@
 // updated (with a fresh seq) only when it moved far enough to matter to
 // a "trending" sort — see RANK_DRIFT_SLACK.
 
+import crypto from 'node:crypto'
+import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 
@@ -65,24 +67,126 @@ const KINDS: MediaKind[] = ['movie', 'series', 'anime']
  *  as there are live rows (plus slack for small stores), compact it. */
 const COMPACT_SLACK_LINES = 1000
 
-function sameItem(a: CatalogItem, b: CatalogItem): boolean {
-  return JSON.stringify(a) === JSON.stringify(b)
+/** Read size while loading. Big enough that the file is a few dozen reads,
+ *  small enough that the buffer is a rounding error next to the index. */
+const LOAD_CHUNK_BYTES = 1 << 20
+
+// MEMORY. The rows themselves stay on disk; memory holds one small
+// reference per title (seq, rank, a content hash, and where its line is in
+// the file). This is not an optimisation for its own sake. The catalog is
+// tens of thousands of rows and ~90 MB of JSON, and the daemon runs under
+// a 512 MB cgroup on a box whose real job is something else, where Node
+// sizes its heap to about half of that. Holding every row parsed (and
+// loading by reading the whole file into one string and splitting it,
+// which is two more full copies) ran out of heap three seconds into boot,
+// so every build carrying the title tier crashed, was marked bad by the
+// launcher, and r3-host fell back to its builtin build from August.
+//
+// A page of /api/titles reads its rows from disk: at most 500 short reads
+// of a file the OS has cached, which is cheaper than it sounds and far
+// cheaper than the alternative.
+interface RowRef {
+  seq: number
+  rank: number
+  /** Hash of the item's JSON: what "unchanged" is decided by, without
+   *  keeping the item. */
+  hash: string
+  /** Byte position and length of this row's line, newline excluded. */
+  offset: number
+  length: number
 }
 
-export function createTitleStore(dataDir: string): TitleStore {
+/** The part of a file handle the loops below need, so a test can hand them
+ *  one that reads or writes short. */
+interface PositionalHandle {
+  read(
+    buffer: Buffer,
+    offset: number,
+    length: number,
+    position: number
+  ): Promise<{ bytesRead: number }>
+  write(
+    buffer: Buffer,
+    offset: number,
+    length: number,
+    position: number
+  ): Promise<{ bytesWritten: number }>
+}
+
+/** A read or write may move fewer bytes than asked and still succeed.
+ *  Taking that for the whole buffer would drop the rest of a row silently,
+ *  and during compaction the file it lands in replaces the intact one. */
+export async function readFully(
+  handle: Pick<PositionalHandle, 'read'>,
+  buffer: Buffer,
+  position: number
+): Promise<void> {
+  for (let done = 0; done < buffer.length;) {
+    const { bytesRead } = await handle.read(buffer, done, buffer.length - done, position + done)
+    if (bytesRead <= 0) throw new Error('titles.ndjson ended inside a row')
+    done += bytesRead
+  }
+}
+
+export async function writeFully(
+  handle: Pick<PositionalHandle, 'write'>,
+  buffer: Buffer,
+  position: number
+): Promise<void> {
+  for (let done = 0; done < buffer.length;) {
+    const { bytesWritten } = await handle.write(buffer, done, buffer.length - done, position + done)
+    if (bytesWritten <= 0) throw new Error('could not write titles.ndjson')
+    done += bytesWritten
+  }
+}
+
+function itemHash(item: CatalogItem): string {
+  return crypto.createHash('sha1').update(JSON.stringify(item)).digest('base64')
+}
+
+export function createTitleStore(
+  dataDir: string,
+  /** Test seam: how lines are appended and the file cut back. A real
+   *  append can write part of its data and then fail (a full disk), which
+   *  is the case the tail handling exists for. */
+  options: {
+    appendFile?: (file: string, data: string) => Promise<void>
+    truncate?: (file: string, size: number) => Promise<void>
+  } = {}
+): TitleStore {
+  const appendFile =
+    options.appendFile ?? ((file: string, data: string) => fsp.appendFile(file, data))
+  const truncate = options.truncate ?? ((file: string, size: number) => fsp.truncate(file, size))
   const ndjsonPath = path.join(dataDir, 'titles.ndjson')
   const metaPath = path.join(dataDir, 'titles-meta.json')
 
   // kind -> id -> row. Later lines win on load, which is what append-on-
   // change means.
-  const byKind = new Map<MediaKind, Map<string, DaemonTitleRow>>(
-    KINDS.map((kind) => [kind, new Map()])
-  )
+  const byKind = new Map<MediaKind, Map<string, RowRef>>(KINDS.map((kind) => [kind, new Map()]))
   // Sorted-by-seq view per kind, rebuilt lazily — invalidated on upsert.
-  const sortedCache = new Map<MediaKind, DaemonTitleRow[]>()
+  const sortedCache = new Map<MediaKind, RowRef[]>()
   let seqCounter = 0
   let lineCount = 0
+  /** Where the next appended line starts. */
+  let fileSize = 0
+  /** Set when an append failed and the file could not be cut back to
+   *  fileSize: the file may now end in part of a line, past fileSize. */
+  let tailUnknown = false
+  /** False until the file has been read to the end. While false, nothing
+   *  knows where the file ends, so nothing may be appended: a write would
+   *  land at the real end and be indexed from a position that is not it. */
+  let loaded = false
   const refreshedAt: Partial<Record<MediaKind, number>> = {}
+
+  // Every write (append, compaction) runs one at a time: each one decides
+  // byte offsets from fileSize, and two crawls appending at once would
+  // otherwise record overlapping positions.
+  let writeChain: Promise<unknown> = Promise.resolve()
+  function serialized<T>(task: () => Promise<T>): Promise<T> {
+    const run = writeChain.then(task, task)
+    writeChain = run.catch(() => {})
+    return run
+  }
 
   async function persistMeta(): Promise<void> {
     const tmp = `${metaPath}.tmp`
@@ -96,19 +200,71 @@ export function createTitleStore(dataDir: string): TitleStore {
     return n
   }
 
+  /** Rewrites the file with live rows only, a row at a time. The old file
+   *  and the old offsets stay valid until the synchronous swap at the end,
+   *  so a page served while this runs reads consistent rows. */
   async function compactIfBloated(): Promise<void> {
     if (lineCount <= liveCount() * 2 + COMPACT_SLACK_LINES) return
-    const lines: string[] = []
-    for (const map of byKind.values()) {
-      for (const row of map.values()) lines.push(JSON.stringify(row))
-    }
     const tmp = `${ndjsonPath}.tmp`
-    await fsp.writeFile(tmp, lines.length ? lines.join('\n') + '\n' : '')
-    await fsp.rename(tmp, ndjsonPath)
-    lineCount = lines.length
+    const moved = new Map<RowRef, number>()
+    let written = 0
+    const source = await fsp.open(ndjsonPath, 'r')
+    try {
+      // Opened inside the source's cleanup: a target that cannot be opened
+      // (the tmp path taken) would otherwise leak the source handle, once
+      // per changed upsert, since every one of them retries compaction.
+      const target = await fsp.open(tmp, 'w')
+      try {
+        for (const map of byKind.values()) {
+          for (const ref of map.values()) {
+            const line = Buffer.alloc(ref.length + 1)
+            await readFully(source, line.subarray(0, ref.length), ref.offset)
+            line[ref.length] = 0x0a
+            await writeFully(target, line, written)
+            moved.set(ref, written)
+            written += line.length
+          }
+        }
+      } finally {
+        await target.close()
+      }
+    } finally {
+      await source.close()
+    }
+    // Synchronous from here: no request can run between the file changing
+    // and the offsets that describe it changing.
+    fs.renameSync(tmp, ndjsonPath)
+    for (const [ref, offset] of moved) ref.offset = offset
+    fileSize = written
+    lineCount = moved.size
   }
 
-  function sorted(kind: MediaKind): DaemonTitleRow[] {
+  /** After an append failed and could not be cut back: learn where the file
+   *  really ends, and close off any fragment so the next line starts clean
+   *  (the fragment is a torn line, skipped on load). */
+  async function settleTail(): Promise<void> {
+    if (!tailUnknown) return
+    let { size } = await fsp.stat(ndjsonPath)
+    // Decided by the last byte, not by the size: a torn line found at load
+    // sits INSIDE the size this store already knows.
+    if (size > 0) {
+      const last = Buffer.alloc(1)
+      const handle = await fsp.open(ndjsonPath, 'r')
+      try {
+        await readFully(handle, last, size - 1)
+      } finally {
+        await handle.close()
+      }
+      if (last[0] !== 0x0a) {
+        await appendFile(ndjsonPath, '\n')
+        size += 1
+      }
+    }
+    fileSize = size
+    tailUnknown = false
+  }
+
+  function sorted(kind: MediaKind): RowRef[] {
     let rows = sortedCache.get(kind)
     if (!rows) {
       rows = [...(byKind.get(kind)?.values() ?? [])].sort((a, b) => a.seq - b.seq)
@@ -117,55 +273,209 @@ export function createTitleStore(dataDir: string): TitleStore {
     return rows
   }
 
+  function readRows(refs: RowRef[]): DaemonTitleRow[] {
+    if (!refs.length) return []
+    const fd = fs.openSync(ndjsonPath, 'r')
+    try {
+      return refs.map((ref) => {
+        const buffer = Buffer.alloc(ref.length)
+        for (let done = 0; done < ref.length;) {
+          const read = fs.readSync(fd, buffer, done, ref.length - done, ref.offset + done)
+          if (read <= 0) throw new Error('titles.ndjson ended inside a row')
+          done += read
+        }
+        return JSON.parse(buffer.toString('utf8')) as DaemonTitleRow
+      })
+    } finally {
+      fs.closeSync(fd)
+    }
+  }
+
+  /** Reads the file into a clean index. Run at load, and again before the
+   *  first write when that load did not finish. */
+  async function reload(): Promise<void> {
+    loaded = false
+    // Built on the side and published in one step. Rows in a compacted file
+    // are not in seq order, so a half-read index can hold seq 10 without
+    // seq 1; a sync page served from it would hand a client a watermark past
+    // rows not yet read, and the client keeps that watermark for good.
+    const fresh = new Map<MediaKind, Map<string, RowRef>>(KINDS.map((kind) => [kind, new Map()]))
+    const read = await loadRows(fresh)
+    for (const kind of KINDS) byKind.set(kind, fresh.get(kind) ?? new Map())
+    seqCounter = read.maxSeq
+    lineCount = read.lines
+    fileSize = read.size
+    tailUnknown = false
+    sortedCache.clear()
+    loaded = true
+    // A file that ends mid-line (a crash during append) would glue the next
+    // appended row onto that fragment. Close it off first. Marked before and
+    // cleared only on success: if this append fails (a full disk at boot),
+    // the next write must still close the line off.
+    if (fileSize && read.lastByte !== 0x0a) {
+      tailUnknown = true
+      await appendFile(ndjsonPath, '\n')
+      fileSize += 1
+      tailUnknown = false
+    }
+  }
+
+  /** Streams the file into `target`, indexing each line by its byte
+   *  position. Only one chunk and one line are ever held at a time. */
+  async function loadRows(
+    target: Map<MediaKind, Map<string, RowRef>>
+  ): Promise<{ maxSeq: number; lines: number; size: number; lastByte: number }> {
+    let maxSeq = 0
+    let lines = 0
+    let handle: fsp.FileHandle
+    try {
+      handle = await fsp.open(ndjsonPath, 'r')
+    } catch (error) {
+      // No file is a first run. Any other failure is a file that is there
+      // and could not be read, and must not pass for an empty one.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return { maxSeq, lines, size: 0, lastByte: 0x0a }
+      }
+      throw error
+    }
+    let position = 0
+    let carry = Buffer.alloc(0)
+    let lastByte = 0x0a
+    const index = (line: Buffer, offset: number): void => {
+      if (!line.length) return
+      lines += 1
+      try {
+        const row = JSON.parse(line.toString('utf8')) as DaemonTitleRow
+        if (!row || typeof row.seq !== 'number' || !row.item?.id) return
+        const map = target.get(row.kind)
+        if (!map) return
+        map.set(String(row.item.id), {
+          seq: row.seq,
+          rank: row.rank,
+          hash: itemHash(row.item),
+          offset,
+          length: line.length
+        })
+        if (row.seq > maxSeq) maxSeq = row.seq
+      } catch {
+        // A torn tail line from a crash loses that one change; the next
+        // crawl re-detects it.
+      }
+    }
+    try {
+      const chunk = Buffer.alloc(LOAD_CHUNK_BYTES)
+      for (;;) {
+        const { bytesRead } = await handle.read(chunk, 0, chunk.length, position)
+        if (!bytesRead) break
+        const data = carry.length
+          ? Buffer.concat([carry, chunk.subarray(0, bytesRead)])
+          : chunk.subarray(0, bytesRead)
+        const dataStart = position - carry.length
+        let lineStart = 0
+        for (let at = data.indexOf(0x0a); at !== -1; at = data.indexOf(0x0a, at + 1)) {
+          index(data.subarray(lineStart, at), dataStart + lineStart)
+          lineStart = at + 1
+        }
+        // Copied: the chunk buffer is reused by the next read.
+        carry = Buffer.from(data.subarray(lineStart))
+        lastByte = data[data.length - 1]
+        position += bytesRead
+      }
+      index(carry, position - carry.length)
+    } finally {
+      await handle.close()
+    }
+    return { maxSeq, lines, size: position, lastByte }
+  }
+
   return {
-    async upsert(kind, entries) {
-      const map = byKind.get(kind)
-      if (!map) return 0
-      const changedLines: string[] = []
-      for (const entry of entries) {
-        const id = String(entry.item?.id || '')
-        if (!id) continue
-        const current = map.get(id)
-        if (current) {
-          const contentSame = sameItem(current.item, entry.item)
-          const rankClose = Math.abs(current.rank - entry.rank) <= RANK_DRIFT_SLACK
-          if (contentSame && rankClose) continue
-          // Content changed, or the title genuinely moved: new seq so
-          // watermarked clients hear about it.
-          const row: DaemonTitleRow = {
-            seq: ++seqCounter,
-            kind,
-            rank: contentSame && rankClose ? current.rank : entry.rank,
-            item: entry.item
+    upsert(kind, entries) {
+      return serialized(async () => {
+        try {
+          if (!loaded) await reload()
+          await settleTail()
+        } catch {
+          return 0 // Still cannot tell where the file ends: write nothing.
+        }
+        // Looked up after any reload, which replaces the maps.
+        const map = byKind.get(kind)
+        if (!map) return 0
+        const changed: Array<{ id: string; ref: RowRef; line: string }> = []
+        // What this batch has already decided per id. The live map is only
+        // updated after the append lands, so a page repeating an id must be
+        // compared against its own earlier copy, not the stored one: stored
+        // A, then B, then A again in one batch has to end on A.
+        const pending = new Map<string, RowRef>()
+        let offset = fileSize
+        for (const entry of entries) {
+          const id = String(entry.item?.id || '')
+          if (!id) continue
+          const hash = itemHash(entry.item)
+          const current = pending.get(id) ?? map.get(id)
+          if (current) {
+            const contentSame = current.hash === hash
+            const rankClose = Math.abs(current.rank - entry.rank) <= RANK_DRIFT_SLACK
+            if (contentSame && rankClose) continue
           }
-          map.set(id, row)
-          changedLines.push(JSON.stringify(row))
-        } else {
+          // New, content changed, or the title genuinely moved: new seq so
+          // watermarked clients hear about it.
           const row: DaemonTitleRow = {
             seq: ++seqCounter,
             kind,
             rank: entry.rank,
             item: entry.item
           }
-          map.set(id, row)
-          changedLines.push(JSON.stringify(row))
+          const line = JSON.stringify(row)
+          const length = Buffer.byteLength(line)
+          const ref: RowRef = { seq: row.seq, rank: row.rank, hash, offset, length }
+          changed.push({ id, line, ref })
+          pending.set(id, ref)
+          offset += length + 1
         }
-      }
-      if (changedLines.length) {
+        if (!changed.length) return 0
+        try {
+          await appendFile(ndjsonPath, changed.map((entry) => entry.line).join('\n') + '\n')
+        } catch {
+          // Nothing is indexed: the rows live on disk now, and an entry
+          // pointing at bytes that never landed would serve garbage. The
+          // next crawl re-detects the delta. But the append may have written
+          // PART of its data before failing, so the file is cut back to
+          // where it ended; otherwise every later row would land after the
+          // fragment and be indexed at the wrong place.
+          try {
+            await truncate(ndjsonPath, fileSize)
+          } catch {
+            // Could not cut it back, so the file may now hold whole rows
+            // the index does not know, as well as a fragment. Fixing the
+            // offset alone would let later rows (and the watermarks clients
+            // keep) pass those by for good. The index is no longer the file:
+            // sync pages are refused and the file is read again from the
+            // top, which indexes what survived and closes off the fragment.
+            // Queued behind this write; a later write retries it if it fails.
+            loaded = false
+            void serialized(reload).catch(() => {})
+          }
+          return 0
+        }
+        for (const entry of changed) map.set(entry.id, entry.ref)
+        fileSize = offset
+        lineCount += changed.length
         sortedCache.delete(kind)
         try {
-          await fsp.appendFile(ndjsonPath, changedLines.join('\n') + '\n')
-          lineCount += changedLines.length
           await compactIfBloated()
         } catch {
-          // Disk trouble loses durability, not correctness: the in-memory
-          // store still serves, and the next crawl re-detects the delta.
+          // Compaction is housekeeping: the appended file is still correct.
         }
-      }
-      return changedLines.length
+        return changed.length
+      })
     },
 
     listSince(kind, since, limit) {
+      // Refused, not answered from what is there: a page from an index that
+      // is not fully read can carry a watermark past rows it does not have
+      // yet (see reload). The route answers 500, which the app's title sync
+      // treats as "no rows this time" and asks again next pass.
+      if (!loaded) throw new Error('The title index is still loading.')
       const rows = sorted(kind)
       // Rows are seq-ascending; binary search for the first > since.
       let lo = 0
@@ -177,7 +487,7 @@ export function createTitleStore(dataDir: string): TitleStore {
       }
       const page = rows.slice(lo, lo + limit)
       return {
-        rows: page,
+        rows: readRows(page),
         nextSince: page.length ? page[page.length - 1].seq : since,
         more: lo + limit < rows.length,
         total: rows.length
@@ -215,27 +525,13 @@ export function createTitleStore(dataDir: string): TitleStore {
       } catch {
         // First run.
       }
-      try {
-        const text = await fsp.readFile(ndjsonPath, 'utf8')
-        for (const line of text.split('\n')) {
-          if (!line.trim()) continue
-          lineCount += 1
-          try {
-            const row = JSON.parse(line) as DaemonTitleRow
-            if (!row || typeof row.seq !== 'number' || !row.item?.id) continue
-            const map = byKind.get(row.kind)
-            if (!map) continue
-            map.set(String(row.item.id), row)
-            if (row.seq > seqCounter) seqCounter = row.seq
-          } catch {
-            // A torn tail line from a crash loses that one change; the next
-            // crawl re-detects it.
-          }
-        }
+      await serialized(async () => {
+        await reload()
         await compactIfBloated()
-      } catch {
-        // First run.
-      }
+      }).catch(() => {
+        // An index that could not be read serves what it has; the next write
+        // retries the read before it appends anything (see `loaded`).
+      })
     }
   }
 }

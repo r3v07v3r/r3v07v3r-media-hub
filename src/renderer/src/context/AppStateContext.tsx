@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -31,11 +32,14 @@ import type {
   PartyChatMessage,
   PartyQueueEntry,
   PartyStatusResult,
+  PlaybackResult,
   ProfilePublic,
   ReconcileResolution,
   EpisodeSyncService,
   ShowSyncAction,
   ShowSyncRow,
+  StreamCandidate,
+  StreamResolveResult,
   WatchStatusDiscrepancy
 } from '@shared/media-hub/types'
 import type { ChangedEpisode, ProviderShortfall, TitleStatus } from '@shared/media-hub/types'
@@ -340,6 +344,9 @@ interface AppStateValue {
   animeRecommendations: Recommendation[]
   /** The ranking shelved by reason — the For You page's rows. */
   recommendationRails: HomeRail[]
+  /** The best of each kind, for the Movies/Series/Anime shelf. A kind with
+   *  no entry has not been answered yet; fall back to `recommendations`. */
+  recommendationsByKind: Partial<Record<MediaKind, Recommendation[]>>
   featured: MediaItem[]
   homeFeedLive: boolean
   /** The home:personalized fetch is still out. Distinct from
@@ -448,8 +455,9 @@ interface AppStateValue {
    *  is labelled with. Null once the chain is fully unwound. */
   browsingOrigin: BrowsingOrigin | null
   /** `originLabelOverride`: only needed when opening a title from within
-   *  another detail page — see the implementation's own comment. */
-  openDetail: (media: MediaItem, originLabelOverride?: string) => void
+   *  another detail page — see the implementation's own comment. `season`
+   *  opens a series on that season's tab (a collection's season stop). */
+  openDetail: (media: MediaItem, originLabelOverride?: string, season?: number) => void
   /** Opens what else this catalog has of one person's — see routes/PersonPage.
    *  A drill-down from a title page, not a nav destination. */
   openPerson: (name: string) => void
@@ -537,6 +545,17 @@ interface AppStateValue {
 // card off early would be worse than leaving it a while — it would look
 // like the party had started without them.
 const PARTY_PREPARING_TIMEOUT_MS = 3 * 60 * 1000
+
+/** The most extra opens play:stream can make past the pick when it lacks
+ *  the wanted audio: main's LANGUAGE_RETRY_LIMIT (3) untried copies, the
+ *  closest known copy as a last resort, and one reopen of the copy it
+ *  settles on. Sizes the buffering deadline only — every alternate is sent,
+ *  since main drops the ones it already knows about before it caps. */
+const LANGUAGE_EXTRA_OPENS = 5
+
+/** How long the second, fresh search for other copies may take — see its
+ *  call in runPlayback. */
+const FRESH_RESOLVE_DEADLINE_MS = 75_000
 
 /** Structural equality for the small, flat IPC payloads this file holds in
  *  state (party status, party queue). Deliberately not a deep-equality
@@ -1272,6 +1291,56 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     })
   }, [pushNotification])
 
+  // The cache server, found or followed by the main process on its own (see
+  // lanCache.ts's runLanCacheAutoConnect), and, on the administrator's
+  // device, another device asking to join. The request waits on the server
+  // whatever happens to this toast: dismissing it leaves the answer to the
+  // Caching section of the control centre.
+  useEffect(() => {
+    const lanCache = window.api?.mediaHub?.lanCache
+    return lanCache?.onEvent((event) => {
+      if (event.kind === 'join-request') {
+        const answer = (action: 'approve' | 'deny'): void => {
+          void lanCache
+            .deviceAction({ id: event.id, action })
+            .then((result) => {
+              pushNotification(
+                result.ok
+                  ? {
+                      tone: 'success',
+                      message:
+                        action === 'approve'
+                          ? `${event.deviceName} can now use ${event.serverName}.`
+                          : `${event.deviceName} was turned away.`
+                    }
+                  : {
+                      tone: 'error',
+                      message: result.message || 'The cache server did not take that answer.'
+                    }
+              )
+            })
+            .catch(() => {})
+        }
+        pushNotification({
+          tone: 'info',
+          message: `${event.deviceName} on your network wants to use ${event.serverName}. Allow it?`,
+          action: { label: 'Allow', run: () => answer('approve') },
+          secondaryAction: { label: 'Deny', run: () => answer('deny') }
+        })
+        return
+      }
+      const message =
+        event.kind === 'asked'
+          ? `Found ${event.serverName} on your network and asked to use it. Its administrator has to allow this device.`
+          : event.kind === 'joined'
+            ? `Found ${event.serverName} on your network and joined it.`
+            : event.kind === 'approved'
+              ? `${event.serverName} let this device in.`
+              : `${event.serverName} moved to ${event.url}. Following it there.`
+      pushNotification({ tone: event.kind === 'asked' ? 'info' : 'success', message })
+    })
+  }, [pushNotification])
+
   // Watch-status reconciliation — see tracking.ts's own header comment on
   // why this only ever runs occasionally and never on the critical path
   // of opening the app: fired once, a few seconds after mount, so it
@@ -1702,16 +1771,27 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // that prefix itself (it doubled up as "Back to Back to X" before this
   // comment was written). Every other call site omits it and gets the
   // auto-derived label, same as before.
-  const openPerson = useCallback(
-    (name: string) => {
-      const trimmed = String(name || '').trim()
-      if (trimmed) navigate(`/people/${encodeURIComponent(trimmed)}`)
-    },
-    [navigate]
-  )
+  //
+  // Both read where we are through a ref rather than closing over it, so
+  // they keep one identity for the whole session. react-router hands out a
+  // new `navigate` and `location` on every route change, and these two sit
+  // in the context value: closing over them re-rendered every useAppState
+  // consumer on every navigation, for a function nobody calls until a
+  // click. Updated in a layout effect, which runs before any click on the
+  // new page can reach these.
+  const navigationRef = useRef({ location, navigate, categorySearch, activeMood })
+  useLayoutEffect(() => {
+    navigationRef.current = { location, navigate, categorySearch, activeMood }
+  })
+
+  const openPerson = useCallback((name: string) => {
+    const trimmed = String(name || '').trim()
+    if (trimmed) navigationRef.current.navigate(`/people/${encodeURIComponent(trimmed)}`)
+  }, [])
 
   const openDetail = useCallback(
-    (media: MediaItem, originLabelOverride?: string) => {
+    (media: MediaItem, originLabelOverride?: string, season?: number) => {
+      const { location, navigate, categorySearch, activeMood } = navigationRef.current
       const route = `${location.pathname}${location.search}`
       const label =
         originLabelOverride ??
@@ -1733,9 +1813,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // A new drill-down invalidates any restore the last Back left pending.
       setPendingRestore(null)
       closeContextMenu()
-      navigate(mediaKindToDetailPath(media))
+      // The same navigation state a later-season anime link leaves behind,
+      // which the detail page already reads (MediaDetailPage's openedSeason).
+      navigate(mediaKindToDetailPath(media), season != null ? { state: { season } } : undefined)
     },
-    [location.pathname, location.search, categorySearch, activeMood, navigate, closeContextMenu]
+    [closeContextMenu]
   )
 
   /**
@@ -1870,9 +1952,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     const api = window.api?.mediaHub
     if (api) {
       try {
+        // tracking:history, not tracking:list: the database rows only.
+        // tracking:list resolves metadata for every tracked series before it
+        // answers, and Play waited on all of it to find one episode.
         const [asked, tracking] = await Promise.all([
           api.catalog.meta(kind, media.id),
-          api.tracking.list()
+          api.tracking.history()
         ])
         // A later season of a merged anime, played from its own card (a
         // plan card pulled from a service). What is played is the SHOW, at
@@ -1954,7 +2039,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
    * to followers, and that has to be the episode that actually started.
    */
   const runPlayback = useCallback(
-    async (requested: MediaItem): Promise<{ started: boolean; target: MediaItem }> => {
+    async (
+      requested: MediaItem,
+      /** `fresh`: skip the shortcut answers and search — see torbox.ts. */
+      options?: { fresh?: boolean }
+    ): Promise<{ started: boolean; target: MediaItem }> => {
       const api = window.api?.mediaHub
       if (!api) {
         pushNotification({
@@ -2007,7 +2096,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
               episodeNumber: media.episodeNumber
             },
             // Releases are named in romaji; the title is not, any more.
-            media.originalTitle ? [media.originalTitle] : undefined
+            media.originalTitle ? [media.originalTitle] : undefined,
+            options?.fresh ? { fresh: true } : undefined
           ),
           'resolving',
           30_000,
@@ -2059,25 +2149,51 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         }
 
         setResolvingMedia({ id: media.id, title: media.title, stage: 'buffering' })
-        const playTask = api.stream.play(resolved.best, mediaId, kind, resolveId, {
-          catalogId: media.id,
-          title: media.title,
-          posterUrl: media.posterUrl,
-          mediaKind: kind,
-          seasonNumber: media.seasonNumber,
-          episodeNumber: media.episodeNumber,
-          episodeTitle: media.episodeTitle
-        })
-        // If cancellation/timeout wins the race, a late successful IPC result
-        // must not leave its newly-created backend playback session running.
-        void playTask.then(
-          () => {
-            if (!isCurrent()) api.playback.stop().catch(() => {})
-          },
-          () => {
-            // The awaited, deadline-bounded branch below owns user feedback.
-          }
-        )
+        // The copies ranked after the pick go along with it: main opens them
+        // in turn when the pick turns out to lack the wanted audio (see
+        // torbox.ts's playWithLanguageFallback), so an episode from a
+        // Japanese-only release does not just play in Japanese.
+        const playResolved = (
+          from: StreamResolveResult,
+          best: StreamCandidate,
+          provisional = false
+        ): { task: Promise<PlaybackResult>; deadline: number } => {
+          const alternates = from.streams.filter((stream) => stream !== best)
+          const task = api.stream.play(
+            best,
+            mediaId,
+            kind,
+            resolveId,
+            {
+              catalogId: media.id,
+              title: media.title,
+              posterUrl: media.posterUrl,
+              mediaKind: kind,
+              seasonNumber: media.seasonNumber,
+              episodeNumber: media.episodeNumber,
+              episodeTitle: media.episodeTitle
+            },
+            alternates,
+            { provisional }
+          )
+          // If cancellation/timeout wins the race, a late successful IPC result
+          // must not leave its newly-created backend playback session running.
+          void task.then(
+            () => {
+              if (!isCurrent()) api.playback.stop().catch(() => {})
+            },
+            () => {
+              // The awaited, deadline-bounded branch below owns user feedback.
+            }
+          )
+          // Each extra copy is another link, cache fill and open.
+          const extraOpens = Math.min(alternates.length, LANGUAGE_EXTRA_OPENS)
+          return { task, deadline: 90_000 + extraOpens * 45_000 }
+        }
+        // A lone shortcut copy may be replaced below; main holds its
+        // subtitle download until that is settled.
+        const shortcutOnly = resolved.shortcut === true && resolved.streams.length < 2
+        const first = playResolved(resolved, resolved.best, shortcutOnly)
         // This one IPC call (play:stream) covers the whole real critical
         // path for starting a title, not just the player opening: TorBox's
         // own requestdl round trip, torbox.ts's retry-once wrapper around
@@ -2095,8 +2211,56 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         // bit longer for one already under way. 90s gives real margin
         // over that while the ordinary fast path (a few seconds) is
         // completely unaffected — this is a ceiling, not a typical wait.
-        await runPlaybackPreparationStage(playTask, 'buffering', 90_000, controller.signal)
+        const played = await runPlaybackPreparationStage(
+          first.task,
+          'buffering',
+          first.deadline,
+          controller.signal
+        )
         if (!isCurrent()) return { started: false, target: media }
+        // A shortcut answer (this disk, the copy that played last) is one
+        // copy, with nothing to fall back to. When it lacks the wanted
+        // audio, search properly once and let main try the others; copies it
+        // already knows lack the audio are not opened again.
+        if (played.languageFit?.audio === false && shortcutOnly) {
+          const wider = await runPlaybackPreparationStage(
+            api.stream.resolve(
+              kind,
+              resolveId,
+              media.title,
+              {
+                catalogId: media.id,
+                seasonNumber: media.seasonNumber,
+                episodeNumber: media.episodeNumber
+              },
+              media.originalTitle ? [media.originalTitle] : undefined,
+              { fresh: true }
+            ),
+            'buffering',
+            // The whole search, not one request: the add-ons (each up to
+            // httpClient's 30s timeout, waited on together), then TorBox's
+            // checkcached (another 30s at worst), with margin. The copy is
+            // already playing meanwhile, so waiting costs nothing on screen.
+            FRESH_RESOLVE_DEADLINE_MS,
+            controller.signal
+          ).catch(() => null)
+          if (!isCurrent()) return { started: false, target: media }
+          // Even a single result: it may be the one copy with the audio.
+          // Main does not reopen a copy it already knows lacks it.
+          if (wider?.best) {
+            const retry = playResolved(wider, wider.best)
+            await runPlaybackPreparationStage(
+              retry.task,
+              'buffering',
+              retry.deadline,
+              controller.signal
+            )
+            if (!isCurrent()) return { started: false, target: media }
+          } else {
+            // Nothing else to try: the provisional copy stays.
+            void api.playback.settleLanguage().catch(() => {})
+          }
+        }
         setResolvingMedia({ id: media.id, title: media.title, stage: 'starting' })
         setPlaybackMedia(media)
         // The two upfront warnings that used to fire here are gone with the
@@ -2149,6 +2313,40 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     startPlaybackRef.current = startPlayback
   }, [startPlayback])
+  /** The player's "Wrong copy" item: main sets the copy playing aside for
+   *  this episode for good, then the episode starts again from a fresh
+   *  search, so neither this disk nor the remembered pick can hand the same
+   *  copy back. */
+  const playDifferentCopy = useCallback(
+    async (media: MediaItem) => {
+      const api = window.api?.mediaHub
+      if (!api) return
+      const rejected = await api.stream.rejectCurrent().catch(() => null)
+      if (!rejected?.ok) {
+        pushNotification({
+          tone: 'warning',
+          message: "Couldn't tell which copy is playing, so nothing was changed."
+        })
+        return
+      }
+      const { started } = await runPlayback(media, { fresh: true })
+      // That copy has already been stopped; a failed search leaves nothing
+      // playing, and its own notification says why. Only while this title is
+      // still the one recorded: a title started meanwhile cancels this
+      // attempt and must keep its own.
+      if (!started) setPlaybackMedia((current) => (current === media ? null : current))
+      else
+        pushNotification({
+          tone: 'success',
+          message: `Playing another copy of ${media.title}. The previous one won't be offered again.`
+        })
+    },
+    [pushNotification, runPlayback]
+  )
+  const playDifferentCopyRef = useRef(playDifferentCopy)
+  useEffect(() => {
+    playDifferentCopyRef.current = playDifferentCopy
+  }, [playDifferentCopy])
   const stopPlayback = useCallback((watched?: boolean) => {
     // The one place that genuinely means "playback is over" — every close
     // path routes through here, by way of the player's 'stop-playback'
@@ -2499,6 +2697,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           const media = playbackMediaForEventsRef.current
           if (!media) return
           void startPlaybackRef.current(media)
+          return
+        }
+        case 'different-copy': {
+          const media = playbackMediaForEventsRef.current
+          if (!media) return
+          void playDifferentCopyRef.current(media)
           return
         }
         case 'refresh-watch-status':
@@ -3179,6 +3383,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       recommendations: homeFeed.recommendations,
       animeRecommendations: homeFeed.animeRecommendations,
       recommendationRails: homeFeed.rails,
+      recommendationsByKind: homeFeed.byKind,
       featured: homeFeed.featured,
       homeFeedLive: homeFeed.live,
       homeFeedLoading: homeFeed.loading,
@@ -3281,6 +3486,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       homeFeed.recommendations,
       homeFeed.animeRecommendations,
       homeFeed.rails,
+      homeFeed.byKind,
       homeFeed.featured,
       homeFeed.live,
       homeFeed.loading,

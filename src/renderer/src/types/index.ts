@@ -172,6 +172,12 @@ export interface AppNotification {
     label: string
     run: () => void
   }
+  /** A second choice beside `action`, for a toast that asks a question with
+   *  two answers (a cache server's Allow and Deny). Shown after it. */
+  secondaryAction?: {
+    label: string
+    run: () => void
+  }
   /**
    * How long the toast stays, in place of the defaults in OverlayContext.
    * For an Undo that answers a click just made (Plan to watch, Not

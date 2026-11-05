@@ -317,6 +317,11 @@ export interface StreamCandidate {
    *  without contacting any source. */
   cacheToken?: string
   complete?: boolean
+  /** localcache candidates only — which release the cached bytes are, when
+   *  the session recorded it. Lets the same release be recognised whether
+   *  it comes off this disk or from its source (see languageFallback.ts's
+   *  sourceKey). */
+  cacheSourceRef?: CacheSourceRef
   name?: string
   title?: string
   sources?: string[]
@@ -348,6 +353,12 @@ export interface StreamResolveResult {
    *  apart from a genuine "nothing exists for this title anywhere" dead
    *  end, since only one of those is worth "try again in a few minutes." */
   queued?: boolean
+  /** True when the answer came from a shortcut (this disk, the hour-cached
+   *  answer, the cache daemon, the media server's copy ending the search,
+   *  the copy that played last, or a fallback after the search failed)
+   *  rather than a completed search — so a fresh search may find copies
+   *  this one never looked for. */
+  shortcut?: boolean
 }
 
 export interface MediaTrack {
@@ -448,6 +459,21 @@ export interface LibraryChangedEvent {
   sources: string[]
 }
 
+/**
+ * What the main process tells the renderer about the cache server on its
+ * own, with nobody having asked: the launch-time search found one and asked
+ * to join ('asked'), or was let straight in ('joined'); the server moved to
+ * a new address and the stored one was updated ('moved'); approval arrived
+ * for a request this device made ('approved'); or, on the administrator's
+ * device, another device is asking to join ('join-request').
+ */
+export type LanCacheAppEvent =
+  | { kind: 'asked'; serverName: string }
+  | { kind: 'joined'; serverName: string }
+  | { kind: 'approved'; serverName: string }
+  | { kind: 'moved'; serverName: string; url: string }
+  | { kind: 'join-request'; id: string; deviceName: string; serverName: string }
+
 export interface CacheSourceRef {
   source: StreamSource
   /** torbox */
@@ -532,6 +558,10 @@ export interface PlaybackResult {
    *  default" and "the track you are hearing" are routinely different, so the
    *  audio menu has no other way to know what to mark. */
   selection?: { audio?: number }
+  /** Whether the copy that ended up playing has the wanted audio and
+   *  subtitles — what play:stream found after opening it, and after trying
+   *  other copies when it did not. */
+  languageFit?: { audio: boolean; subtitles: boolean }
 }
 
 // Tracked-show entry as persisted (normalizeTitle shape) — matches
@@ -805,6 +835,14 @@ export interface TrackingListResult {
   laterSeasons: Record<string, { id: string; season: number }>
 }
 
+/**
+ * tracking:list's watched rows without its tracked-list enrichment: the
+ * database alone, so it answers at once. tracking:list resolves metadata for
+ * every tracked series first (newEpisodeCount, airing), which a surface that
+ * only asks "what has been watched" should never wait on.
+ */
+export type TrackingHistoryResult = Pick<TrackingListResult, 'history' | 'laterSeasons'>
+
 /** Services with both a login in this app and a personal list to read.
  *  Kitsu is deliberately absent: it is a public catalog here, with no
  *  account, so there is no list of yours to fetch. */
@@ -954,6 +992,13 @@ export interface HomePersonalizedResult {
    * produced reasons to shelve by.
    */
   recommendationRails: RecommendationRail[]
+  /**
+   * The best of each kind from the whole buffer, for the Movies, Series and
+   * Anime pages' own shelf — see recommendations.ts's topByKind. Reasons
+   * for these are in recommendationReasons too. Optional so an older main
+   * (the phone's backend mid-update) still answers.
+   */
+  recommendationsByKind?: Partial<Record<MediaKind, CatalogItem[]>>
   preferredGenres: string[]
   /**
    * Which tracking services have each planned title on their own list.
@@ -1164,6 +1209,16 @@ export interface PendingWatchStatusPush {
   remoteWatched: boolean
   /** Failed flush attempts so far — see PENDING_PUSH_MAX_ATTEMPTS. */
   attempts: number
+  /** Sent, and accepted by Simkl, but not yet SEEN to have taken: Simkl
+   *  answers 200 with nothing in `not_found` for a push it then ignores
+   *  (a film on the account's dropped list, a stub record it never files)
+   *  — so an accepted push is only done once a later read of the account
+   *  shows the value it sent. Until then the entry stays queued, which
+   *  keeps its title out of the review list, and the flush leaves it
+   *  alone; the next diff made from a fresh read either lets it go or
+   *  counts the push as a failed attempt and sends it again (see
+   *  reconcileQueue.ts's verifyPushed). */
+  pushed?: boolean
 }
 
 /** Outcome of one flush of that queue, pushed to the renderer so a sync
@@ -1330,6 +1385,10 @@ export interface MediaHubPublicSettings {
   /** Anime4K shader pack: whether it is on disk, whether it is in the
    *  pipeline, and which mode — see shared/media-hub/anime4k.ts. */
   anime4k: Anime4kSettings
+  /** On by default: once a title starts, turns on its subtitles in
+   *  `subtitleLanguage`, or fetches a provider match when the file has
+   *  none — see playbackSession.ts's settleLanguageShortfall. */
+  autoSubtitlesEnabled: boolean
   /** On by default: reaching the end of an episode offers the next one on a
    *  post-play card and starts it when the countdown runs out (see
    *  AUTOPLAY_NEXT_COUNTDOWN_SECONDS in shared/media-hub/player.ts). Movies

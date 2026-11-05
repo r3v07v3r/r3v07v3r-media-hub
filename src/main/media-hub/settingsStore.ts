@@ -23,6 +23,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import { electronModule } from './electronModule'
+import {
+  isLegacySealed,
+  openLegacySecrets,
+  openSecret,
+  sealSecret,
+  secretStorageAvailable
+} from './secretStorage'
 import { logError } from './logger'
 import { sendToRenderer } from './rendererBridge'
 import type { ProfileRecord } from './profiles'
@@ -163,6 +170,12 @@ export interface MediaHubRawSettings {
   lanCacheUrl?: string
   lanCacheName?: string
   lanCacheToken?: string
+  /** Set to false, and only ever to false, when the person pressed Leave.
+   *  Absent means the app may find a cache server on its own network at
+   *  launch and ask to join it. Without the flag Leave would undo itself on
+   *  the next start, exactly as Ollama's Disconnect would (see
+   *  ollamaAutoDetect). Asking to join by hand turns it back on. */
+  lanCacheAutoJoin?: boolean
   /** Bound on the in-memory buffer, in MB. Clamped by
    *  streamCache.ts's memoryCacheMaxBytes; ignored on disk. */
   memoryCacheMaxMb?: number
@@ -245,9 +258,55 @@ function legacySettingsPath(): string {
   return path.join(electron().app.getPath('userData'), 'settings.json')
 }
 
+/**
+ * The last settings read from or written to disk, so readSettings() is not a
+ * readFileSync + JSON.parse on the main thread for each of its ~120 callers
+ * (several on the playback path).
+ *
+ * Keyed on the file's mtime and size, checked with one statSync per read.
+ * The app takes no single-instance lock, so a second copy running on the
+ * same userData can write this file too; without the check this process
+ * would keep its old snapshot and erase the other's change (a saved token,
+ * say) on its next unrelated write. Every write here is a rename of a new
+ * file, so either stamp moving is a reliable "someone wrote it".
+ *
+ * Every read hands out a clone because callers mutate the object before
+ * passing it back to writeSettings, and a mutation that is never written
+ * must not leak into the next reader.
+ */
+let cachedSettings: { value: MediaHubRawSettings; mtimeMs: number; size: number } | null = null
+
+function cloneSettings(value: MediaHubRawSettings): MediaHubRawSettings {
+  return structuredClone(value)
+}
+
+function fileStamp(file: string): { mtimeMs: number; size: number } | null {
+  try {
+    const stat = fs.statSync(file)
+    return { mtimeMs: stat.mtimeMs, size: stat.size }
+  } catch {
+    return null
+  }
+}
+
 export function readSettings(): MediaHubRawSettings {
   try {
-    return JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) as MediaHubRawSettings
+    const file = settingsPath()
+    const stamp = fileStamp(file)
+    if (
+      cachedSettings &&
+      stamp &&
+      cachedSettings.mtimeMs === stamp.mtimeMs &&
+      cachedSettings.size === stamp.size
+    ) {
+      return cloneSettings(cachedSettings.value)
+    }
+    cachedSettings = null
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as MediaHubRawSettings
+    // The stamp taken before the read: if another process renames a new file
+    // in between, the next read sees a different stamp and re-reads.
+    if (stamp) cachedSettings = { value: parsed, ...stamp }
+    return cloneSettings(parsed)
   } catch {
     // No media-hub-settings.json yet — fall through to the one-time legacy import.
   }
@@ -268,8 +327,21 @@ export function writeSettings(value: MediaHubRawSettings): void {
 
   fs.mkdirSync(directory, { recursive: true })
   try {
-    fs.writeFileSync(temporary, JSON.stringify(value, null, 2), { mode: 0o600 })
+    const serialized = JSON.stringify(value, null, 2)
+    // Drop the cache before touching disk: if the write fails, the next read
+    // goes back to whatever the file actually holds.
+    cachedSettings = null
+    fs.writeFileSync(temporary, serialized, { mode: 0o600 })
+    // Stamp OUR file, before the rename: a rename keeps mtime and size, so
+    // this is what the target carries once it lands. Stamping the target
+    // after the rename could pick up another instance's file renamed over
+    // ours in between, and pair our content with its stamp for good.
+    const stamp = fileStamp(temporary)
     fs.renameSync(temporary, target)
+    // Re-parse what was written rather than keeping `value`: the caller still
+    // holds that reference, and this also drops undefined/function values
+    // exactly as a fresh read from disk would.
+    if (stamp) cachedSettings = { value: JSON.parse(serialized) as MediaHubRawSettings, ...stamp }
   } finally {
     try {
       if (fs.existsSync(temporary)) fs.unlinkSync(temporary)
@@ -315,21 +387,26 @@ export function ensureSetupCompleteDecided(): void {
 const ENCRYPTION_UNAVAILABLE_PREFIX = 'plain:'
 let warnedNoEncryption = false
 
-/** Encrypts a credential-shaped string for storage. Falls back to a tagged, reversible base64 encoding (NOT real encryption) when the OS has no secure-storage backend available, so dev/headless environments don't hard-crash — see module doc comment. */
+/**
+ * Encrypts a credential-shaped string for storage, under the app key that
+ * secretStorage.ts unseals at startup. Falls back to a tagged, reversible
+ * base64 encoding (NOT real encryption) when the OS has no secure-storage
+ * backend, so dev/headless environments don't hard-crash — see module doc
+ * comment.
+ */
 export function encrypt(value: string): string {
-  if (!electron().safeStorage.isEncryptionAvailable()) {
-    if (!warnedNoEncryption) {
-      warnedNoEncryption = true
-      logError(
-        'media-hub:settingsStore',
-        new Error(
-          'OS secure storage is unavailable — credentials will be stored in a reversible but unencrypted form in media-hub-settings.json. Expected in some headless/no-keyring dev environments; should not happen in a packaged build.'
-        )
+  const sealed = sealSecret(value)
+  if (sealed !== null) return sealed
+  if (!warnedNoEncryption) {
+    warnedNoEncryption = true
+    logError(
+      'media-hub:settingsStore',
+      new Error(
+        'OS secure storage is unavailable — credentials will be stored in a reversible but unencrypted form in media-hub-settings.json. Expected in some headless/no-keyring dev environments; should not happen in a packaged build.'
       )
-    }
-    return ENCRYPTION_UNAVAILABLE_PREFIX + Buffer.from(value, 'utf8').toString('base64')
+    )
   }
-  return electron().safeStorage.encryptString(value).toString('base64')
+  return ENCRYPTION_UNAVAILABLE_PREFIX + Buffer.from(value, 'utf8').toString('base64')
 }
 
 export function decrypt(value: string | undefined): string {
@@ -343,10 +420,52 @@ export function decrypt(value: string | undefined): string {
       return ''
     }
   }
+  return openSecret(value)
+}
+
+/** Every string in `value`, however deeply nested, that the sync API sealed. */
+function collectLegacySecrets(value: unknown, into: string[] = []): string[] {
+  if (isLegacySealed(value)) into.push(value)
+  else if (Array.isArray(value)) value.forEach((entry) => collectLegacySecrets(entry, into))
+  else if (value && typeof value === 'object') {
+    Object.values(value).forEach((entry) => collectLegacySecrets(entry, into))
+  }
+  return into
+}
+
+function replaceStrings(value: unknown, replace: (text: string) => string | undefined): unknown {
+  if (typeof value === 'string') return replace(value) ?? value
+  if (Array.isArray(value)) return value.map((entry) => replaceStrings(entry, replace))
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, replaceStrings(entry, replace)])
+    )
+  }
+  return value
+}
+
+/**
+ * Rewrites every credential the synchronous safeStorage API wrote into the
+ * app-key format, so nothing here depends on that API once Electron 46
+ * removes it. Runs once per launch after initSecretStorage(), before the
+ * backend starts, and is a no-op once a file has been migrated. A value
+ * that will not open (another machine's) is left exactly as it was.
+ */
+export async function migrateLegacySecrets(): Promise<void> {
   try {
-    return electron().safeStorage.decryptString(Buffer.from(value, 'base64'))
-  } catch {
-    return ''
+    const legacy = collectLegacySecrets(readSettings())
+    if (!legacy.length) return
+    const opened = await openLegacySecrets(legacy)
+    if (!opened.size || !secretStorageAvailable()) return
+    // Read again after the awaits, so the write carries the file as it is now.
+    const current = readSettings()
+    const migrated = replaceStrings(current, (text) => {
+      const plaintext = opened.get(text)
+      return plaintext === undefined ? undefined : encrypt(plaintext)
+    }) as MediaHubRawSettings
+    writeSettings(migrated)
+  } catch (error) {
+    logError('media-hub:settingsStore', error)
   }
 }
 
@@ -406,6 +525,18 @@ export function setLanCacheConnection(connection: LanCacheConnection): void {
   else delete settings.lanCachePending
   if (connection.shareTorbox) settings.lanCacheShareTorbox = true
   else delete settings.lanCacheShareTorbox
+  writeSettings(settings)
+}
+
+/** Whether launch may look for a cache server and ask to join it. */
+export function isLanCacheAutoJoinOn(): boolean {
+  return readSettings().lanCacheAutoJoin !== false
+}
+
+export function setLanCacheAutoJoin(on: boolean): void {
+  const settings = readSettings()
+  if (on) delete settings.lanCacheAutoJoin
+  else settings.lanCacheAutoJoin = false
   writeSettings(settings)
 }
 

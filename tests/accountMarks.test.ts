@@ -11,7 +11,9 @@
 // settingsStore reaches Electron for its settings path, so the module is
 // loaded with 'electron' pointed at the headless stand-in, as
 // historyPendingSummary.test.ts does. Tokens are written in the store's
-// "plain:" form, which decrypt reads without any key.
+// "plain:" form, which decrypt reads without any key; but the refresh and
+// sign-in paths seal what they store, and sealing throws until
+// initSecretStorage() has unsealed the app key, as the app does at startup.
 // Run with: npx tsx tests/accountMarks.test.ts
 
 import assert from 'node:assert/strict'
@@ -42,6 +44,11 @@ const hashOf = (salt: string, token: string): string =>
   crypto.createHash('sha256').update(`${salt}:${token}`).digest('hex').slice(0, 16)
 
 async function main(): Promise<void> {
+  // The app unseals its credentials' key before anything stores a token.
+  // Without it traktClient's storeTokens throws inside refreshIfDue's
+  // best-effort catch and the refresh is silently dropped.
+  const { initSecretStorage } = await import('../src/main/media-hub/secretStorage')
+  await initSecretStorage(process.env.R3_USER_DATA as string)
   const store = await import('../src/main/media-hub/settingsStore')
   const { readSettings, writeSettings, trackingAccountMarks, traktAccountMark } = store
 

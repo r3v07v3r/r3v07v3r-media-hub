@@ -893,6 +893,12 @@ export default function SettingsPage({
       await saveSetting('settings.playback-buffer', () => api.settings.setPlaybackBuffer(preset))
   }
 
+  async function handleSetAutoSubtitles(enabled: boolean) {
+    const api = window.api?.mediaHub
+    if (api)
+      await saveSetting('settings.auto-subtitles', () => api.settings.setAutoSubtitles(enabled))
+  }
+
   async function handleExportBackup() {
     const api = window.api?.mediaHub
     if (!api) return
@@ -1214,13 +1220,17 @@ export default function SettingsPage({
                 checked={mediaHubSettings?.autoplayNextEnabled ?? true}
                 onChange={handleSetAutoplayNext}
               />
-              {/* No "Show subtitles automatically" switch: nothing fetches an
-                  online subtitle by itself any more (it spent OpenSubtitles'
-                  few downloads a day), so the switch did nothing. */}
+              <ToggleRow
+                icon="eye"
+                title="Show subtitles automatically"
+                description="Fetch and apply a matching subtitle as soon as a title starts playing."
+                checked={mediaHubSettings?.autoSubtitlesEnabled ?? true}
+                onChange={handleSetAutoSubtitles}
+              />
               <SegmentedRow
                 icon="planet"
                 title="Subtitle language"
-                description="Language to search for in the Subtitles menu. A release's own subtitle track in this language is turned on when a title starts."
+                description="Language to search for, both automatically and in the Subtitles menu."
                 value={mediaHubSettings?.subtitleLanguage ?? 'en'}
                 options={SUBTITLE_LANGUAGE_OPTIONS}
                 onChange={handleSetSubtitleLanguage}
@@ -1477,10 +1487,17 @@ export default function SettingsPage({
                 <h2 id="settings-subtitles" className={styles.sectionTitle}>
                   Subtitles
                 </h2>
+                <ToggleRow
+                  icon="eye"
+                  title="Show subtitles automatically"
+                  description="Fetch and apply a matching subtitle as soon as a title starts playing."
+                  checked={mediaHubSettings?.autoSubtitlesEnabled ?? true}
+                  onChange={handleSetAutoSubtitles}
+                />
                 <SegmentedRow
                   icon="planet"
                   title="Subtitle language"
-                  description="Language to search for in the Subtitles menu. A release's own subtitle track in this language is turned on when a title starts."
+                  description="Language to search for, both automatically and in the Subtitles menu."
                   value={mediaHubSettings?.subtitleLanguage ?? 'en'}
                   options={SUBTITLE_LANGUAGE_OPTIONS}
                   onChange={handleSetSubtitleLanguage}

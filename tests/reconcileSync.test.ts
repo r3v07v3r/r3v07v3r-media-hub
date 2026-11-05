@@ -14,14 +14,17 @@ import assert from 'node:assert'
 import type { PendingWatchStatusPush } from '../src/shared/media-hub/types'
 import {
   applyPushOutcome,
+  markPushed,
   queuePendingPush,
   reviewRemovalsOwed,
   splitForFlush,
   traktFollowUps,
+  verifyPushed,
   withPushedRemoteState
 } from '../src/shared/media-hub/reconcileQueue'
 import {
   batchHistoryPayload,
+  completedListPayload,
   hasExpressibleSimklId,
   hasSimklContent,
   historyPayload,
@@ -354,6 +357,83 @@ check('a batch of nothing addressable is not worth sending', () => {
     ),
     false
   )
+})
+
+// --- an accepted push is not a landed one ---------------------------------
+//
+// Seen live: six films pushed and answered 200 with an empty not_found on
+// every launch for five weeks, never once watched at Simkl. The queue now
+// keeps an accepted push until a read of the account shows it.
+
+check('markPushed flags the accepted entries and records what was sent', () => {
+  const queue = [entry({ id: 'a' }), entry({ id: 'b', remoteWatched: true })]
+  const marked = markPushed(queue, new Map([['a', true]]))
+  assert.deepEqual(marked[0], { ...queue[0], remoteWatched: true, pushed: true })
+  assert.deepEqual(marked[1], queue[1])
+})
+
+check('a flush leaves an accepted push alone: neither sent nor settled', () => {
+  const waiting = entry({ id: 'a', remoteWatched: true, pushed: true })
+  const { sendable, settled } = splitForFlush([waiting], new Set(['a']), new Set())
+  assert.deepEqual(sendable, [])
+  assert.equal(settled.size, 0)
+})
+
+check('a read that shows the push lets the entry go', () => {
+  const waiting = entry({ id: 'a', remoteWatched: true, pushed: true })
+  const other = entry({ id: 'b' })
+  const outcome = verifyPushed([waiting, other], (id) => id === 'a')
+  assert.deepEqual(outcome.verified, [waiting])
+  assert.deepEqual(outcome.queue, [other])
+  assert.deepEqual(outcome.abandoned, [])
+})
+
+check('a read that does not show it spends an attempt and makes it sendable again', () => {
+  const waiting = entry({ id: 'a', remoteWatched: true, pushed: true, attempts: 1 })
+  const outcome = verifyPushed([waiting], () => false)
+  assert.deepEqual(outcome.verified, [])
+  assert.deepEqual(outcome.queue, [{ ...entry({ id: 'a' }), remoteWatched: false, attempts: 2 }])
+  assert.equal('pushed' in outcome.queue[0], false)
+  // Local watched, remote now recorded as not: the next flush sends it.
+  assert.equal(splitForFlush(outcome.queue, new Set(['a']), new Set()).sendable.length, 1)
+})
+
+check('a push Simkl keeps ignoring is given up on at the cap', () => {
+  const waiting = entry({ id: 'a', remoteWatched: true, pushed: true, attempts: 4 })
+  const outcome = verifyPushed([waiting], () => false, 5)
+  assert.deepEqual(outcome.queue, [])
+  assert.equal(outcome.abandoned.length, 1)
+  assert.equal(outcome.abandoned[0].attempts, 5)
+})
+
+check('a push awaiting a read is held back from the catch-up', () => {
+  const removal = entry({ id: 'a', remoteWatched: false, pushed: true })
+  assert.deepEqual([...reviewRemovalsOwed([removal], [])], ['a:movie:movie'])
+})
+
+check('the list move names the completed list and the day it was watched here', () => {
+  const payload = completedListPayload(
+    [
+      { id: 'tt4972582', type: 'movie', title: 'Split', year: '2017' },
+      { id: 'tt2975590', type: 'movie', title: 'Batman v Superman', year: '2016' },
+      { id: 'm-13', type: 'movie', title: 'Ex Machina', year: '2014' },
+      { id: 'tt14688458', type: 'series', title: 'Silo', year: '2023' }
+    ],
+    (id) => (id === 'tt4972582' ? '2026-07-18T06:22:57.428Z' : undefined)
+  )
+  assert.equal(payload.movies?.length, 2)
+  assert.deepEqual(payload.movies?.[0], {
+    title: 'Split',
+    year: 2017,
+    ids: { imdb: 'tt4972582' },
+    to: 'completed',
+    watched_at: '2026-07-18T06:22:57.428Z'
+  })
+  assert.equal(payload.movies?.[1].watched_at, undefined)
+})
+
+check('a list move with nothing addressable is empty', () => {
+  assert.deepEqual(completedListPayload([{ id: 'm-13', type: 'movie', title: 'Ex Machina' }]), {})
 })
 
 console.log(`\n${pass} passing`)

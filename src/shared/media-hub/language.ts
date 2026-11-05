@@ -312,6 +312,40 @@ export function tracksLackLanguage(
   return !audio.some((track) => languageMatches(String(track.language ?? ''), want))
 }
 
+/**
+ * How well an opened file serves the person's languages: whether it has
+ * the wanted audio, and whether it has subtitles in the wanted subtitle
+ * language. `audio` is the opposite of tracksLackLanguage (so no preference,
+ * or a file with no audio tracks at all, counts as a fit); `subtitles` needs
+ * a labelled track in that language, and is true when none is asked for.
+ */
+export interface LanguageFit {
+  audio: boolean
+  subtitles: boolean
+}
+
+export function languageFit(
+  tracks:
+    | {
+        audio: ReadonlyArray<{ language?: string }>
+        subtitle: ReadonlyArray<{ language?: string }>
+      }
+    | null
+    | undefined,
+  audioLanguage: string | undefined,
+  subtitleLanguage: string | undefined
+): LanguageFit {
+  const wantSubs = normalizeLanguage(String(subtitleLanguage ?? ''))
+  return {
+    audio: !tracksLackLanguage(tracks, audioLanguage),
+    subtitles:
+      !wantSubs ||
+      (tracks?.subtitle ?? []).some((track) =>
+        languageMatches(String(track.language ?? ''), wantSubs)
+      )
+  }
+}
+
 const LANGUAGE_NAMES: Record<string, string> = {
   en: 'English',
   fr: 'French',

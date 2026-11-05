@@ -19,6 +19,7 @@ import { registerAutoUpdateIpc } from '../media-hub/autoUpdate'
 import { registerAnimeStoryIpc } from '../media-hub/animeStory'
 import { registerCalendarIpc } from '../media-hub/calendar'
 import { registerCatalogIpc } from '../media-hub/catalog'
+import { registerCollectionsIpc } from '../media-hub/collections'
 import { registerLanCacheIpc } from '../media-hub/lanCache'
 import { registerDevicePairingIpc } from '../media-hub/devicePairing'
 import { publishTrustedMediaHosts } from './settings'
@@ -49,6 +50,7 @@ export function registerMediaHubIpc(): void {
   registerAnimeStoryIpc()
   registerTrackingIpc()
   registerTraktIpc()
+  registerCollectionsIpc()
   registerMalIpc()
   registerSubtitlesIpc()
   registerPlaybackIpc()

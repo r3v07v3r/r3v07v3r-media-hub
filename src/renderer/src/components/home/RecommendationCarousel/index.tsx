@@ -10,6 +10,7 @@ import {
 } from '@renderer/lib/mediaHub/homeRailTab'
 import type { MediaItem } from '@renderer/types'
 import { Icon } from '@renderer/components/icons/Icon'
+import { passOverVisible } from '@renderer/lib/mediaHub/passOver'
 import { MediaCard } from './MediaCard'
 import styles from './RecommendationCarousel.module.css'
 
@@ -198,6 +199,20 @@ export function RecommendationCarousel({ planned }: { planned?: PlannedRail }) {
     el.scrollBy({ left: direction * amount, behavior: 'smooth' })
   }
 
+  // "Show me others" — see lib/mediaHub/passOver.ts.
+  const [passing, setPassing] = useState(false)
+  async function showOthers(): Promise<void> {
+    const el = scrollerRef.current
+    if (!el || passing) return
+    setPassing(true)
+    const passed = await passOverVisible(el)
+    setPassing(false)
+    if (!passed) return
+    railOffsets.current.picks = 0
+    el.scrollLeft = 0
+    refreshHomeFeed()
+  }
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLUListElement>) {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return
     const cards = Array.from(
@@ -245,6 +260,19 @@ export function RecommendationCarousel({ planned }: { planned?: PlannedRail }) {
             <Icon name="tracked" />
             Planned
             <span className={styles.tabCount}>{plannedItems.length}</span>
+          </button>
+        )}
+        {activeTab === 'picks' && !loading && picks.length > 0 && (
+          <button
+            type="button"
+            className={styles.showOthers}
+            onClick={() => void showOthers()}
+            disabled={passing}
+            aria-busy={passing}
+            title="Move these to the back of the row for a few weeks"
+          >
+            <Icon name="refresh" size={13} />
+            Show me others
           </button>
         )}
         {(activeTab === 'planned' || picks.length > 0) && (

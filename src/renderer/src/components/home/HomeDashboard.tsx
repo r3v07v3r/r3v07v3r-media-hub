@@ -1,4 +1,5 @@
 import { CompactAIAssistant } from './CompactAIAssistant'
+import { useOllamaAvailable } from '@renderer/lib/mediaHub/useOllamaAvailable'
 import { FeaturedHero } from './FeaturedHero/FeaturedHero'
 import { ContinueWatchingPanel } from './ContinueWatchingPanel'
 import { RecommendationCarousel } from './RecommendationCarousel'
@@ -46,9 +47,16 @@ export function HomeDashboard() {
       planned.items.length > 0
   )
 
+  // The Recommend buttons ask a local model, and are not drawn without one
+  // reachable (CompactAIAssistant). Their column goes with them: the grid
+  // has a named area for them, and an empty 258px track beside the hero is
+  // the kind of hole a person notices (HomeDashboard.module.css's
+  // .noAssistant hands that width to the hero instead).
+  const assistant = useOllamaAvailable()
+
   return (
-    <div className={styles.dashboard}>
-      <CompactAIAssistant />
+    <div className={`${styles.dashboard} ${assistant ? '' : styles.noAssistant}`}>
+      {assistant && <CompactAIAssistant />}
       <FeaturedHero />
       <ContinueWatchingPanel />
       {/* Both rails — Planned and Recommended — live in this one cell,

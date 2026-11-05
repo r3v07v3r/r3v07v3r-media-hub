@@ -197,6 +197,7 @@ export interface PlayerSessionSnapshot {
   settings: {
     /** 3 | 8 | 15 — see shared/media-hub/playbackBuffer.ts. */
     bufferSeconds: number
+    autoSubtitlesEnabled: boolean
     subtitleLanguage: string
     audioLanguage: string
     /** Whether reaching the end of an episode offers the next one. */
@@ -399,6 +400,10 @@ export type PlayerUiEvent =
    *  the runtime. The main window owns the MediaItem and the resolve, so it is
    *  asked rather than told; it starts the same title the way a click would. */
   | { type: 'resume-title' }
+  /** The copy playing is not the episode it should be (a recap, a different
+   *  episode, a mislabelled file). The main window has main set it aside for
+   *  good and plays the same episode from another copy. */
+  | { type: 'different-copy' }
   /** Start the next episode — raised by the post-play card, either because its
    *  countdown ran out or because somebody pressed Play now.
    *

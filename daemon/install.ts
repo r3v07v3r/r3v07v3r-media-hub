@@ -84,6 +84,12 @@ export async function installAutoStart(log: (message: string) => void): Promise<
   const unit = `[Unit]
 Description=r3-cache pre-fetch daemon
 After=network.target
+# Deliberately generous: the launcher's own backoff and blacklist are the
+# real circuit breaker, and a unit that gives up entirely (systemd's
+# default start limit) is a daemon that is permanently offline — the one
+# outcome this whole design exists to prevent. A [Unit] key: under
+# [Service] systemd ignores it with a warning and the default limit stays.
+StartLimitIntervalSec=0
 
 [Service]
 ExecStart=${execStart}
@@ -92,11 +98,6 @@ ExecStart=${execStart}
 # version comes back — "it always comes back online".
 Restart=always
 RestartSec=5
-# Deliberately generous: the launcher's own backoff and blacklist are the
-# real circuit breaker, and a unit that gives up entirely (systemd's
-# default start limit) is a daemon that is permanently offline — the one
-# outcome this whole design exists to prevent.
-StartLimitIntervalSec=0
 MemoryMax=512M
 Nice=10
 CPUWeight=20

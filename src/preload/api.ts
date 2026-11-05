@@ -6,6 +6,7 @@ import {
   SystemSnapshot
 } from '../shared/ipc-types'
 import { MEDIA_HUB_CHANNELS } from '../shared/media-hub/ipc-channels'
+import type { CollectionCandidate, CollectionsState } from '../shared/media-hub/universes'
 import type {
   LanCacheDevicesResponse,
   LanCacheOwnItem,
@@ -78,6 +79,7 @@ import type {
   ReconcileCheckResult,
   ReconcileResolution,
   ReconcileResolveResult,
+  LanCacheAppEvent,
   LibraryChangedEvent,
   ReconcileSyncReport,
   ReleaseNotesResult,
@@ -102,6 +104,7 @@ import type {
   TitleCollectionResult,
   TitleWatchState,
   TorBoxConnectResult,
+  TrackingHistoryResult,
   TrackingListResult,
   TraktPollResult,
   TraktStartResult,
@@ -244,6 +247,8 @@ export function createApi(transport: ApiTransport) {
           transport.invoke(MEDIA_HUB_CHANNELS.settingsSetAnime4kEnabled, enabled),
         setAnime4kMode: (mode: string): Promise<{ anime4k: Anime4kSettings }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.settingsSetAnime4kMode, mode),
+        setAutoSubtitles: (enabled: boolean): Promise<{ autoSubtitlesEnabled: boolean }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.settingsSetAutoSubtitles, enabled),
         setAutoplayNext: (enabled: boolean): Promise<{ autoplayNextEnabled: boolean }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.settingsSetAutoplayNext, enabled),
         setWatchRegion: (region: string): Promise<{ watchRegion: string }> =>
@@ -389,6 +394,9 @@ export function createApi(transport: ApiTransport) {
         pairStatus: (): Promise<{
           state: 'none' | 'pending' | 'approved'
           name?: string
+          /** The stored address, so a panel can follow a join or a move the
+           *  main process made on its own without searching the network. */
+          url?: string
           error?: string
         }> => transport.invoke(MEDIA_HUB_CHANNELS.lanCachePairStatus),
         claim: (): Promise<{ ok: boolean; message: string }> =>
@@ -425,7 +433,12 @@ export function createApi(transport: ApiTransport) {
         removeItem: (payload: { infoHash: string }): Promise<{ ok: boolean; message?: string }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.lanCacheRemoveItem, payload),
         cancelJob: (payload: { contentKey: string }): Promise<{ ok: boolean; message?: string }> =>
-          transport.invoke(MEDIA_HUB_CHANNELS.lanCacheCancelJob, payload)
+          transport.invoke(MEDIA_HUB_CHANNELS.lanCacheCancelJob, payload),
+        /** What the main process did about the cache server on its own:
+         *  found and asked to join one, followed one to a new address, was
+         *  approved, or (administrator only) another device is asking. */
+        onEvent: (onEvent: (event: LanCacheAppEvent) => void): (() => void) =>
+          subscribe<LanCacheAppEvent>(MEDIA_HUB_CHANNELS.lanCacheEvent, onEvent)
       },
 
       torbox: {
@@ -582,6 +595,10 @@ export function createApi(transport: ApiTransport) {
       home: {
         personalized: (): Promise<HomePersonalizedResult> =>
           transport.invoke(MEDIA_HUB_CHANNELS.homePersonalized),
+        /** Send these suggestions to the back of the row for a few weeks,
+         *  then refetch personalized() to see what comes up instead. */
+        passOver: (ids: string[]): Promise<{ passed: number }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.recommendationsPassOver, { ids }),
         /** Fires when the background job has rebuilt the stored suggestion
          *  list. Carries no rows on purpose — the subscriber refetches
          *  through personalized() above, so there is one path to that data
@@ -594,6 +611,10 @@ export function createApi(transport: ApiTransport) {
 
       tracking: {
         list: (): Promise<TrackingListResult> => transport.invoke(MEDIA_HUB_CHANNELS.trackingList),
+        /** list()'s history and laterSeasons alone — the database only, so
+         *  it answers at once. Use it wherever `tracked` is not read. */
+        history: (): Promise<TrackingHistoryResult> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.trackingHistory),
         /** Pull plan-to-watch from every connected tracking service now,
          *  rather than waiting for the background pass. */
         syncPlanned: (): Promise<PlannedSyncReport> =>
@@ -698,6 +719,24 @@ export function createApi(transport: ApiTransport) {
         get: (): Promise<ViewingStats> => transport.invoke(MEDIA_HUB_CHANNELS.statsGet)
       },
 
+      collections: {
+        /** Lists added from Trakt and collections taken off the page. */
+        state: (): Promise<CollectionsState> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.collectionsState),
+        /** Trakt's public lists matching a search; the most liked when empty. */
+        search: (query: string): Promise<{ results: CollectionCandidate[] }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.collectionsSearch, { query }),
+        /** By the id a search found, or a pasted trakt.tv link. */
+        add: (
+          from: { listId: number } | { link: string }
+        ): Promise<CollectionsState & { addedId: string }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.collectionsAdd, from),
+        remove: (id: string): Promise<CollectionsState> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.collectionsRemove, { id }),
+        restore: (id: string): Promise<CollectionsState> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.collectionsRestore, { id })
+      },
+
       lists: {
         /** Named lists from Trakt and Simkl, read-only. */
         remoteLists: (): Promise<{ lists: RemoteList[] }> =>
@@ -752,14 +791,17 @@ export function createApi(transport: ApiTransport) {
           title?: string,
           cacheKey?: { catalogId?: string; seasonNumber?: number; episodeNumber?: number },
           /** Other names the title is released under (an anime's romaji name). */
-          altTitles?: string[]
+          altTitles?: string[],
+          /** Skip the shortcut answers and search properly — see torbox.ts. */
+          options?: { fresh?: boolean }
         ): Promise<StreamResolveResult> =>
           transport.invoke(MEDIA_HUB_CHANNELS.streamResolve, {
             type,
             id,
             title,
             cacheKey,
-            altTitles
+            altTitles,
+            fresh: options?.fresh
           }),
         // `type`/`resolveId` are optional and only used so the main process
         // can remember "the stream that actually worked" under the exact key
@@ -770,10 +812,18 @@ export function createApi(transport: ApiTransport) {
           mediaId?: string,
           type?: string,
           resolveId?: string,
-          meta?: CacheSessionMeta
+          meta?: CacheSessionMeta,
+          /** The copies ranked after `stream`, tried in turn when it lacks
+           *  the wanted audio — see torbox.ts's playWithLanguageFallback. */
+          alternates?: StreamCandidate[],
+          /** A copy the renderer may still replace — see torbox.ts's
+           *  PlayStreamPayload.provisional. */
+          options?: { provisional?: boolean }
         ): Promise<PlaybackResult> =>
           transport.invoke(MEDIA_HUB_CHANNELS.playStream, {
             stream,
+            alternates,
+            provisional: options?.provisional,
             mediaId,
             type,
             resolveId,
@@ -783,7 +833,12 @@ export function createApi(transport: ApiTransport) {
             season: meta?.seasonNumber,
             episode: meta?.episodeNumber,
             episodeTitle: meta?.episodeTitle
-          })
+          }),
+        /** The copy in the player is the wrong one: never offer it for this
+         *  episode again, and stop it. `ok` is false when nothing that can be
+         *  identified is playing. */
+        rejectCurrent: (): Promise<{ ok: boolean }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.streamRejectCurrent)
       },
 
       /** What the central work manager is doing — see taskScheduler.ts. */
@@ -811,6 +866,10 @@ export function createApi(transport: ApiTransport) {
         // touches the stream itself anymore.
         stop: (options?: { watched?: boolean }): Promise<{ ok: true }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.playbackStop, options),
+        /** For a provisional copy that stays: switch on its subtitles, say
+         *  what is playing, fetch subtitles if it has none. */
+        settleLanguage: (): Promise<{ ok: true }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.playbackLanguageSettle),
         thumbnail: (seconds: number): Promise<string | null> =>
           transport.invoke(MEDIA_HUB_CHANNELS.playbackThumbnail, seconds),
         skipTimes: (

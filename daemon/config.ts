@@ -10,6 +10,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+import { LANCACHE_DEFAULT_PORT } from '../src/shared/lancache/protocol'
+
 export interface DaemonConfig {
   /** Where everything lives: items/, meta, auth. */
   dataDir: string
@@ -51,7 +53,7 @@ function defaultDataDir(): string {
 }
 
 const DEFAULTS = {
-  port: 8945,
+  port: LANCACHE_DEFAULT_PORT,
   idleTtlDays: 14,
   hardMaxDays: 30,
   tombstoneDays: 60,

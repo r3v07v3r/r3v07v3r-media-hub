@@ -1,14 +1,16 @@
-// The safety backup a restore takes first (backup.ts's restoreBackup, under
-// autoBackup.ts's 'restore' reason).
+// The safety backup a restore takes first (appIpc.ts's backup:import handler,
+// which calls autoBackup.ts's backupBeforeRewrite('restore') between reading
+// the chosen file and handing it to database.importBackup).
 //
 // A restore replaces the whole library with the chosen file. Before it, the
 // library being replaced goes into the automatic backups, so restoring the
 // wrong file can itself be undone. A file the restore refuses replaces
 // nothing, and takes no backup.
 //
-// The automatic backup reads the app's own database and its userData folder,
-// so 'electron' is pointed at the headless stand-in, as
-// historyPendingSummary.test.ts does, and the library is set as the app's.
+// The backup is taken by the handler, not by importBackup, so the test goes
+// through the handler: 'electron' is pointed at the headless stand-in, as
+// accountMarks.test.ts does, the stand-in's open dialog is made to answer
+// with the file being restored, and the library is set as the app's.
 // Run with: npx tsx tests/restoreBackup.test.ts
 
 import assert from 'node:assert/strict'
@@ -37,6 +39,9 @@ async function main(): Promise<void> {
   const { autoBackupFiles } = await import('../src/main/media-hub/autoBackup')
   const { readBackup } = await import('../src/main/media-hub/backup')
   const { activeProfileId } = await import('../src/main/media-hub/profiles')
+  const { registerAppIpc } = await import('../src/main/media-hub/appIpc')
+  const { BrowserWindow, dialog, ipcMain } = await import('../src/headless/electronShim')
+  const { MEDIA_HUB_CHANNELS } = await import('../src/shared/media-hub/ipc-channels')
 
   // The profile the app seeds before its database opens, as main/index.ts
   // does: the automatic backup carries the profiles from the settings.
@@ -61,15 +66,25 @@ async function main(): Promise<void> {
   app.track({ id: 'tt-mine', type: 'movie', title: 'Mine' })
   setDatabase(app)
 
+  // Restore, as the renderer asks for it: the open dialog answers with `file`.
+  registerAppIpc()
+  const window = new BrowserWindow()
+  const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame }
+  const restore = (file: string): Promise<unknown> => {
+    const picked = dialog as unknown as { showOpenDialog: () => Promise<unknown> }
+    picked.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+    return ipcMain.dispatchInvoke(event, MEDIA_HUB_CHANNELS.backupImport, [undefined])
+  }
+
   // A file the restore refuses replaces nothing and takes no backup.
   const notABackup = path.join(dir, 'not-a-backup.json')
   fs.writeFileSync(notABackup, '{"hello":"world"}')
-  assert.throws(() => app.importBackup(notABackup))
+  await assert.rejects(restore(notABackup))
   assert.deepEqual(autoBackupFiles(backups), [], 'a refused file takes no backup')
   assert.equal(app.isTracked('tt-mine'), true)
 
   // The restore replaces the library, and the one it replaced is kept.
-  app.importBackup(chosen)
+  assert.ok(await restore(chosen), 'the restore reports what it did')
   assert.equal(app.isTracked('tt-from-file'), true, 'the chosen file is what is here now')
   assert.equal(app.isTracked('tt-mine'), false)
   const written = autoBackupFiles(backups)
@@ -79,8 +94,9 @@ async function main(): Promise<void> {
   const ids = saved.tables.tracked.map((row) => String(row.content_id))
   assert.deepEqual(ids, ['tt-mine'], 'it holds the library as it was before the restore')
 
-  // And restoring that backup undoes the restore.
-  app.importBackup(path.join(backups, written[0]))
+  // And restoring that backup undoes the restore (taking one more backup,
+  // of the restored library, on the way).
+  await restore(path.join(backups, written[0]))
   assert.equal(app.isTracked('tt-mine'), true)
   assert.equal(app.isTracked('tt-from-file'), false)
 

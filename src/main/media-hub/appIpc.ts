@@ -280,6 +280,16 @@ export function registerAppIpc(): void {
     }
   )
 
+  handle<unknown, { autoSubtitlesEnabled: boolean }>(
+    MEDIA_HUB_CHANNELS.settingsSetAutoSubtitles,
+    (_event, value) => {
+      const settings = readSettings()
+      settings.autoSubtitlesEnabled = value !== false
+      writeSettings(settings)
+      return { autoSubtitlesEnabled: settings.autoSubtitlesEnabled }
+    }
+  )
+
   // Backup and restore. Both open a native picker rather than taking a path
   // from the renderer: the renderer must never be able to name a file for main
   // to read or write, which is the same rule settingsChooseStreamCacheDir

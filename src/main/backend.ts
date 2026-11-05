@@ -9,12 +9,18 @@
 import { app } from 'electron'
 import { join } from 'path'
 import { registerTelemetryIpc } from './ipc/telemetry'
-import { registerSettingsIpc } from './ipc/settings'
+import { migrateServiceApiKeys, registerSettingsIpc } from './ipc/settings'
 import { registerHttpProxyIpc } from './ipc/httpProxy'
 import { registerMediaHubIpc } from './ipc/mediaHub'
 import { createDatabase } from './media-hub/database'
 import { activeProfileId } from './media-hub/profiles'
-import { ensureSetupCompleteDecided, readSettings, writeSettings } from './media-hub/settingsStore'
+import {
+  ensureSetupCompleteDecided,
+  migrateLegacySecrets,
+  readSettings,
+  writeSettings
+} from './media-hub/settingsStore'
+import { initSecretStorage } from './media-hub/secretStorage'
 import { upgradeHideDislikedDefault } from './media-hub/preferences'
 import { getDatabase, setDatabase } from './media-hub/dbState'
 import { closeParty } from './media-hub/watchParty'
@@ -22,6 +28,20 @@ import { stopPlayback } from './media-hub/playbackSession'
 import { flushPlaybackPosition, shutdownPlayer } from './media-hub/playerBridge'
 import { shutdownScheduler } from './media-hub/taskScheduler'
 import { stopBackgroundJobs } from './media-hub/backgroundJobs'
+
+/**
+ * What has to be awaited before startBackend(): unsealing the key every
+ * stored credential is encrypted under (the OS key store only answers
+ * asynchronously now; see secretStorage.ts) and moving any credential the
+ * old synchronous API wrote onto it. Nothing may read or write a secret
+ * before this resolves, which is why it runs before the first IPC handler
+ * exists. Never rejects.
+ */
+export async function prepareBackend(): Promise<void> {
+  await initSecretStorage(app.getPath('userData'))
+  await migrateLegacySecrets()
+  await migrateServiceApiKeys()
+}
 
 /** Registers every IPC handler and opens the database. Background jobs are
  *  NOT started here — the caller starts them once its own startup is done. */

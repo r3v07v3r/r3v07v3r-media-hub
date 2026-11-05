@@ -115,6 +115,11 @@ export function splitForFlush(
 ): { sendable: PendingWatchStatusPush[]; settled: Set<string> } {
   const settled = new Set<string>()
   const sendable = entries.filter((entry) => {
+    // Accepted by Simkl and waiting for a read that shows it: neither sent
+    // again (nothing failed) nor settled (its recorded remote value is what
+    // this app sent, not what Simkl has been seen to hold — see
+    // verifyPushed, which is the only thing that lets such an entry go).
+    if (entry.pushed) return false
     if (locallyWatched.has(entry.id) !== entry.remoteWatched) return true
     if (stale.has(entry.id)) return true
     settled.add(entry.id)
@@ -140,6 +145,84 @@ export function traktFollowUps(
 }
 
 /**
+ * Flags the entries Simkl accepted this flush as awaiting a read that shows
+ * the push took — see PendingWatchStatusPush.pushed. `pushedValue` maps an
+ * id to the value the successful request sent, which is also what the
+ * entry now records as the remote value (withPushedRemoteState's rule); an
+ * id with no entry there was not pushed and is returned untouched.
+ *
+ * What this replaces: dropping a confirmed entry from the queue on the
+ * strength of Simkl's 200. Seen live, six films pushed and "confirmed" on
+ * every launch for five weeks — three on the account's dropped list, which
+ * a history add never moves; two Simkl files as anime, which a movie push
+ * marks one episode of; one it accepted and never filed at all. Each
+ * launch recomputed the same disagreement and asked again, which is the
+ * exact loop this queue exists to end.
+ */
+export function markPushed(
+  queue: readonly PendingWatchStatusPush[],
+  pushedValue: ReadonlyMap<string, boolean>
+): PendingWatchStatusPush[] {
+  return queue.map((entry) => {
+    const pushed = pushedValue.get(entry.id)
+    return pushed === undefined ? entry : { ...entry, remoteWatched: pushed, pushed: true }
+  })
+}
+
+export interface VerifyOutcome {
+  queue: PendingWatchStatusPush[]
+  /** Entries whose push a fresh read of Simkl confirmed — done. */
+  verified: PendingWatchStatusPush[]
+  /** Entries whose push never took, more times than the cap allows. */
+  abandoned: PendingWatchStatusPush[]
+}
+
+/**
+ * Checks every entry awaiting verification against a read of the account
+ * made AFTER its push went out (`remoteWatched` answers what that read
+ * holds for an id). One the read agrees with has landed and leaves the
+ * queue. One it does not is a push Simkl accepted and ignored: that is a
+ * failed attempt, and the entry goes back to being sendable — recording
+ * what the read actually holds, so the next flush sees the disagreement
+ * and sends it again — until the attempt cap, where it is let go of and
+ * reported like any other failure. Entries not awaiting verification are
+ * left exactly as they are.
+ *
+ * The caller owns the "after its push" part: a read served from a cache
+ * older than the flush, or a stale fallback after a failed request, says
+ * nothing about whether the push took, and must not be passed here.
+ */
+export function verifyPushed(
+  queue: readonly PendingWatchStatusPush[],
+  remoteWatched: (id: string) => boolean,
+  maxAttempts: number = PENDING_PUSH_MAX_ATTEMPTS
+): VerifyOutcome {
+  const next: PendingWatchStatusPush[] = []
+  const verified: PendingWatchStatusPush[] = []
+  const abandoned: PendingWatchStatusPush[] = []
+  for (const entry of queue) {
+    if (!entry.pushed) {
+      next.push(entry)
+      continue
+    }
+    const actual = remoteWatched(entry.id)
+    if (actual === entry.remoteWatched) {
+      verified.push(entry)
+      continue
+    }
+    const attempted: PendingWatchStatusPush = {
+      ...entry,
+      remoteWatched: actual,
+      attempts: entry.attempts + 1
+    }
+    delete attempted.pushed
+    if (attempted.attempts >= maxAttempts) abandoned.push(attempted)
+    else next.push(attempted)
+  }
+  return { queue: next, verified, abandoned }
+}
+
+/**
  * The films (as local history keys, `id:movie:movie`) the review panel has
  * ruled must not be watched at Simkl, and Simkl has not been told yet: a
  * queued "Use Local" whose recorded Simkl value is watched, and every title
@@ -151,7 +234,10 @@ export function traktFollowUps(
  * A "Use Simkl" entry has the local record already rewritten to Simkl's
  * value, so holding it changes nothing. A given-up title is held whichever
  * way the decision went: the record keeps only its id, and for a film that
- * is watched here, holding it changes nothing either.
+ * is watched here, holding it changes nothing either. A push awaiting
+ * verification is held the same way: its recorded remote value is what was
+ * sent, not what Simkl has been seen to hold, and a removal Simkl accepted
+ * and ignored would otherwise be taken straight back in.
  */
 export function reviewRemovalsOwed(
   queue: readonly PendingWatchStatusPush[],
@@ -159,7 +245,9 @@ export function reviewRemovalsOwed(
 ): Set<string> {
   const keys = new Set<string>()
   for (const entry of queue) {
-    if (entry.type === 'movie' && entry.remoteWatched) keys.add(`${entry.id}:movie:movie`)
+    if (entry.type === 'movie' && (entry.remoteWatched || entry.pushed)) {
+      keys.add(`${entry.id}:movie:movie`)
+    }
   }
   for (const id of abandonedIds) keys.add(`${id}:movie:movie`)
   return keys

@@ -166,6 +166,7 @@ export async function answerFromCacheTiers(
         source: 'localcache',
         cacheToken: cached.token,
         complete: true,
+        cacheSourceRef: cached.sourceRef,
         name: cached.title,
         resolution: cached.resolution,
         cached: true,

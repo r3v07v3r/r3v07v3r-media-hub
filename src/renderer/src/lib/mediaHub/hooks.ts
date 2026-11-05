@@ -66,6 +66,7 @@ const EMPTY_HOME_FEED = {
   continueWatching: [] as ContinueWatchingItem[],
   recommendations: [] as Recommendation[],
   animeRecommendations: [] as Recommendation[],
+  byKind: {} as Partial<Record<MediaKind, Recommendation[]>>,
   rails: [] as HomeRail[],
   featured: [] as MediaItem[],
   preferredGenres: [] as string[],
@@ -529,7 +530,7 @@ export function useMediaHubWatchedIds(libraryKey: string): WatchedIdsResult {
     const api = window.api?.mediaHub
     if (!api) return
     api.tracking
-      .list()
+      .history()
       .then((result) => {
         if (cancelled) return
         setWatchedIds(new Set(result.history.map((h) => h.id)))
@@ -834,6 +835,10 @@ export interface HomeFeedResult {
    *  (HomePersonalizedResult.animeRecommendations). Empty from a backend
    *  that predates it, and not remembered across launches. */
   animeRecommendations: Recommendation[]
+  /** The best of each kind from the whole ranking, for the library pages'
+   *  own shelf — see HomePersonalizedResult.recommendationsByKind. Not
+   *  remembered across launches; a page falls back to `recommendations`. */
+  byKind: Partial<Record<MediaKind, Recommendation[]>>
   /** The same ranking shelved by reason, for the For You page. Not
    *  remembered across launches: it follows the live feed. */
   rails: HomeRail[]
@@ -926,10 +931,16 @@ export function useMediaHubHomeFeed(
           })
           return { ...rec, media: finished(rec.media) }
         }
+        const byKind: Partial<Record<MediaKind, Recommendation[]>> = {}
+        for (const kind of CATALOG_KINDS) {
+          const list = result.recommendationsByKind?.[kind]
+          if (list?.length) byKind[kind] = list.map(toRecommendation)
+        }
         const next = {
           continueWatching: result.continueWatching.map(continueWatchingEntryToItem),
           recommendations: result.recommendations.map(toRecommendation),
           animeRecommendations: (result.animeRecommendations ?? []).map(toRecommendation),
+          byKind,
           rails: (result.recommendationRails ?? [])
             .map((rail) => ({
               id: rail.id,
@@ -968,6 +979,7 @@ export function useMediaHubHomeFeed(
               ...next,
               recommendations: kept.recommendations,
               animeRecommendations: kept.animeRecommendations,
+              byKind: kept.byKind,
               rails: kept.rails,
               featured: kept.featured
             }

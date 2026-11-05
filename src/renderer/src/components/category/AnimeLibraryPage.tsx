@@ -27,7 +27,7 @@ import { episodeToStart, episodeWatchKey } from '@shared/media-hub/nextEpisode'
 import { ANIME_CONFIG, type CategoryConfig } from '@renderer/lib/mediaHub/categoryConfig'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
 import { useBatchReveal } from '@renderer/lib/mediaHub/useBatchReveal'
-import { formatReleaseDate, isFutureRelease } from '@renderer/lib/mediaHub/releaseDate'
+import { titleUnreleased } from '@renderer/lib/mediaHub/releaseDate'
 import { CategoryFilterBar } from './CategoryFilterBar'
 import { TitleStatusButton } from '@renderer/components/media/TitleStatusButton'
 import { titleStatusOf } from '@renderer/lib/mediaHub/titleStatus'
@@ -36,6 +36,7 @@ import {
   resolveLibrarySelection,
   stampLibrarySelection
 } from '@renderer/lib/mediaHub/librarySelection'
+import { passOverVisible } from '@renderer/lib/mediaHub/passOver'
 import styles from './AnimeLibraryPage.module.css'
 import { RatingBadge } from '@renderer/components/detail/RatingBadge'
 import { ratingSourceFor } from '@renderer/components/detail/ratingSource'
@@ -106,6 +107,9 @@ interface ShelfProps {
   onOpen: (media: MediaItem) => void
   emptyMessage: string
   collapseWhenEmpty?: boolean
+  /** Offers "Show me others" (lib/mediaHub/passOver.ts) and is called once
+   *  the tiles on screen have been passed over — the suggestion shelf only. */
+  onPassedOver?: () => void
 }
 
 function LibraryShelf({
@@ -116,10 +120,23 @@ function LibraryShelf({
   onSelect,
   onOpen,
   emptyMessage,
-  collapseWhenEmpty = false
+  collapseWhenEmpty = false,
+  onPassedOver
 }: ShelfProps) {
   const scroller = useRef<HTMLUListElement>(null)
   const isCollapsed = collapseWhenEmpty && items.length === 0
+  const [passing, setPassing] = useState(false)
+
+  async function showOthers() {
+    const el = scroller.current
+    if (!el || passing) return
+    setPassing(true)
+    const passed = await passOverVisible(el)
+    setPassing(false)
+    if (!passed) return
+    el.scrollLeft = 0
+    onPassedOver?.()
+  }
 
   function nudge(direction: -1 | 1) {
     scroller.current?.scrollBy({ left: direction * 460, behavior: 'smooth' })
@@ -138,6 +155,19 @@ function LibraryShelf({
         {items.length > 0 && (
           <div className={styles.shelfControls}>
             <span>{items.length} titles</span>
+            {onPassedOver && (
+              <button
+                type="button"
+                className={styles.shelfShowOthers}
+                onClick={() => void showOthers()}
+                disabled={passing}
+                aria-busy={passing}
+                title="Move these to the back of the row for a few weeks"
+              >
+                <Icon name="refresh" size={14} />
+                Show me others
+              </button>
+            )}
             <button type="button" onClick={() => nudge(-1)} aria-label={`Scroll ${title} left`}>
               <Icon name="chevron-left" size={16} />
             </button>
@@ -483,28 +513,32 @@ function LibraryDetails({ media, config }: { media: MediaItem | null; config: Ca
     const timer = setTimeout(() => {
       void (async () => {
         try {
-          const [item, tracking] = await Promise.all([
-            api.catalog.meta(kind, mediaId),
-            kind === 'movie' ? Promise.resolve(null) : api.tracking.list()
-          ])
+          const item = await api.catalog.meta(kind, mediaId)
           if (cancelled) return
+          // Shown before the watched rows are read: the Rotten Tomatoes
+          // figure has nothing to do with them.
           setDetail({ id: mediaId, item })
-          if (!tracking) return
+          if (kind === 'movie') return
           // A later season of a merged anime, selected by its own tile. Play
           // on it starts the SHOW at that season, from the show's viewings
           // (resolvePlaybackTarget), so the same is read here: nothing is
           // kept under the tile's own id to find a next episode from.
           const part = item.seasonOf
-          const shown = part ? await api.catalog.meta(kind, part.id) : item
-          if (cancelled) return
           const titleId = part ? part.id : mediaId
+          // tracking:title-state, the database rows for this one title —
+          // tracking:list resolves every tracked series first, seconds on a
+          // long list.
+          const [shown, state] = await Promise.all([
+            part ? api.catalog.meta(kind, part.id) : Promise.resolve(item),
+            api.tracking.titleState(titleId)
+          ])
+          if (cancelled) return
           const videos = part
             ? (shown.videos ?? []).filter((video) => video.season === part.season)
             : (shown.videos ?? [])
           if (!videos.length) return
           const watchedKeys = new Set<string>()
-          for (const row of tracking.history) {
-            if (String(row.id) !== String(titleId)) continue
+          for (const row of state.watched) {
             if (row.season == null || row.episode == null) continue
             watchedKeys.add(episodeWatchKey(row.season, row.episode))
           }
@@ -591,11 +625,17 @@ function LibraryDetails({ media, config }: { media: MediaItem | null; config: Ca
   // rottenTomatoesRating's identical guard just above) — is the one place
   // it actually exists; media.releaseDate is kept only as a fallback for
   // the moment before that fetch resolves.
-  const isMovie = media.mediaKind === 'movie' || media.mediaType === 'movie'
-  const detailReleaseDate = detail?.id === media.id ? detail.item.releaseDate : undefined
-  const releaseDateForGate = detailReleaseDate ?? media.releaseDate
-  const unreleasedDate =
-    isMovie && isFutureRelease(releaseDateForGate) ? releaseDateForGate : undefined
+  // Not only a film's date any more: a season dated next year, or one its
+  // source lists as unreleased, is not out whatever kind it is (seen live:
+  // "Delicious in Dungeon Season 2 — 2027 · Unreleased" with Play now
+  // enabled beside it). The episode-level gate — which episode is next,
+  // and whether THAT has aired — still belongs to the detail page.
+  const fromDetail = detail?.id === media.id ? detail.item : undefined
+  const unreleased = titleUnreleased({
+    releaseDate: fromDetail?.releaseDate ?? media.releaseDate,
+    releaseYear: media.releaseYear,
+    status: fromDetail?.status ?? media.status
+  })
 
   return (
     <aside className={`${styles.details} glass-panel`} aria-label={`${media.title} details`}>
@@ -733,14 +773,14 @@ function LibraryDetails({ media, config }: { media: MediaItem | null; config: Ca
               type="button"
               className={styles.primaryAction}
               onClick={() => startPartyPlayback(media)}
-              disabled={isResolving || !!unreleasedDate}
-              aria-disabled={!!unreleasedDate}
+              disabled={isResolving || !!unreleased}
+              aria-disabled={!!unreleased}
             >
-              <Icon name={unreleasedDate ? 'clock' : 'play'} size={15} />
+              <Icon name={unreleased ? 'clock' : 'play'} size={15} />
               {isResolving
                 ? 'Preparing…'
-                : unreleasedDate
-                  ? `Releases ${formatReleaseDate(unreleasedDate) ?? ''}`
+                : unreleased
+                  ? unreleased
                   : episodic && nextUp
                     ? `Play S${nextUp.season} E${nextUp.episode}`
                     : 'Play now'}
@@ -866,6 +906,8 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
     continueWatching,
     recommendations,
     animeRecommendations,
+    recommendationsByKind,
+    refreshHomeFeed,
     categorySearch,
     clearCategorySearch,
     mediaHubSettings,
@@ -1123,23 +1165,28 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
       )
       .slice(0, 18)
   }, [browseItems, filteredLibrary])
-  // Recommendations are sourced from the personalised home feed, then
-  // narrowed to the active library. Each category keeps its own relevant
-  // rail: movies on Movies, series on Series, and anime on Anime. Anime
-  // takes its own list, drawn from the whole ranking: the anime among the
-  // Home row came to a handful of tiles once a merged show's seasons left
-  // it. The Home row is the fallback, for a backend that sends no such list.
+  // Recommendations are sourced from the personalised home feed. Each
+  // category keeps its own relevant rail: movies on Movies, series on
+  // Series, and anime on Anime — drawn from the whole ranking for that kind
+  // (recommendationsByKind). Narrowing Home's mixed row instead left the
+  // Movies page four films on a mostly-anime evening, the same four for
+  // days. Before the feed answers per kind, Anime falls back to its own
+  // list from the whole ranking (the anime among the Home row came to a
+  // handful of tiles once a merged show's seasons left it), and every kind
+  // to the narrowed Home row.
   const recommended = useMemo(
     () =>
       uniqueItems(
-        (config.kind === 'anime' && animeRecommendations.length
-          ? animeRecommendations
-          : recommendations
+        (
+          recommendationsByKind[config.kind] ??
+          (config.kind === 'anime' && animeRecommendations.length
+            ? animeRecommendations
+            : recommendations)
         )
           .map((recommendation) => recommendation.media)
           .filter((media) => matchesCategoryKind(media, config.kind))
       ).slice(0, 18),
-    [animeRecommendations, recommendations, config.kind]
+    [animeRecommendations, recommendations, recommendationsByKind, config.kind]
   )
   // Seeds EverythingSection's reveal batch past wherever the previously-
   // focused tile falls, rounded up to a clean batch boundary, so a
@@ -1466,6 +1513,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
               onSelect={setSelection}
               onOpen={openDetail}
               emptyMessage="Watch a few titles and personalised recommendations will appear here."
+              onPassedOver={refreshHomeFeed}
             />
             <LibraryShelf
               title="Popular in your library"

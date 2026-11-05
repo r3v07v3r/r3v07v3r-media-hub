@@ -294,6 +294,54 @@ db.exportBackup(backupFile, {
 }
 
 // ---------------------------------------------------------------------
+// The Collections record (added Trakt lists, removed collections) lives in
+// catalog_cache but is a choice, not a cache: it travels with the backup,
+// per declared profile, and replaces this install's on restore.
+// ---------------------------------------------------------------------
+{
+  const record = (removed: string[]) => ({ added: [], removed })
+  const taken = createDatabase(path.join(dir, 'collections-source.sqlite'), ALICE)
+  taken.putCache(`collections:v1:${ALICE}`, record(['star-wars']), 1e12, { durable: true })
+  taken.putCache(`collections:v1:${BOB}`, record(['marvel-cinematic-universe']), 1e12, {
+    durable: true
+  })
+  taken.putCache('collections:v1:profile-undeclared', record(['x-men']), 1e12, { durable: true })
+  const file = path.join(dir, 'collections.json')
+  taken.exportBackup(file, {
+    appVersion: '1.2.3',
+    profiles: [
+      { id: ALICE, name: 'Alice' },
+      { id: BOB, name: 'Bob' }
+    ],
+    activeProfileId: ALICE
+  })
+  taken.close()
+  assert.deepEqual(Object.keys(readBackup(file).collections ?? {}).sort(), [ALICE, BOB].sort())
+
+  const target = createDatabase(path.join(dir, 'collections-target.sqlite'), ALICE)
+  target.putCache(`collections:v1:${ALICE}`, record(['middle-earth']), 1e12, { durable: true })
+  target.importBackup(file)
+  assert.deepEqual(target.getCache(`collections:v1:${ALICE}`), record(['star-wars']))
+  assert.deepEqual(target.getCache(`collections:v1:${BOB}`), record(['marvel-cinematic-universe']))
+  assert.equal(target.getCache('collections:v1:profile-undeclared'), null, 'only declared ones')
+
+  // A file from before Collections had a record leaves this install's alone.
+  const legacy = path.join(dir, 'collections-legacy.json')
+  const parsed = JSON.parse(fs.readFileSync(backupFile, 'utf8'))
+  delete parsed.collections
+  fs.writeFileSync(legacy, JSON.stringify(parsed), 'utf8')
+  target.importBackup(legacy)
+  assert.deepEqual(target.getCache(`collections:v1:${ALICE}`), record(['star-wars']))
+
+  // A backup taken before any collection was changed is an empty snapshot,
+  // and restoring it puts the page back to the bundled set.
+  assert.deepEqual(readBackup(backupFile).collections, {})
+  target.importBackup(backupFile)
+  assert.equal(target.getCache(`collections:v1:${ALICE}`), null, 'changes since are undone')
+  target.close()
+}
+
+// ---------------------------------------------------------------------
 // The automatic backup before a rewrite: a real backup, rotated.
 // ---------------------------------------------------------------------
 {

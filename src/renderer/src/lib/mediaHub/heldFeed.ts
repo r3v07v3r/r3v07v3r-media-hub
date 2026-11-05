@@ -20,6 +20,7 @@
 // as it stands.
 
 import type { HomeRail, MediaItem, Recommendation } from '@renderer/types'
+import type { MediaKind } from '@shared/media-hub/types'
 import { isDetailRoute } from './browsingContext'
 
 /** What a change is known to have done to a title's own flags, applied to
@@ -33,6 +34,8 @@ export interface HoldableFeed {
   animeRecommendations?: Recommendation[]
   featured: MediaItem[]
   rails: HomeRail[]
+  /** The library pages' own shelves — held like `recommendations`. */
+  byKind?: Partial<Record<MediaKind, Recommendation[]>>
 }
 
 /**
@@ -66,7 +69,8 @@ export function holdEntries<T>(
 
 /**
  * The fresh feed with the held titles back in the recommendations, the
- * Anime library's shelf, the hero's pool and the For You rails. A held copy takes its plan state from
+ * Anime library's shelf, the library pages' per-kind shelves, the hero's
+ * pool and the For You rails. A held copy takes its plan state from
  * the fresh answer's tracked ids and its watched state from the recorded
  * change. A rail the fresh feed no longer has is not brought back.
  */
@@ -92,8 +96,19 @@ export function holdTouchedEntries<F extends HoldableFeed>(
       (rec) => rec.media.id,
       (rec) => ({ ...rec, media: patch(rec.media) })
     )
+  // A kind the fresh feed no longer has is not brought back, as for rails.
+  const byKind = next.byKind && {
+    ...next.byKind,
+    ...Object.fromEntries(
+      (Object.keys(next.byKind) as MediaKind[]).map((kind) => [
+        kind,
+        holdRecommendations(previous.byKind?.[kind] ?? [], next.byKind?.[kind] ?? [])
+      ])
+    )
+  }
   return {
     ...next,
+    ...(byKind ? { byKind } : {}),
     recommendations: holdRecommendations(previous.recommendations, next.recommendations),
     ...(next.animeRecommendations
       ? {

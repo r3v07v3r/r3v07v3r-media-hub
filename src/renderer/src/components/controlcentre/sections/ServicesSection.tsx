@@ -45,6 +45,7 @@ import { SERVICE_LABELS, type ConnectionTestResult } from '@renderer/lib/api/typ
 import styles from './CachingSection.module.css'
 import own from './ServicesSection.module.css'
 import { BackgroundActivitySection } from '@renderer/components/downloads/BackgroundActivitySection'
+import { usePanelVisible } from '../panelVisibility'
 
 const TESTERS: Record<ServiceId, (config: ServiceConfig) => Promise<ConnectionTestResult>> = {
   jellyfin: testJellyfin,
@@ -87,6 +88,7 @@ function speed(bytesPerSecond: number): string {
 }
 
 export function ServicesSection() {
+  const visible = usePanelVisible()
   const [settings, setSettings] = useState<ServiceSettings | null>(null)
   const [live, setLive] = useState<Partial<Record<ServiceId, Live>>>({})
   const [busy, setBusy] = useState('')
@@ -158,12 +160,14 @@ export function ServicesSection() {
     }
   }, [])
 
+  // Only while this panel is on screen: each tick probes every configured
+  // service over the network. Turning back to it probes straight away.
   useEffect(() => {
-    if (!settings) return
+    if (!settings || !visible) return
     void probe(settings)
     const timer = window.setInterval(() => void probe(settings), REFRESH_MS)
     return () => window.clearInterval(timer)
-  }, [settings, probe])
+  }, [settings, probe, visible])
 
   const act = async (key: string, work: () => Promise<unknown>): Promise<void> => {
     setBusy(key)

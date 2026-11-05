@@ -36,7 +36,16 @@ export interface AnimeCrossIds {
   anidb?: number
   imdb?: string
   anilist?: number
+  /** Whether Simkl answered — the only source of `imdb`, `anidb` and
+   *  `anilist` here. Absent on entries cached before this was recorded. */
+  simkl?: boolean
 }
+
+/** How long a mapping Simkl did not answer for is kept: only the Kitsu
+ *  fallback's MAL id is in it, and the ids Simkl alone knows should be
+ *  asked for again soon — once a Client ID is entered, say — not after a
+ *  month. */
+const PARTIAL_MAPPING_TTL_MS = 24 * 60 * 60 * 1000
 
 function numericKitsuId(id: string | number): string {
   return String(id).replace(/^kitsu:/, '')
@@ -104,7 +113,11 @@ export async function crossIdsForKitsu(
   const key = `idbridge:kitsu:${numericId}`
   const db = getDatabase()
   const cached = db.getCache<AnimeCrossIds>(key)
-  if (cached) return cached
+  // An entry from before `simkl` was recorded, with no IMDb id, may be one
+  // Simkl never answered for, cached a month on the Kitsu fallback alone —
+  // which left subtitle search on a title query. Asked again once; what
+  // comes back is marked.
+  if (cached && !(cached.simkl === undefined && !cached.imdb)) return cached
 
   const result: AnimeCrossIds = { kitsu: Number(numericId) }
   // Whether any resolver actually ANSWERED. A request that threw tells us
@@ -119,6 +132,7 @@ export async function crossIdsForKitsu(
       priority
     )
     answered = true
+    result.simkl = true
     const ids = matches?.[0]?.ids
     if (ids?.mal) result.mal = ids.mal
     if (ids?.anidb) result.anidb = ids.anidb
@@ -137,7 +151,10 @@ export async function crossIdsForKitsu(
     if (mapping.malId) result.mal = mapping.malId
   }
 
-  if (answered) db.putCache(key, result, MAPPING_TTL_MS)
+  if (answered) {
+    if (!result.simkl) result.simkl = false
+    db.putCache(key, result, result.simkl ? MAPPING_TTL_MS : PARTIAL_MAPPING_TTL_MS)
+  }
   return result
 }
 

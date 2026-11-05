@@ -88,6 +88,7 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     playbackBuffer: normalizePlaybackBuffer(settings.playbackBuffer),
     videoScaling: normalizeVideoScaling(settings.videoScaling),
     anime4k: anime4kSettings(settings),
+    autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
     autoplayNextEnabled: settings.autoplayNextEnabled !== false,
     savedFilters: normalizeSavedFilters(settings.savedFilters),
     notificationsEnabled: settings.notificationsEnabled === true,
@@ -266,6 +267,7 @@ export function logoutSettings(settings: Record<string, unknown> = {}): Pick<
   | 'updateChannel'
   | 'playbackBuffer'
   | 'videoScaling'
+  | 'autoSubtitlesEnabled'
   | 'autoplayNextEnabled'
   | 'savedFilters'
   | 'notificationsEnabled'
@@ -306,6 +308,7 @@ export function logoutSettings(settings: Record<string, unknown> = {}): Pick<
     videoScaling: normalizeVideoScaling(settings.videoScaling),
     anime4kEnabled: settings.anime4kEnabled === true,
     anime4kMode: normalizeAnime4kMode(settings.anime4kMode),
+    autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
     autoplayNextEnabled: settings.autoplayNextEnabled !== false,
     savedFilters: normalizeSavedFilters(settings.savedFilters),
     notificationsEnabled: settings.notificationsEnabled === true,
