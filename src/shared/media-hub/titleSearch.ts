@@ -172,3 +172,20 @@ export function settleProvider<T>(
     )
   })
 }
+
+/**
+ * The one shortfall to report for several searches answered together (the
+ * assistant asks each kind's catalog at once): 'failed' when any of them
+ * failed, since "could not be reached" is then true of at least one, 'slow'
+ * when every one that fell short was only slow, and nothing when all of them
+ * answered. An answer that fell short with no reason comes from a backend
+ * that predates the reason, and counts as failed, as CatalogSearchResult
+ * says.
+ */
+export function combinedShortfall(
+  answers: ReadonlyArray<{ providerUnreachable: boolean; providerReason?: ProviderShortfall }>
+): ProviderShortfall | undefined {
+  const short = answers.filter((answer) => answer.providerUnreachable)
+  if (!short.length) return undefined
+  return short.every((answer) => answer.providerReason === 'slow') ? 'slow' : 'failed'
+}

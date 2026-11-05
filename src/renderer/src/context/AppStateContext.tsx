@@ -392,6 +392,11 @@ interface AppStateValue {
    *  library. The panel says so rather than letting a missing title read
    *  as one that does not exist. */
   assistantProviderUnreachable: boolean
+  /** Set with assistantProviderUnreachable: 'slow' when every catalog that
+   *  fell short was still answering as the search stopped waiting for it,
+   *  so the note can say it did not answer in time rather than that it
+   *  could not be reached (see combinedShortfall). */
+  assistantProviderReason?: ProviderShortfall
   runAssistantQuery: (query: string) => void
   closeAssistant: () => void
 
@@ -666,6 +671,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     similarSource: 'model' | 'catalog' | null
     searching: boolean
     providerUnreachable?: boolean
+    providerReason?: ProviderShortfall
   }>({ results: [], similar: [], similarSource: null, searching: false })
   // A STACK, not a slot. Opening a title from another title (the Rest of
   // the series / Similar / Story panels) pushes a second origin, and a
@@ -2954,16 +2960,23 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
       void (async () => {
         // --- 1. The app's own answer, with no model involved ------------
-        const { items: found, providerUnreachable } = await searchAppCatalogWithStatus(
-          question
-        ).catch(() => ({ items: [] as CatalogItem[], providerUnreachable: false }))
+        const {
+          items: found,
+          providerUnreachable,
+          providerReason
+        } = await searchAppCatalogWithStatus(question).catch(() => ({
+          items: [] as CatalogItem[],
+          providerUnreachable: false,
+          providerReason: undefined
+        }))
         if (!current()) return
         setAssistantFindings({
           results: found,
           similar: [],
           similarSource: null,
           searching: false,
-          providerUnreachable
+          providerUnreachable,
+          providerReason
         })
 
         // --- 2. What the model makes of it ------------------------------
@@ -3181,6 +3194,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       assistantSimilarSource: assistantFindings.similarSource,
       assistantSearching: assistantFindings.searching,
       assistantProviderUnreachable: assistantFindings.providerUnreachable === true,
+      assistantProviderReason: assistantFindings.providerReason,
       runAssistantQuery,
       closeAssistant,
       categorySearch,
@@ -3281,6 +3295,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       assistantFindings.similarSource,
       assistantFindings.searching,
       assistantFindings.providerUnreachable,
+      assistantFindings.providerReason,
       runAssistantQuery,
       closeAssistant,
       categorySearch,

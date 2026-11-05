@@ -13,7 +13,8 @@
 // - The Watch Party Queue tab could never receive a title, so it is hidden
 //   behind one constant until a way to suggest a title returns.
 // - Sharing the TorBox key with a cache server starts unticked.
-// - A film marked Not interested is dimmed and named in Rest of the series.
+// - A film marked Not interested is dimmed and named in Rest of the series,
+//   and a title so marked in the library page's hero and Similar list.
 // - The host's local-network hint names the relay's real place and no port.
 
 import assert from 'node:assert/strict'
@@ -125,6 +126,32 @@ check('Rest of the series dims and names a film marked Not interested', () => {
     css,
     /\.entryDisliked \.artImage \{\s*filter: grayscale\(0\.85\) brightness\(0\.6\);/
   )
+})
+
+check('the library hero and Similar list dim and name a title marked Not interested', () => {
+  const page = read('components/category/AnimeLibraryPage.tsx').replace(/\r\n/g, '\n')
+  const similar = page.slice(
+    page.indexOf('function LibrarySimilar('),
+    page.indexOf('export function LibraryPage(')
+  )
+  assert.match(similar, /const \{ dislikedIds \} = useAppState\(\)/)
+  assert.match(similar, /const disliked = dislikedIds\.has\(item\.id\)/)
+  assert.match(similar, /disliked \? styles\.similarRowDisliked : ''/)
+  assert.match(similar, /\{disliked && \([\s\S]*?thumbs-down[\s\S]*?Not interested/)
+  const hero = page.slice(page.indexOf('export function LibraryPage('))
+  assert.match(
+    hero,
+    /const heroDisliked = activeHero \? dislikedIds\.has\(activeHero\.id\) : false/
+  )
+  assert.match(hero, /heroDisliked \? styles\.heroDisliked : ''/)
+  assert.match(hero, /heroDisliked \? ', not interested' : ''/)
+  assert.match(hero, /\{heroDisliked && \([\s\S]*?thumbs-down[\s\S]*?Not interested/)
+  const css = read('components/category/AnimeLibraryPage.module.css')
+  for (const rule of ['.heroDisliked .heroArtwork', '.similarRowDisliked .similarThumb']) {
+    const at = css.indexOf(`${rule} {`)
+    assert.ok(at >= 0, `${rule} is styled`)
+    assert.match(css.slice(at), /^[^}]*filter: grayscale\(0\.85\) brightness\(0\.6\);/)
+  }
 })
 
 console.log(`\n${pass} passed`)

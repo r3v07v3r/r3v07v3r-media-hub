@@ -13,7 +13,13 @@ import {
   type StatementSync
 } from 'node:sqlite'
 import type { AnimeGroupRecord, AnimeHistoryMove, HeldSeason } from './animeRegroup'
-import { readBackup, restoreBackup, writeBackup, type RestoreSummary } from './backup'
+import {
+  readBackup,
+  restoreBackup,
+  writeBackup,
+  type BackupFile,
+  type RestoreSummary
+} from './backup'
 import { migrate } from './migrations'
 import { logError } from './logger'
 import { MAX_RATING, MIN_RATING, ratingWeight } from '../../shared/media-hub/rating'
@@ -673,8 +679,11 @@ export interface MediaHubDatabase {
     options: { appVersion: string; profiles: Record<string, unknown>[]; activeProfileId: string }
   ): void
   /** Replaces every backed-up table with the file's contents, or changes
-   *  nothing. Also not profile-scoped, for the same reason. */
-  importBackup(filePath: string): RestoreSummary
+   *  nothing. Also not profile-scoped, for the same reason. Takes the path,
+   *  or the file readBackup already read from it: backup:import (appIpc.ts)
+   *  passes the one it read before its safety backup, whose rotation can
+   *  delete the very file being restored when it is an automatic one. */
+  importBackup(source: string | BackupFile): RestoreSummary
   track(item: Partial<CatalogItem> & { id: unknown }, now?: Date): TrackedItem
   untrack(id: string | number): boolean
   /** The active profile's tracked row for `id` as stored, every column,
@@ -852,6 +861,9 @@ export interface MediaHubDatabase {
   wholeShowRowsUnder(id: string): { profileId: string; seasons: HeldSeason[] }[]
   /** Every Kitsu id any profile has history or plays under. */
   animeHistoryIds(): string[]
+  /** Every Kitsu id any profile has history, plays, a rating or a resume
+   *  point under: all the rows an anime regroup moves. */
+  animeRowIds(): string[]
   /**
    * Folds every row keyed by `fromId` into `toId` — watch history, plays,
    * rating and plan, across every profile — keeping each row's type, season
@@ -1086,6 +1098,7 @@ interface PreparedQueries {
   landPositions: StatementSync
   heldSeasons: StatementSync
   animeHistoryIds: StatementSync
+  animeRowIds: StatementSync
   animeGroupLedger: StatementSync
   recordAnimeGroupLedger: StatementSync
   track: StatementSync
@@ -1588,6 +1601,12 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       `SELECT content_id FROM watch_history WHERE content_id LIKE 'kitsu:%'
        UNION SELECT content_id FROM plays WHERE content_id LIKE 'kitsu:%'`
     ),
+    animeRowIds: sql.prepare(
+      `SELECT content_id FROM watch_history WHERE content_id LIKE 'kitsu:%'
+       UNION SELECT content_id FROM plays WHERE content_id LIKE 'kitsu:%'
+       UNION SELECT content_id FROM ratings WHERE content_id LIKE 'kitsu:%'
+       UNION SELECT content_id FROM playback_positions WHERE content_id LIKE 'kitsu:%'`
+    ),
     animeGroupLedger: sql.prepare('SELECT groups_json FROM anime_group_ledger WHERE id=1'),
     recordAnimeGroupLedger: sql.prepare(
       `INSERT INTO anime_group_ledger(id,groups_json,recorded_at) VALUES(1,@json,@now)
@@ -1850,9 +1869,9 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       }
     },
 
-    importBackup(filePath) {
+    importBackup(source) {
       try {
-        const summary = restoreBackup(sql, readBackup(filePath))
+        const summary = restoreBackup(sql, typeof source === 'string' ? readBackup(source) : source)
         // Not a cache invalidation but a correctness one: `preferredGenres`
         // and everything else derived from history is computed on demand, so
         // there is nothing stale to clear here — the restored rows are simply
@@ -2731,6 +2750,14 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     animeHistoryIds() {
       try {
         return q.animeHistoryIds.all().map((row) => String((row as Row).content_id))
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
+    animeRowIds() {
+      try {
+        return q.animeRowIds.all().map((row) => String((row as Row).content_id))
       } catch (error) {
         return fail(error as Error)
       }

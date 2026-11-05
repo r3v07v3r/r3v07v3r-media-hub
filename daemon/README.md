@@ -177,8 +177,7 @@ The console window shows the same banner as above.
   watchlist. A job whose owner has not shared a key waits; if somebody who
   has shared one asks for the same title while it is still queued, the job
   becomes theirs and is fetched with their key. Any other second request
-  leaves the job with the device that queued it. Unpairing revokes
-  only your own key.
+  leaves the job with the device that queued it.
 - **Leaving.** **Leave** in the app forgets the server on this device and,
   if the server answers at that moment, withdraws your TorBox key. The
   device stays in the administrator's list, with any key the server did not

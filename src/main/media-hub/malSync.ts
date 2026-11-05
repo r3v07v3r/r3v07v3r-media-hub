@@ -605,9 +605,11 @@ export function registerMalIpc(): void {
     MEDIA_HUB_CHANNELS.malReconcileApply,
     async (_event, diff) => {
       // Re-checked rather than trusted from the preview that produced this
-      // diff: the marker goes back to false whenever a newly crawled raw
-      // catalog is cached (see animeGroupingReady), which can happen in
-      // between somebody pressing Preview and pressing Apply.
+      // diff (see animeGroupingReady). A newly crawled raw catalog leaves a
+      // grouping already in force in place until its own grouping pass has
+      // finished (catalog.ts), but where no grouped catalog was there to
+      // keep, the marker is written false when the crawl lands, and that can
+      // happen in between somebody pressing Preview and pressing Apply.
       if (!animeGroupingReady()) {
         throw new Error(
           'Your anime library is still being organised in the background — preview the sync again once it has finished.'

@@ -213,7 +213,9 @@ export function bundleContents(bundle: PairingBundle): string[] {
  * moves to Stable, and bundleContents leaves the channel out, so nothing on
  * screen would otherwise say so. `before` is this device's settings before
  * applyBundle; anything but 'stable' in it reads as preview, the rule the
- * phone's updater follows (android/.../Updater.kt).
+ * phone's updater follows (android/.../Updater.kt). That updater holds to
+ * Stable only once a stable release carries the phone app, and stays on
+ * preview until then, so the Stable sentence says as much.
  */
 export function channelChangeNote(
   before: MediaHubRawSettings,
@@ -222,8 +224,10 @@ export function channelChangeNote(
   const next = bundle.prefs?.updateChannel
   const was = before.updateChannel === 'stable' ? 'stable' : 'preview'
   if (!next || next === was) return null
-  const name = next === 'stable' ? 'Stable' : 'Preview'
-  return `Updates now come from the ${name} channel, as on that computer.`
+  if (next === 'stable') {
+    return 'Updates follow the Stable channel, as on that computer, once a stable release of this app is out.'
+  }
+  return 'Updates now come from the Preview channel, as on that computer.'
 }
 
 /**

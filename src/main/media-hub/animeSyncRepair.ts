@@ -113,20 +113,15 @@ function tmdbPages(): boolean {
 /**
  * Whether a regroup plan moves rows somebody here holds, which is when a
  * backup is worth writing before it. `held` is every Kitsu id a profile has
- * history or plays under (the database's animeHistoryIds), read only when
- * the plan moves anything.
+ * history, plays, a rating or a resume point under (the database's
+ * animeRowIds: everything the regroup moves), read only when the plan moves
+ * anything.
  *
  * A plan names every show whose grouping changed, across the whole
  * catalog, and almost none of them is one anybody here has watched.
  * Backing up for each such plan wrote a backup on every grouping change,
  * and those took places in the rotation (autoBackup.ts). An id that is not
  * a Kitsu id is taken to hold rows, as that list would not name it.
- *
- * A resume point or a rating under an id with no history or plays is not
- * counted yet, although the regroup moves those as well, and drops a
- * rating where the show it goes to already has one: the database has no
- * read of those ids across profiles, and animeHistoryIds covers history
- * and plays only.
  */
 export function regroupMovesHeldRows(
   plan: { moves: { fromId: string }[]; ratings?: { fromId: string }[] },
@@ -181,7 +176,7 @@ export function keepAnimeHistoryWithShows(): number {
         // when it only records the grouping (autoBackup.ts), nor when the
         // only shows it moves are ones nobody here has watched.
         moveAnimeHistory: (plan, ledger) => {
-          if (regroupMovesHeldRows(plan, () => db.animeHistoryIds())) {
+          if (regroupMovesHeldRows(plan, () => db.animeRowIds())) {
             backupBeforeRewrite('anime-regroup')
           }
           return db.moveAnimeHistory(plan, ledger)

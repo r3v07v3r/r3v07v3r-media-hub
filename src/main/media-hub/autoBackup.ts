@@ -8,7 +8,8 @@
 // them lands in the one table nothing can rebuild — and until now the only
 // backup was the one a person remembered to take from Settings. A restore
 // from Settings replaces the whole library with a file, so it takes one as
-// well (backup.ts's restoreBackup): restoring the wrong file can be undone.
+// well (appIpc.ts's backup:import handler): restoring the wrong file can be
+// undone.
 //
 // So each of those writes a backup first, through the same exportBackup the
 // Settings button uses (backup.ts has what a backup carries), into a

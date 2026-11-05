@@ -1514,12 +1514,17 @@ export function TraktSection() {
         `${summary.ratings} ${summary.ratings === 1 ? 'rating' : 'ratings'}`
       ]
       if (summary.plays || summary.ratings) reloadLibrary()
+      // A read that stopped at the page limit says so, or the line would
+      // tell somebody their whole history is here when the oldest is not.
+      const partial = summary.partial
+        ? " Stopped at Trakt's page limit; older history was not read."
+        : ''
       setImportStatus({
         kind: 'ok',
         message:
-          summary.plays || summary.ratings
+          (summary.plays || summary.ratings
             ? `Added ${parts.join(' and ')}.${summary.skipped ? ` ${summary.skipped} could not be matched.` : ''}`
-            : 'Everything on Trakt was already here.'
+            : 'Everything on Trakt was already here.') + partial
       })
     } catch (error) {
       setImportStatus({

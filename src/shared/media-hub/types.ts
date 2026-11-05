@@ -616,6 +616,9 @@ export interface ImportSummary {
   ratings: number
   /** Rows the source offered that could not be matched to a title this app knows. */
   skipped: number
+  /** Set when a read stopped at the source's page limit (Trakt's), so the
+   *  oldest history or ratings were not read. */
+  partial?: boolean
 }
 
 export interface TrackedItem {
@@ -973,9 +976,9 @@ export interface HomePersonalizedResult {
    * read, not even an expired copy. The suggestion fields are then empty,
    * while Continue Watching and Plan to Watch, which come from the local
    * database, are filled as always; the phone's Home says the catalog could
-   * not be reached rather than the backend. The call used to throw here, and
-   * the desktop's home feed (hooks.ts) does not read this field yet: it
-   * takes such an answer for a good feed with no suggestions in it.
+   * not be reached rather than the backend. The call used to throw here; the
+   * desktop's home feed (hooks.ts) treats this as that failure, keeping the
+   * suggestions it already shows and offering Retry.
    */
   catalogError?: string
 }

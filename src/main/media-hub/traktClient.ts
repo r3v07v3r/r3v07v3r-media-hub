@@ -900,12 +900,18 @@ export async function importTraktLibrary(options: TraktImportOptions = {}): Prom
     ratings: db.importRatings(remappedRatings),
     skipped: plays.skipped + rated.reduce((total, parsed) => total + parsed.skipped, 0)
   }
-  // The account's past is in; the pull takes it from here.
+  // The account's past is in; the pull takes it from here. A truncated read
+  // records the same position: Trakt answers newest first, so what it left
+  // out is the oldest history, which no later pull or import would reach
+  // either, and without a position every pull would read the whole account
+  // again up to the same limit.
   if (traktAccountMark() === account) markTraktHistoryPulled(db, profile, account, startedAt)
 
   // Not silent. See IMPORT_MAX_PAGES — a truncated read that reports success
-  // tells somebody their history is imported when part of it is not.
+  // tells somebody their history is imported when part of it is not. The
+  // summary says so to the Settings line as well as the log.
   if (history.truncated || movieRatings.truncated || showRatings.truncated) {
+    summary.partial = true
     logError(
       'trakt:import',
       new Error(`Stopped after ${IMPORT_MAX_PAGES} pages — the import is partial.`)

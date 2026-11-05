@@ -182,6 +182,16 @@
 .featuredCopy p svg {
   color: var(--accent-yellow);
 }
+/* A featured title marked Not interested (Hide Disliked switched off): the
+   tiles' dimming and note, the note on its own line under the kicker. */
+.heroDisliked .heroArtwork {
+  filter: grayscale(0.85) brightness(0.6);
+}
+.featuredCopy .tileDislikedNote {
+  display: flex;
+  margin-top: 7px;
+  text-shadow: none;
+}
 .heroSelector {
   position: absolute;
   left: 35px;
@@ -764,6 +774,10 @@
   aspect-ratio: 2 / 3;
   border-radius: 7px;
   object-fit: cover;
+}
+/* A suggestion marked Not interested: the tiles' dimming and note. */
+.similarRowDisliked .similarThumb {
+  filter: grayscale(0.85) brightness(0.6);
 }
 .similarCopy {
   flex: 1;

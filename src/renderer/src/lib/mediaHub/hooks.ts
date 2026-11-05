@@ -845,12 +845,13 @@ export interface HomeFeedResult {
   plannedSources: Record<string, PlannedServiceId[]>
   loading: boolean
   live: boolean
-  /** The last home:personalized attempt threw.
+  /** The last home:personalized attempt threw, or answered that no
+   *  catalog could be read (HomePersonalizedResult.catalogError).
    *
    *  Worth its own flag because the alternative reading is defamatory:
    *  main returns recommendations ranked over the WHOLE catalog when it
-   *  has nothing personal to go on, and throws outright when every
-   *  catalog source is down (tracking.ts's homePersonalized) — so an
+   *  has nothing personal to go on, and answers with catalogError when
+   *  every catalog source is down (tracking.ts's homePersonalized) — so an
    *  empty recommendations list essentially only happens when the fetch
    *  failed. Without this, a backend outage rendered as "watch a few
    *  titles and recommendations will show up here", which blames the
@@ -949,6 +950,31 @@ export function useMediaHubHomeFeed(
         // next fetch has moved shownKey on.
         const sameLibrary = shownKey.current === libraryKey
         shownKey.current = libraryKey
+        // No catalog could be read, so the suggestion fields came back
+        // empty. Empty is not a ranking: stored, it would replace good
+        // picks on screen with "watch a few titles" and be remembered for
+        // the next launch. The suggestions on screen stay (none after a
+        // library switch: those were someone else's), the parts read from
+        // the local database are taken, and it is the failure it used to be
+        // when this call threw: the error flag, with its Retry.
+        if (result.catalogError) {
+          setState((previous) => {
+            const kept = previous
+              ? sameLibrary
+                ? previous
+                : EMPTY_HOME_FEED
+              : startupHomeFeedFallback()
+            return {
+              ...next,
+              recommendations: kept.recommendations,
+              animeRecommendations: kept.animeRecommendations,
+              rails: kept.rails,
+              featured: kept.featured
+            }
+          })
+          setError(true)
+          return
+        }
         const heldNow = new Map(held?.current ?? [])
         setState((previous) =>
           previous && sameLibrary && heldNow.size > 0

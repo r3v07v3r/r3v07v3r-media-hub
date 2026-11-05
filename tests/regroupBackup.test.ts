@@ -35,7 +35,11 @@ function check(name: string, fn: () => void): void {
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-regroup-backup-'))
 const db = createDatabase(path.join(dir, 'test.sqlite'), PROFILE)
 db.markWatched({ id: 'kitsu:1', type: 'anime', title: 'Watched here' }, { season: 1, episode: 1 })
-const held = (): string[] => db.animeHistoryIds()
+// Shows somebody started or rated without a row of history: the regroup
+// moves a resume point and a rating too, and a backup carries both.
+db.savePlaybackPosition('kitsu:4', { season: 1, episode: 2 }, 600, 1400)
+db.rate('kitsu:5', 8)
+const held = (): string[] => db.animeRowIds()
 
 const move = (fromId: string) => ({ fromId, fromSeason: null, toId: 'kitsu:99', toSeason: 1 })
 const rating = (fromId: string) => ({ fromId, toId: 'kitsu:99' })
@@ -69,6 +73,15 @@ check('a plan that moves a show with history here writes one', () => {
 
 check('a rating move under a held id counts as well', () => {
   assert.equal(regroupMovesHeldRows({ moves: [], ratings: [rating('kitsu:1')] }, held), true)
+})
+
+check('a show held only as a resume point writes one', () => {
+  assert.equal(regroupMovesHeldRows({ moves: [move('kitsu:4')] }, held), true)
+})
+
+check('a show held only as a rating writes one', () => {
+  assert.equal(regroupMovesHeldRows({ moves: [], ratings: [rating('kitsu:5')] }, held), true)
+  assert.equal(regroupMovesHeldRows({ moves: [move('kitsu:5')] }, held), true)
 })
 
 check('an id that is not a Kitsu id is taken to hold rows', () => {

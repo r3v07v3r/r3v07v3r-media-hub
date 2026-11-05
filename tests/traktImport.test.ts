@@ -824,9 +824,79 @@ async function ratingRetries(): Promise<void> {
   console.log('trakt rating retry tests passed')
 }
 
+// An import whose history read stops at the 200-page limit says so in its
+// summary, which the Settings line shows, and not only in the log. Against
+// the real client with Trakt faked at fetch; runs after ratingRetries, which
+// has pointed 'electron' at the headless stand-in.
+async function partialImport(): Promise<void> {
+  const store = await import('../src/main/media-hub/settingsStore')
+  const { setDatabase } = await import('../src/main/media-hub/dbState')
+  const client = await import('../src/main/media-hub/traktClient')
+  const db = createDatabase(
+    path.join(process.env.R3_USER_DATA as string, 'partial.sqlite'),
+    'profile-a'
+  )
+  setDatabase(db)
+  const plain = (value: string): string => `plain:${Buffer.from(value, 'utf8').toString('base64')}`
+  store.writeSettings({ traktClientId: 'tid', traktAccessToken: plain('trakt-token') })
+
+  /** Every history page full, so the read never meets a short one. Rows with
+   *  no id are skipped by the parser, so the pages cost nothing to write. */
+  let fullPages = true
+  const pagesRead: number[] = []
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = new URL(String(input instanceof Request ? input.url : input))
+    if (!url.pathname.startsWith('/sync/history')) return new Response('[]', { status: 200 })
+    const page = Number(url.searchParams.get('page'))
+    pagesRead.push(page)
+    const rows: unknown[] = Array.from({ length: fullPages ? 100 : 1 }, () => ({
+      watched_at: '2020-01-01T00:00:00.000Z',
+      type: 'movie',
+      movie: { title: 'No id', ids: {} }
+    }))
+    if (page === 1) {
+      rows[0] = {
+        watched_at: '2019-04-02T21:15:00.000Z',
+        type: 'movie',
+        movie: { title: 'Dune', year: 2021, ids: { imdb: 'tt1160419' } }
+      }
+    }
+    return new Response(JSON.stringify(rows), { status: 200 })
+  }) as typeof fetch
+
+  // The Trakt lane sends a request a second (taskScheduler.ts), which is
+  // more than three minutes for 200 pages. A clock that moves a second each
+  // time it is read lets each page go as soon as it is asked for. Kept for
+  // both imports: the lane's last send is stamped on this clock, and back
+  // on the real one the next send would wait for that time to come round.
+  const realNow = Date.now
+  let fakeNow = realNow()
+  Date.now = () => (fakeNow += 1000)
+  try {
+    const summary = await client.importTraktLibrary()
+    assert.equal(Math.max(...pagesRead), 200, 'the limit is kept')
+    assert.equal(summary.partial, true, 'a read stopped at the limit says so')
+    assert.equal(summary.plays, 1)
+    // The position is recorded all the same: Trakt answers newest first, so
+    // what was left out is the oldest history, which no later pull reads.
+    assert.ok(db.getCache(traktPullKey('profile-a'), { allowExpired: true }))
+
+    fullPages = false
+    pagesRead.length = 0
+    const whole = await client.importTraktLibrary()
+    assert.deepEqual(pagesRead, [1], 'a short first page is the end')
+    assert.equal(whole.partial, undefined, 'a read that reached the end is not partial')
+  } finally {
+    Date.now = realNow
+  }
+  db.close()
+  console.log('trakt partial import tests passed')
+}
+
 void pulls()
   .then(() => console.log('trakt import tests passed'))
   .then(ratingRetries)
+  .then(partialImport)
   .catch((error) => {
     console.error(error)
     process.exit(1)

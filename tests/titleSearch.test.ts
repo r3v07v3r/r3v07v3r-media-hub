@@ -21,6 +21,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { createDatabase } from '../src/main/media-hub/database'
 import {
   CLOSE_MATCH_RANK,
+  combinedShortfall,
   comparableTitle,
   mergeSearchResults,
   searchTokens,
@@ -417,6 +418,25 @@ async function providerChecks(): Promise<void> {
     const outcome = await settleProvider<CatalogItem>(failed, 1_000)
     assert.deepEqual(outcome, { items: [], unreachable: true, reason: 'failed' })
   })
+
+  // The assistant asks the three kinds at once and says one thing: "could
+  // not be reached" if any one failed, "did not answer in time" only when
+  // every one that fell short was just slow.
+  await checkAsync(
+    'several answers report failed over slow, and nothing when all answered',
+    async () => {
+      const ok = { providerUnreachable: false }
+      const slow = { providerUnreachable: true, providerReason: 'slow' as const }
+      const failed = { providerUnreachable: true, providerReason: 'failed' as const }
+      assert.equal(combinedShortfall([ok, ok, ok]), undefined)
+      assert.equal(combinedShortfall([ok, slow, ok]), 'slow')
+      assert.equal(combinedShortfall([slow, slow, ok]), 'slow')
+      assert.equal(combinedShortfall([slow, failed, ok]), 'failed')
+      // An answer with no reason is from an older backend: failed.
+      assert.equal(combinedShortfall([slow, { providerUnreachable: true }]), 'failed')
+      assert.equal(combinedShortfall([]), undefined)
+    }
+  )
 
   await checkAsync('with no grace the provider is waited for until it settles', async () => {
     const late = new Promise<CatalogItem[]>((resolve) =>

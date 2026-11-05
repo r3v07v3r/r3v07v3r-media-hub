@@ -25,6 +25,7 @@ import type {
 import { parseImdbRatingsCsv } from '../../shared/media-hub/importCsv'
 import { importLetterboxdLibrary } from './letterboxdImport'
 import { readBackup } from './backup'
+import { backupBeforeRewrite } from './autoBackup'
 import { requestRecommendationsRebuild } from './recommendations'
 import { watchRegion } from './watchProviders'
 import { keepAnimeHistoryWithShows } from './animeSyncRepair'
@@ -317,7 +318,15 @@ export function registerAppIpc(): void {
     if (result.canceled || !filePath) return null
 
     const backup = readBackup(filePath)
-    const summary = getDatabase().importBackup(filePath)
+    // The library this replaces, saved first with the automatic backups
+    // (autoBackup.ts), so restoring the wrong file can itself be undone.
+    // Only once the file has been read and accepted, and the restore is
+    // handed that read rather than the path: the rotation after this backup
+    // can delete the oldest automatic one, which may be the file picked. As
+    // for every step that takes one, a backup that cannot be written is
+    // logged and does not stop the restore.
+    backupBeforeRewrite('restore')
+    const summary = getDatabase().importBackup(backup)
 
     // The rows are keyed by profile id, so the profiles have to come back too
     // or a restored library would belong to nobody. Merged by id rather than

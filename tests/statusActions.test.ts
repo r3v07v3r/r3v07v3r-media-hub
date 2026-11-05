@@ -73,7 +73,11 @@ import {
   holdEntries,
   holdTouchedEntries
 } from '../src/renderer/src/lib/mediaHub/heldFeed'
-import { resolveLibrarySelection } from '../src/renderer/src/lib/mediaHub/librarySelection'
+import {
+  libraryMembershipKey,
+  resolveLibrarySelection,
+  stampLibrarySelection
+} from '../src/renderer/src/lib/mediaHub/librarySelection'
 import type { HomeRail, MediaItem, Recommendation } from '../src/renderer/src/types'
 import { createApi, type ApiTransport } from '../src/preload/api'
 import { MEDIA_HUB_CHANNELS } from '../src/shared/media-hub/ipc-channels'
@@ -200,6 +204,18 @@ check('a failed Play is a repeat only of the same title, whatever the words', ()
   // A keyed toast and an unkeyed one in the same words are not a repeat.
   const unkeyed = { ...failed('d', 'dune'), key: undefined }
   assert.equal(addNotification(again.kept, unkeyed).dropped.length, 0)
+  // The same title failing for another reason, in other words, is still a
+  // repeat: one Retry per title, saying the latest reason.
+  const otherReason = { ...failed('e', 'dune'), message: 'No playable source was found.' }
+  const latest = addNotification(again.kept, otherReason)
+  assert.deepEqual(
+    latest.kept.map((x) => x.id),
+    ['b', 'e']
+  )
+  assert.deepEqual(
+    latest.dropped.map((x) => x.id),
+    ['c']
+  )
 })
 
 check('the launch toast names only show rows added to since the last toast, per profile', () => {
@@ -834,18 +850,106 @@ check('a filter, Hide toggle or search that hides the selected title moves the p
   assert.equal(resolveLibrarySelection([[hero, fresh]], picked, hero, true), fresh)
   // Nothing selected is unchanged.
   assert.equal(resolveLibrarySelection([[hero]], null, hero, true), hero)
-  // The page stamps the query when the selection changes and compares it.
+  // The page stamps the query each render (stampLibrarySelection) and
+  // compares the stamp with the membership key, not the whole filter state.
   const page = fs
     .readFileSync(
       path.resolve(__dirname, '../src/renderer/src/components/category/AnimeLibraryPage.tsx'),
       'utf8'
     )
     .replace(/\r\n/g, '\n')
+  assert.match(page, /const queryKey = libraryMembershipKey\(\s*filters,/)
   assert.match(
     page,
-    /if \(selectedUnder\.selection !== selection\) setSelectedUnder\(\{ selection, query: queryKey \}\)/
+    /const selectionStamp = stampLibrarySelection\(\s*selectedUnder,\s*selectionPools,\s*selection,\s*queryKey\s*\)\s*if \(selectionStamp !== selectedUnder\) setSelectedUnder\(selectionStamp\)/
   )
-  assert.match(page, /activeHero,\s*selectedUnder\.query !== queryKey\s*\)/)
+  assert.match(page, /activeHero,\s*membershipKnown && selectionStamp\.query !== queryKey\s*\)/)
+  // "On the page" is what the page draws: Popular too, and under a search
+  // only its results and the hero.
+  assert.match(
+    page,
+    /searchActive\s*\?\s*\[browseItems, heroItems\]\s*:\s*\[browseItems, continuing, recommended, popular, heroItems\]/
+  )
+  // An empty grid while a new query's first page (or the search) loads is
+  // not a filter that hid the title.
+  assert.match(
+    page,
+    /const membershipKnown = searchActive \? !categorySearch\.loading : arrayFallback \|\| !browse\.loading/
+  )
+})
+
+check('a title picked from Popular, or a grid still loading, keeps the panel', () => {
+  const hero = media('hero')
+  const picked = media('picked')
+  const base = filterStateFromSearchParams(new URLSearchParams())
+  const q1 = libraryMembershipKey(base, '')
+  const q2 = libraryMembershipKey({ ...base, genre: 'Drama' }, '')
+  let stamp = stampLibrarySelection({ selection: null, query: q1 }, [[hero, picked]], picked, q1)
+  // A filter changed and the grid is still empty, loading its first page:
+  // nothing is known to have hidden it, so it is held, and the stamp waits.
+  stamp = stampLibrarySelection(stamp, [[], [hero]], picked, q2)
+  assert.equal(stamp.query, q1)
+  const membershipKnown = false
+  assert.equal(
+    resolveLibrarySelection([[], [hero]], picked, hero, membershipKnown && stamp.query !== q2),
+    picked
+  )
+  // If the page loads without it, the filter hid it: the hero.
+  assert.equal(resolveLibrarySelection([[], [hero]], picked, hero, stamp.query !== q2), hero)
+  // If it arrives with it (or Popular still shows it), it was seen under
+  // the new query, so it is held from here.
+  stamp = stampLibrarySelection(stamp, [[], [], [], [picked], [hero]], picked, q2)
+  assert.deepEqual(stamp, { selection: picked, query: q2 })
+  assert.equal(
+    resolveLibrarySelection([[], [hero]], picked, hero, stamp.query !== q2),
+    picked,
+    'acted on after it was seen, it stays'
+  )
+})
+
+check('the side panel hold survives a re-sort, and a filter seen after the pick', () => {
+  const hero = media('hero')
+  const picked = media('picked')
+  const base = filterStateFromSearchParams(new URLSearchParams())
+  const q1 = libraryMembershipKey(base, '')
+  // Sorting reorders the page and hides nothing: the same key.
+  assert.equal(libraryMembershipKey({ ...base, sort: 'year-desc' }, ''), q1)
+  // A filter, a Hide toggle or a search is a different one.
+  const q2 = libraryMembershipKey({ ...base, genre: 'Drama' }, '')
+  assert.notEqual(q2, q1)
+  assert.notEqual(libraryMembershipKey({ ...base, hideWatched: !base.hideWatched }, ''), q1)
+  assert.notEqual(libraryMembershipKey(base, 'dune'), q1)
+
+  // Picked under q1, then acted on and gone from every shelf after a
+  // re-sort: still held.
+  let stamp = stampLibrarySelection({ selection: null, query: q1 }, [[hero, picked]], picked, q1)
+  assert.deepEqual(stamp, { selection: picked, query: q1 })
+  const resorted = libraryMembershipKey({ ...base, sort: 'title-asc' }, '')
+  stamp = stampLibrarySelection(stamp, [[hero]], picked, resorted)
+  assert.equal(resolveLibrarySelection([[hero]], picked, hero, stamp.query !== resorted), picked)
+
+  // A filter changed and the title is still on the page: the stamp moves to
+  // the new query, so acting on it afterwards (it leaves the page under the
+  // same query) keeps it in the panel.
+  const seen = stampLibrarySelection(stamp, [[hero, picked]], picked, q2)
+  assert.deepEqual(seen, { selection: picked, query: q2 })
+  const after = stampLibrarySelection(seen, [[hero]], picked, q2)
+  assert.equal(after, seen, 'nothing changed, the same stamp')
+  assert.equal(resolveLibrarySelection([[hero]], picked, hero, after.query !== q2), picked)
+
+  // A filter that hides it once it has been seen: the stamp stays, and the
+  // panel moves on.
+  const q3 = libraryMembershipKey({ ...base, genre: 'Comedy' }, '')
+  const hidden = stampLibrarySelection(after, [[hero]], picked, q3)
+  assert.equal(hidden, after)
+  assert.equal(resolveLibrarySelection([[hero]], picked, hero, hidden.query !== q3), hero)
+
+  // A new pick is stamped with the query it was made under.
+  const other = media('other')
+  assert.deepEqual(stampLibrarySelection(hidden, [[hero]], other, q3), {
+    selection: other,
+    query: q3
+  })
 })
 
 // --- the phone's Not interested ---------------------------------------------
