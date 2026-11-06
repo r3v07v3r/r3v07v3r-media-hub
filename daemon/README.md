@@ -7,20 +7,26 @@ your network, then serves them to the app over the LAN, so a slow internet
 connection is paid once overnight instead of at play time.
 
 Zero-config: run it, then start the app. A few seconds after launch the app
-looks for the daemon over mDNS, falls back to asking every address on its
-own subnet for `/api/ping` on port 8945 when multicast is filtered, and asks
-to join the first one it finds. Nobody types an address, and nothing is tied
-to a particular range. The first device to claim the server becomes its
-administrator. Every later request raises a toast in the administrator's app
-("… wants to use r3-host. Allow it?") with **Allow** and **Deny**, plus a
-desktop notification when the app is not in front; with open join switched
-on, devices are let in with no prompt. If the server's address changes, the
-app finds the same server again (same name, and it still recognises this
-device's token) and updates the stored address. **Leave** stops the launch
-search until you join by hand again. The manual address field under
-**Control centre → Caching** is still there as an override; a typed address
-is replaced only once it has stopped answering and the same server has been
-found elsewhere. There is no pairing code.
+looks for the daemon on your network and asks to join the first one it
+finds; usually nobody types an address. The first device to claim the
+server becomes its administrator. Every later request raises a toast in the
+administrator's app ("… wants to use r3-host. Allow it?") with **Allow** and
+**Deny**, plus a desktop notification when the app is not in front; with
+open join switched on, devices are let in with no prompt. If the server's
+address changes, the app finds the same server again (same name, and it
+still recognises this device's token) and updates the stored address. There
+is no pairing code.
+
+The app looks over mDNS first, then falls back to
+asking the addresses around it for `/api/ping` on port 8945. That fallback
+only covers private home-network ranges (10.x, 172.16-31.x, 192.168.x and
+169.254.x), at most the 254 addresses of the /24 this machine sits in, and
+only port 8945, so a server on another port, or across a wider or routed
+network, is found over mDNS or by typing its address. The launch search and
+**Control centre → Caching** use the fallback; the searches every half hour
+after launch use mDNS alone. The manual address field under **Control
+centre → Caching** is an override; a typed address is replaced only once it
+has stopped answering and the same server has been found elsewhere.
 
 Every title the daemon downloads leaves on its own: it expires after an idle
 TTL (14 days, refreshed by playing) or a hard maximum age (30 days, deferred
@@ -111,11 +117,17 @@ administrator who chose **Leave**:
    **Cancel** and then **Ask to join**. Only a request made after the
    restart is let in at once.
 
+While claiming is reopened, the daemon's log says so when it starts and
+again every five minutes, names every device it lets in without asking,
+and logs the claim that closes the window. Only a device other than the
+current administrator closes it: if the old administrator device claims
+again, the claim succeeds but the window stays open, and the log says that
+too.
+
 If the app answers "Too many devices are waiting to join", wait a minute and
 ask again. If it still says so, eight requests are already waiting
 (**Cancel** takes its request back when the server answers at that moment,
-but one cancelled while the server was away, or on a daemon older than
-`POST /api/pair/withdraw`, stays behind), and with the
+but one cancelled while the server was away stays behind), and with the
 administrator gone nobody can deny them. Delete the entries with
 `"status":"pending"` from `auth.json` in the data directory, then restart
 the daemon as in step 2 and ask once more. The daemon reads `auth.json` only
@@ -134,7 +146,12 @@ caps a shared box needs: `MemoryMax=512M`, `Nice=10`, `CPUWeight=20`,
 `NoNewPrivileges=true`. The daemon is built to lose every contest for the
 machine, so keep those caps on anything latency-sensitive.
 
-If you write the unit by hand, keep `Restart=always` in it.
+If you write the unit by hand, keep `Restart=always` in it, and put
+`StartLimitIntervalSec=0` under `[Unit]`: under `[Service]` systemd ignores
+it with a warning and keeps its default start limit. `r3-cache --install`
+always writes the unit afresh, so running it again repairs a unit that
+carries the warning.
+
 `journalctl --user -u r3-cache -n 20` shows the startup banner: server
 name, port, disk budget and data directory. Until someone claims the
 server from the app it also logs an UNCLAIMED reminder every five minutes.
@@ -181,21 +198,31 @@ The console window shows the same banner as above.
   everyone else's; the administrator sees the whole queue with each job's
   device name.
 - **Everyone pays for their own downloads.** Each person shares their own
-  TorBox key from the app, kept in one `0600` `credentials.json` in the
-  daemon's data directory, keyed by device (file permissions, not an OS
-  keychain). A fetch is always made with the account of whoever asked for
+  TorBox key from the app, kept as plain text in one `credentials.json` in
+  the daemon's data directory, keyed by device. On Linux the file is `0600`;
+  on Windows that mode does not apply and the user profile's own
+  permissions are the only protection. There is no OS
+  keychain. A fetch is always made with the account of whoever asked for
   that title; the daemon never bills one household member for another's
   watchlist. A job whose owner has not shared a key waits; if somebody who
   has shared one asks for the same title while it is still queued, the job
   becomes theirs and is fetched with their key. Any other second request
   leaves the job with the device that queued it.
 - **Leaving.** **Leave** in the app forgets the server on this device and,
-  if the server answers at that moment, withdraws your TorBox key. The
-  device stays in the administrator's list, with any key the server did not
-  hear withdrawn, until the administrator removes it. Leaving does not hand
+  if the server answers at that moment, withdraws your TorBox key, or, if
+  your request is still waiting, withdraws the request.
+  It also stops the app looking for a cache server at launch, including a
+  search already under way, until you choose **Ask to join** again. An
+  approved device stays in the administrator's device list, with any key the
+  server did not hear withdrawn, until the administrator removes it. Leaving does not hand
   on the administrator role, and coming back counts as a new device, so an
   administrator who leaves cannot take the role back from the app;
   `--claim-admin` (under [Running it](#running-it)) is the way back.
+- **Plain HTTP on the LAN.** The daemon serves the network over plain
+  HTTP with no encryption. A device's token travels in the clear on every
+  request, and in the stream address the player opens, so anyone who can
+  watch traffic on the network can copy it and act as that device. Run it
+  only on a network you trust.
 
 The design is written up in [docs/CACHE-PERMISSIONS.md](../docs/CACHE-PERMISSIONS.md).
 

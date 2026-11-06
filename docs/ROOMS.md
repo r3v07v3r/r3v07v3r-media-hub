@@ -28,12 +28,12 @@ carries the admin's public key (`admin: { id, pub }`, `party.ts`
 member keeps that id locally as the room's `adminFriendId`
 (`roomRules.ts`). Members trust the code they joined with, so the
 admin badge and the rename rule work offline, with no relay round-trip,
-on any transport. The creator also holds two credentials nobody else
-has:
-
-- the relay **host token** from creating the room — the credential the
-  relay's kick endpoint requires;
-- the room's current **invite code**, which they re-issue after a kick.
+on any transport. The creator also holds the one credential nobody else
+has: the relay **host token** from creating the room, which the relay's
+kick endpoint requires. The invite code is not theirs alone. Every member
+keeps a copy of the current code, and that copy follows each re-key and
+each rename, so any member can hand out a working invite. Only the admin
+mints a new code, after a kick.
 
 A room whose creator predates admins (the migrated friends group, or one
 joined by an old v2 code) simply has no admin. Nobody can rename it for
@@ -45,22 +45,24 @@ not a defect.
 Every install holds an **Ed25519 private key that never leaves the
 device** — the model is the one EMV bank cards use, and it was asked
 for by that name. A member's id is the sha256 of their public key, so
-**the identity is the key**: claiming an id without its private key is
-impossible, because nothing you say verifies. There is no registry, no
+**the identity is the key**: wherever messages are signed (every room
+with an admin) and at the relay's door, claiming an id without its
+private key is impossible, because nothing you say verifies. There is no registry, no
 first-use leap of faith, and no bearer string behind any identity —
 three earlier drafts each patched a symptom of bearer credentials
 (broadcast keys, harvestable household keys, self-declared hashes)
 before this replaced the class.
 
-**Every room message is signed by its sender, then encrypted.** The
-relay and the cache hop still see only ciphertext; members see proof of
-who spoke. The signature covers the room, a timestamp and a per-sender
-sequence number, so a captured message cannot be replayed and a
-signature made for one room means nothing in another. What used to be a
-trust statement — "within-room identity is honest, not enforced" — is
-now a property: **a member who leaks the room secret leaks words, never
-a voice.** Renames and re-keys are believed only from the admin's
-verified key, which travels in the invite code.
+**In a room with an admin, every message is signed by its sender, then
+encrypted** (a room with no admin is not; see below). The relay and the cache hop still see
+only ciphertext; members see proof of who spoke. The signature covers
+the room, a timestamp and a per-sender sequence number, so a signature
+made for one room means nothing in another. A member refuses a message
+whose sequence is not above that sender's last one, or that is more
+than ten minutes old, plus however long the relay held a retained copy
+(at most another ten). So **a member who leaks the room secret leaks
+words, never a voice.** Renames and re-keys are believed only from the
+admin's verified key, which travels in the invite code.
 
 ## Membership at the relay
 
@@ -86,11 +88,13 @@ membership layer and behave exactly as before.
 
 ## What kicking a member actually does
 
-The admin kicks an identity — and the identity everyone sees, the
-identity the relay admits, and the identity a kick names are now one
-thing, so there is no history to reconstruct and no install the room
-once saw that a kick could miss: every device of theirs speaks as that
-id or not at all. In order — and the order is the guarantee:
+The admin kicks an identity. The id everyone sees, the id the relay
+admits and the id a kick names are one thing: the hash of one install's
+key. An identity belongs to an install, not to a person. Each device
+makes its own key the first time it needs one, and nothing copies that
+key to the person's other devices. Someone with a laptop and a phone is
+two members, and removing them means kicking each install the room
+lists. In order — and the order is the guarantee:
 
 1. The relay **bans** those memberKeys, **closes** their connections,
    and **rotates** the joinSecret — atomically, in one admin-authorised
@@ -100,8 +104,8 @@ id or not at all. In order — and the order is the guarantee:
    under the old secret. The kicked member is already banned and
    disconnected: they cannot receive this message and cannot reconnect
    to fetch it.
-3. The admin's invite code is re-issued with the new secret and
-   joinSecret. The old code is dead for new joiners.
+3. The new code, with the new secret and joinSecret, reaches every
+   member's copy with the re-key. The old code is dead for new joiners.
 
 A member who was **offline during the kick** comes back, is admitted
 (known identity, fresh tap), and announces under an old secret — possibly several
@@ -110,7 +114,7 @@ secrets rather than one. The admin answers in whichever old dialect the
 returner actually spoke, handing them the current code — safe, because
 the one party that must not hear it cannot connect. Nobody has to do
 anything by hand. Someone offline through more rotations than the chain
-keeps (five) needs the code re-shared once, which the admin always has.
+keeps (five) needs the code re-shared once, which any member has.
 
 ## What it deliberately does not promise
 
@@ -129,11 +133,17 @@ Stated here so a green test suite is never read as more than it proves:
   because the room already knows it. A kick reaches the members the room
   lists; for anyone else, make a new room (see
   [party-sync-worker/README.md](../party-sync-worker/README.md#rooms-hop-lan-daemon)).
-- **Within-room identity is now enforced, with one bound.** Nobody can
-  speak as anyone else — every message verifies against its sender's
-  key. What a member (or a leaked secret) still gets is READABILITY of
+- **In a room with an admin, nobody can speak as anyone else.** Every
+  message verifies against its sender's key. In a room with no admin,
+  messages are not signed, so a member there can speak under another
+  member's name. What a member (or a leaked secret) still gets is READABILITY of
   traffic under that secret; identity and readability part ways, and
   the rotation after a kick ends even the readability.
+- **Replay protection after a restart rests on the freshness window
+  alone.** A member's record of each sender's last sequence lives in
+  memory, so a member who has just restarted relies on the freshness
+  window above. Within that window a captured message can be played to
+  them once more.
 - **Key loss is identity loss.** There is no recovery scheme: a device
   that loses its key is a stranger with a familiar name, and the admin
   re-invites it. Stated plainly rather than promising an account-reset

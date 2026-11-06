@@ -32,9 +32,9 @@ adb push r3-media-hub-android.apk /sdcard/Download/
 
 The first launch fetches the catalogue from its sources, which can take up to
 a minute. Until it arrives, Home shows placeholder rows and, after a few
-seconds, a line saying it is still loading. Movies, Series and Anime say
-"Nothing here yet." and fill in by themselves when it lands, so there is no
-need to reopen them.
+seconds, a line saying it is still loading. Movies, Series and Anime also say they are still loading, and fill in by
+themselves when the catalogue lands, so there is no need to reopen them. If
+nothing has arrived after about two minutes, they say "Nothing here yet."
 
 ## Updates
 
@@ -56,7 +56,7 @@ over them.
 
 Release builds are signed with a key that is never in the repository. The
 **Android app** workflow uses it on release runs whenever the four secrets
-below exist; without them it signs with the debug key as before. Its **Build
+below exist; without them it signs with the debug key. Its **Build
 APK** step ends with a line saying which key signed the build.
 
 1. Create the keystore (PKCS12, valid for 25 years) with `keytool`, which
@@ -105,7 +105,7 @@ APK** step ends with a line saying which key signed the build.
    debug-signed build, uninstall R3 Media Hub once (this removes its settings,
    sign-ins and desktop link from that phone), then install
    `r3-media-hub-android.apk` from the latest release and link it again.
-   Updates after that install over each other as before.
+   After that, each update installs over the last.
 
 ## Linking to the desktop
 
@@ -122,7 +122,13 @@ carries only Simkl: Trakt and MyAnimeList stay on the desktop, and the phone
 has no sign-in for them, so a list kept only there does not reach the phone.
 The desktop runs the same catch-up when it opens and when its window comes
 back to the front, so what you watch on the phone reaches the desktop's
-history through Simkl too.
+history through Simkl too. If a catch-up fails, the app runs it again by
+itself after 3 minutes, then 6, 12, 24 and 48, so a TV left on Home recovers
+without being reopened; after that it waits until the app next opens or comes
+back to the front. A retry that comes sooner than the backend's own wait after
+a failure does not ask Simkl, so Simkl is not asked more often than that. No
+catch-up runs while something is playing; one that falls due then waits until
+the player closes.
 
 ## Home and your lists
 
@@ -149,17 +155,20 @@ once Home refreshes and the list comes through.
 Home can show these notes above its rows:
 
 - **Could not reach the backend for recommendations.**, in orange, when Home's
-  own request failed. On a first launch it can mean no catalogue source was
-  reachable; see Known limitations.
+  own request failed.
+- **The online catalogue is unavailable right now, so there are no
+  suggestions.**, when no catalogue source could be read and there is no
+  earlier list of suggestions to fall back on. Continue Watching and Plan to
+  Watch still show; suggestions come back once a catalogue answers.
 - **Updating…**, while a catch-up that has run for more than a second
   finishes. On a freshly linked phone the rows fill in as that first pass goes,
   Plan to Watch first and Continue Watching once the watched history is in;
   until it is done, Home does not show its "Nothing to show yet" note.
-- **Simkl signed this device out. Link your computer again in Settings.** Scan
-  a new code under Settings → **Your computer** → **Scan code**. Linking hands
-  the phone the desktop's own Simkl sign-in, so if the note comes back straight
-  after, reconnect Simkl on the desktop first and scan again. Until then the
-  phone asks Simkl again only every six hours, or after a Force stop.
+- **Simkl signed this device out. Reconnect Simkl on your computer, then link
+  this device again in Settings.** Linking hands the phone the desktop's own
+  Simkl sign-in, so reconnect Simkl on the desktop first, then scan a new code
+  under Settings → **Your computer** → **Scan code**. Until then the phone asks
+  Simkl again only every six hours, or after a Force stop.
 - A line saying to link your computer in Settings, on a phone with no Simkl
   sign-in and nothing on its lists. Linking clears it only if the desktop
   itself is signed in to Simkl.
@@ -188,9 +197,10 @@ watched.
 ## Debugging
 
 - `adb logcat -s R3Backend` — the backend's own output.
-- `chrome://inspect` on a PC reaches the page over USB. Every APK is the debug
-  build type, the release-signed ones included (the release key only replaces
-  its signing), so this works on any installed build.
+- `chrome://inspect` on a PC reaches the page over USB only on builds signed
+  with the debug key (pull-request builds, and releases made before the release
+  key). A release-signed APK is not debuggable, so neither inspection nor
+  `adb run-as` can reach it or its stored sign-ins; `adb logcat` still works.
 
 ## Known limitations
 
@@ -200,7 +210,6 @@ watched.
 - Watch Party: the phone and TV app cannot host or join a party.
 - Not interested marks shared between the phone and the desktop: each keeps its
   own, and neither is sent to the tracking services.
-- A first launch with no catalogue source reachable: Home says it could not
-  reach the backend and shows no rows, not even Continue Watching or Plan to
-  Watch, until a catalogue has been fetched once.
+- A first launch with no catalogue source reachable has no suggestions until a
+  catalogue has been fetched once (see the notes under Home and your lists).
 - 32-bit devices (`armeabi-v7a`): needs Termux's `arm` Node staged the same way.
