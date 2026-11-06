@@ -227,7 +227,11 @@ The console window shows the same banner as above.
   a job whose file is already complete on disk is granted from disk rather
   than fetched again. The file is the infoHash plus the file index, or the
   episode named by the key when there is no index, so the episodes of one
-  season pack stay separate jobs.
+  season pack stay separate jobs. The store still keeps one file per
+  torrent (one folder and one `meta.json` per infoHash), so while one
+  episode of a pack is held, a request for another episode of it is refused
+  with 409 `other-file-held` (the app falls back to its other tiers), and a
+  job for one queued earlier is expired rather than written over it.
 - **Leaving.** **Leave** in the app forgets the server on this device and,
   if the server answers at that moment, withdraws your TorBox key, or, if
   your request is still waiting, withdraws the request.

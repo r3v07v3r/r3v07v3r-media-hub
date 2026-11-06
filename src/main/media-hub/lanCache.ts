@@ -33,8 +33,10 @@ import {
   getLanCacheConnection,
   getTorBoxToken,
   isLanCacheAutoJoinOn,
+  isLanCacheKeySyncPending,
   setLanCacheAutoJoin,
-  setLanCacheConnection
+  setLanCacheConnection,
+  setLanCacheKeySyncPending
 } from './settingsStore'
 import { findLanCaches, type DiscoveredLanCache } from './lanCacheDiscovery'
 
@@ -188,6 +190,10 @@ export async function queueLanCacheJob(payload: LanCacheJobPayload): Promise<boo
       }
       return false
     }
+    // 409 other-file-held: the server keeps one file per torrent and holds
+    // another episode of this pack. Not a fault, and it would repeat on
+    // every feeder pass, so it is not logged.
+    if ((error as HttpError).status === 409) return false
     logError('lancache:queue', error)
     return false
   }
@@ -213,19 +219,45 @@ export async function syncTorBoxKeyToLanCache(): Promise<boolean> {
   try {
     if (torboxToken && !connection.shareTorbox) {
       const status = await request<LanCacheStatusResponse>('/api/status')
-      if (!status.torboxLinked) return false
+      if (!status.torboxLinked) {
+        setLanCacheKeySyncPending(false)
+        return false
+      }
     }
     const answer = await request<{ torboxLinked?: boolean }>('/api/credentials', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ torboxToken })
     })
+    setLanCacheKeySyncPending(false)
     if (answer.torboxLinked) keyRequiredRaisedFor = null
     return answer.torboxLinked === true
   } catch (error) {
+    // The server was away (or refused). Remembered, so the change, a
+    // removal included, is sent the next time the server answers
+    // (retryLanCacheKeySync) rather than lost with this one attempt.
+    setLanCacheKeySyncPending(true)
     logError('lancache:credentials', error)
     return false
   }
+}
+
+/** Set once this run has synced the key at least once, so the launch pass
+ *  sends it again (it is idempotent) even with nothing marked pending. */
+let keySyncedThisRun = false
+
+/**
+ * Sends a key change that has not reached the cache yet, or, once per run,
+ * the key itself when the person agreed to keep it there. Called whenever
+ * the stored connection has just been found answering.
+ */
+async function retryLanCacheKeySync(): Promise<void> {
+  const connection = getLanCacheConnection()
+  if (!connection || connection.pending) return
+  const due = isLanCacheKeySyncPending() || (!keySyncedThisRun && connection.shareTorbox === true)
+  if (!due) return
+  keySyncedThisRun = true
+  await syncTorBoxKeyToLanCache()
 }
 
 /**
@@ -603,7 +635,11 @@ export async function keepLanCacheAddressCurrent(
 ): Promise<AddressCheck> {
   const connection = getLanCacheConnection()
   if (!connection) return 'none'
-  if ((await checkToken(connection.url, connection.token)) === 'known') return 'current'
+  if ((await checkToken(connection.url, connection.token)) === 'known') {
+    // Answering again: a key change made while it was away goes now.
+    await retryLanCacheKeySync()
+    return 'current'
+  }
 
   const found = await discover()
   for (const server of found) {
@@ -617,6 +653,7 @@ export async function keepLanCacheAddressCurrent(
     setLanCacheConnection({ ...latest, url: server.url })
     refreshTrustedHostsRef?.()
     emit({ kind: 'moved', serverName: latest.name || server.name, url: server.url })
+    await retryLanCacheKeySync()
     return 'moved'
   }
   return 'lost'
@@ -835,6 +872,8 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
     if (!isLanCacheConnected()) return { connected: false as const }
     try {
       const status = await request<LanCacheStatusResponse>('/api/status')
+      // It answers, so a key change that missed it earlier can go now.
+      if (isLanCacheKeySyncPending()) void syncTorBoxKeyToLanCache()
       return { connected: true as const, status }
     } catch (error) {
       return { connected: true as const, error: (error as Error).message }

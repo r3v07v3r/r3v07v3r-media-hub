@@ -110,6 +110,21 @@ export function createFetcher({
       log(`held     ${job.title} (already on disk)`)
       return
     }
+    // ANOTHER FILE OF THE SAME TORRENT is already here (the other episode
+    // of a season pack, queued before the first landed). Storage keeps one
+    // folder and one meta.json per infoHash, so fetching this would
+    // overwrite that item's record and treat its bytes as this download's.
+    // Expired, not retried: waiting does not change it. POST /api/jobs
+    // refuses the same case up front (409 other-file-held).
+    if (held && !heldIsSameFile(held, job)) {
+      jobs.update(job.contentKey, {
+        state: 'expired',
+        lastError: 'This server already holds another file from that torrent.'
+      })
+      nextAttemptAt.delete(job.contentKey)
+      log(`refused  ${job.title}: another file of that torrent is held`)
+      return
+    }
     // Always the OWNER's account: the person whose request this is pays
     // with their own TorBox quota, never a housemate's. POST /api/jobs
     // refuses a device with no saved key, so this only catches a key

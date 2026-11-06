@@ -889,6 +889,20 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
           json(res, 200, { state: 'ready' })
           return
         }
+        // ONE FILE PER TORRENT on this server. Storage keeps one folder and
+        // one meta.json per infoHash, so a second file of a torrent already
+        // held (another episode of the same season pack) would overwrite
+        // the first item's record and leave its bytes on disk uncounted.
+        // Refused until the store can tell files within a torrent apart;
+        // the app falls back to its other tiers, as for any refusal.
+        if (held && !sameHeldFile) {
+          json(res, 409, {
+            error:
+              'This server already holds another file from that torrent and keeps one file per torrent.',
+            code: 'other-file-held'
+          })
+          return
+        }
       }
       // EVERYONE PAYS WITH THEIR OWN KEY, so a device that has not saved one
       // here cannot queue a download. Checked after the dedupe above, so a

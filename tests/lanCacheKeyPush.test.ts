@@ -7,6 +7,8 @@
 //     key change is not pushed either;
 //   - with consent, a changed key replaces the saved one and a removed key
 //     is removed from the cache;
+//   - a key change or removal made while the server is away is sent when
+//     it next answers;
 //   - a download refused for want of a key is reported once, not per title;
 //   - the app's own claim closes a --claim-admin reopening, and the explicit
 //     close works too.
@@ -17,6 +19,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
+import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { registerHooks } from 'node:module'
 import os from 'node:os'
@@ -169,6 +172,38 @@ async function main(): Promise<void> {
         assert.equal(savedKey(), '', 'the cache no longer holds a key for this device')
       }
     )
+
+    await check('a key change made while the server is away is sent when it answers', async () => {
+      const live = store.getLanCacheConnection()!
+      assert.equal(live.shareTorbox, true, 'the auto-join consent is remembered')
+      // The server is away: the same connection at an address nobody answers.
+      const probe = http.createServer()
+      await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve))
+      const deadPort = (probe.address() as AddressInfo).port
+      await new Promise<void>((resolve) => probe.close(() => resolve()))
+      store.setLanCacheConnection({ ...live, url: `http://127.0.0.1:${deadPort}` })
+
+      setAppKey('app-torbox-key-away')
+      assert.equal(await lan.syncTorBoxKeyToLanCache(), false)
+      assert.equal(store.isLanCacheKeySyncPending(), true, 'the failed sync is remembered')
+
+      // Back at its address: the next reachability check sends it.
+      store.setLanCacheConnection(live)
+      assert.equal(await lan.keepLanCacheAddressCurrent(found), 'current')
+      assert.equal(savedKey(), 'app-torbox-key-away', 'the change landed')
+      assert.equal(store.isLanCacheKeySyncPending(), false, 'and is no longer pending')
+
+      // A removal while away is a change too: the cache ends up with no key.
+      store.setLanCacheConnection({ ...live, url: `http://127.0.0.1:${deadPort}` })
+      setAppKey('')
+      await lan.syncTorBoxKeyToLanCache()
+      assert.equal(store.isLanCacheKeySyncPending(), true)
+      assert.equal(savedKey(), 'app-torbox-key-away', 'still there while the server is away')
+      store.setLanCacheConnection(live)
+      assert.equal(await lan.runLanCacheAutoConnect(found), 'current')
+      assert.equal(savedKey(), '', 'removed once it answers')
+      assert.equal(store.isLanCacheKeySyncPending(), false)
+    })
 
     await check('a download refused for want of a key is reported once', async () => {
       events.length = 0

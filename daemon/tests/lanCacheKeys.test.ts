@@ -403,7 +403,9 @@ async function seasonPackHeldTest(): Promise<void> {
   const h = await harness('r3-pack-held-')
   try {
     await h.admin.claim(deviceIdForToken(await joinApproved(h.pairing, 'the admin')))
+    const aliceToken = await joinApproved(h.pairing, 'alice')
     const bobToken = await joinApproved(h.pairing, 'bob')
+    const aliceId = deviceIdForToken(aliceToken)
     const bobId = deviceIdForToken(bobToken)
     await postAs(h.base, bobToken, '/api/credentials', { torboxToken: 'bob-torbox-token' })
 
@@ -418,28 +420,54 @@ async function seasonPackHeldTest(): Promise<void> {
       fileIdx: 1,
       fetchedAt: Date.now(),
       lastAccessAt: Date.now(),
-      ownerDeviceId: 'someone',
+      ownerDeviceId: aliceId,
       visibility: 'private',
-      entitled: ['someone']
+      entitled: [aliceId]
     })
     await fsp.writeFile(path.join(dir, 'e01.mkv'), 'ABCD')
+    const episodeOneIntact = async (why: string): Promise<void> => {
+      const listed = await h.storage.list()
+      assert.equal(listed.length, 1, `${why}: one item listed`)
+      assert.equal(listed[0].contentKey, 'tt7:1:1', `${why}: still episode 1`)
+      assert.equal((await h.storage.find('tt7:1:1'))?.complete, true, `${why}: lookup works`)
+      assert.equal(await h.storage.usedBytes(), 4, `${why}: every byte on disk is counted`)
+      const catalog = await fetch(`${h.base}/api/catalog?keys=tt7%3A1%3A1`, {
+        headers: { Authorization: `Bearer ${aliceToken}` }
+      })
+      const body = (await catalog.json()) as { items: Array<{ contentKey: string }> }
+      assert.ok(
+        body.items.some((entry) => entry.contentKey === 'tt7:1:1'),
+        `${why}: the owner still finds episode 1`
+      )
+    }
 
-    // Episode 2 of the same pack is not answered with episode 1.
+    // Episode 2 of the same pack is refused, not downloaded over episode 1
+    // (storage keeps one file per torrent), and not answered with it.
     const e02 = await postAs(h.base, bobToken, '/api/jobs', {
       contentKey: 'tt7:1:2',
       infoHash: pack,
       title: 'Show',
       fileIdx: 2
     })
-    assert.equal(e02.status, 200)
-    assert.deepEqual(await e02.json(), { state: 'queued' }, 'another episode is queued, not ready')
+    assert.equal(e02.status, 409)
+    assert.equal(((await e02.json()) as { code?: string }).code, 'other-file-held')
+    assert.equal(h.jobs.list().length, 0, 'nothing is queued')
     assert.equal(
       (await h.storage.get(pack))?.entitled?.includes(bobId),
       false,
       'and bob is not granted the wrong file'
     )
+    await episodeOneIntact('after the refused request')
 
-    // Nor does the fetch loop mark it ready from disk: it goes to TorBox.
+    // A job for episode 2 queued before episode 1 landed is expired by the
+    // fetch loop without touching TorBox or episode 1's record.
+    h.jobs.enqueue({
+      contentKey: 'tt7:1:2',
+      infoHash: pack,
+      title: 'Show',
+      fileIdx: 2,
+      ownerDeviceId: bobId
+    })
     const resolved: string[] = []
     const fetcher = createFetcher({
       jobs: h.jobs,
@@ -454,12 +482,16 @@ async function seasonPackHeldTest(): Promise<void> {
     })
     fetcher.start()
     const deadline = Date.now() + 10_000
-    while (!resolved.includes(pack) && Date.now() < deadline) {
+    while (
+      h.jobs.list().find((job) => job.contentKey === 'tt7:1:2')?.state !== 'expired' &&
+      Date.now() < deadline
+    ) {
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
     await fetcher.stop()
-    assert.ok(resolved.includes(pack), 'episode 2 is fetched, not taken from episode 1')
-    assert.notEqual(h.jobs.list().find((job) => job.contentKey === 'tt7:1:2')?.state, 'ready')
+    assert.equal(h.jobs.list().find((job) => job.contentKey === 'tt7:1:2')?.state, 'expired')
+    assert.equal(resolved.includes(pack), false, 'nothing is fetched for it')
+    await episodeOneIntact('after the fetch loop')
 
     // The same episode under its own index is answered from disk.
     const e01 = await postAs(h.base, bobToken, '/api/jobs', {
@@ -490,7 +522,7 @@ async function seasonPackHeldTest(): Promise<void> {
       title: 'Old',
       fileIdx: 2
     })
-    assert.deepEqual(await legacyOther.json(), { state: 'queued' })
+    assert.equal(legacyOther.status, 409)
     const legacySame = await postAs(h.base, bobToken, '/api/jobs', {
       contentKey: 'tt8:1:1',
       infoHash: legacy,
@@ -498,10 +530,50 @@ async function seasonPackHeldTest(): Promise<void> {
       fileIdx: 1
     })
     assert.deepEqual(await legacySame.json(), { state: 'ready' })
+
+    // A partial of the SAME file is resumed, not refused.
+    const partial = '5'.repeat(40)
+    const partialDir = await h.storage.beginItem({
+      contentKey: 'tt9',
+      title: 'Partial',
+      infoHash: partial,
+      fileName: 'f.mkv',
+      sizeBytes: 8,
+      fileIdx: 0,
+      fetchedAt: Date.now(),
+      lastAccessAt: Date.now(),
+      ownerDeviceId: bobId
+    })
+    await fsp.writeFile(path.join(partialDir, 'f.mkv'), 'ABCD')
+    const again = await postAs(h.base, bobToken, '/api/jobs', {
+      contentKey: 'tt9',
+      infoHash: partial,
+      title: 'Partial',
+      fileIdx: 0
+    })
+    assert.deepEqual(await again.json(), { state: 'queued' })
+    const resumer = createFetcher({
+      jobs: h.jobs,
+      storage: h.storage,
+      credentials: h.credentials,
+      dataDir: h.root,
+      log: () => {},
+      resolveDownloadImpl: async (_token, infoHash) => {
+        resolved.push(infoHash)
+        return null
+      }
+    })
+    resumer.start()
+    const resumeDeadline = Date.now() + 10_000
+    while (!resolved.includes(partial) && Date.now() < resumeDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    await resumer.stop()
+    assert.ok(resolved.includes(partial), 'the partial goes back to TorBox to resume')
   } finally {
     await h.close()
   }
-  console.log('ok  one episode of a season pack is never answered with another')
+  console.log('ok  a second file of a held torrent is refused, never written over the first')
 }
 
 void keyRequiredTest()

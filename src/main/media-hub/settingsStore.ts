@@ -180,6 +180,7 @@ export interface MediaHubRawSettings {
    *  the next start, exactly as Ollama's Disconnect would (see
    *  ollamaAutoDetect). Asking to join by hand turns it back on. */
   lanCacheAutoJoin?: boolean
+  lanCacheKeySyncPending?: boolean
   /** Bound on the in-memory buffer, in MB. Clamped by
    *  streamCache.ts's memoryCacheMaxBytes; ignored on disk. */
   memoryCacheMaxMb?: number
@@ -547,6 +548,25 @@ export function clearLanCacheConnection(): void {
   delete settings.lanCacheToken
   delete settings.lanCachePending
   delete settings.lanCacheShareTorbox
+  delete settings.lanCacheKeySyncPending
+  writeSettings(settings)
+}
+
+/**
+ * Whether a TorBox key change (or removal) has still to reach the cache
+ * server: set when the sync failed because the server was away, cleared
+ * once it lands. Kept beside the connection, not in it, so every rewrite of
+ * the connection (approval, a moved address) leaves it as it was.
+ */
+export function isLanCacheKeySyncPending(): boolean {
+  return readSettings().lanCacheKeySyncPending === true
+}
+
+export function setLanCacheKeySyncPending(pending: boolean): void {
+  const settings = readSettings()
+  if (pending === (settings.lanCacheKeySyncPending === true)) return
+  if (pending) settings.lanCacheKeySyncPending = true
+  else delete settings.lanCacheKeySyncPending
   writeSettings(settings)
 }
 
