@@ -205,6 +205,22 @@ async function main(): Promise<void> {
       assert.equal(store.isLanCacheKeySyncPending(), false)
     })
 
+    await check('a removal made during an older sync wins over it', async () => {
+      // A connection from before the consent was remembered: the sync asks
+      // the cache for its status first, and the removal arrives in that gap.
+      const live = store.getLanCacheConnection()!
+      setAppKey('app-torbox-key-old')
+      assert.equal(await lan.syncTorBoxKeyToLanCache(), true)
+      store.setLanCacheConnection({ ...live, shareTorbox: undefined })
+      const older = lan.syncTorBoxKeyToLanCache()
+      setAppKey('')
+      const removal = lan.syncTorBoxKeyToLanCache()
+      await Promise.all([older, removal])
+      assert.equal(savedKey(), '', 'the cache holds no key once both have run')
+      assert.equal(store.isLanCacheKeySyncPending(), false)
+      store.setLanCacheConnection(live)
+    })
+
     await check('a download refused for want of a key is reported once', async () => {
       events.length = 0
       const job = (key: string): Parameters<typeof lan.queueLanCacheJob>[0] =>

@@ -211,19 +211,35 @@ export async function queueLanCacheJob(payload: LanCacheJobPayload): Promise<boo
  * agreement given before the consent was remembered. A removal is always
  * sent. Best-effort: a cache that is away gets the key on the next join.
  * Returns whether the cache now holds a key for this device.
+ *
+ * Syncs run one at a time, in the order they were asked for, and each
+ * reads the key again just before sending it: the TorBox handlers start
+ * them without waiting, so a removal that came in while an older sync was
+ * still asking the cache for its status must win, not be undone by that
+ * older sync sending the key it read first.
  */
-export async function syncTorBoxKeyToLanCache(): Promise<boolean> {
+export function syncTorBoxKeyToLanCache(): Promise<boolean> {
+  const run = keySyncChain.then(syncTorBoxKeyNow, syncTorBoxKeyNow)
+  keySyncChain = run.catch(() => false)
+  return run
+}
+
+let keySyncChain: Promise<boolean> = Promise.resolve(false)
+
+async function syncTorBoxKeyNow(): Promise<boolean> {
   const connection = getLanCacheConnection()
   if (!connection || connection.pending) return false
-  const torboxToken = getTorBoxToken()
   try {
-    if (torboxToken && !connection.shareTorbox) {
+    if (getTorBoxToken() && !connection.shareTorbox) {
       const status = await request<LanCacheStatusResponse>('/api/status')
       if (!status.torboxLinked) {
         setLanCacheKeySyncPending(false)
         return false
       }
     }
+    // Read again after the wait above: what the app holds now is what the
+    // cache must hold, a removal made meanwhile included.
+    const torboxToken = getTorBoxToken()
     const answer = await request<{ torboxLinked?: boolean }>('/api/credentials', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
