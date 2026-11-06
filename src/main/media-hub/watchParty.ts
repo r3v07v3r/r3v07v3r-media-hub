@@ -1,6 +1,6 @@
 // Ported from r3v07v3r-media-hub's src/main.cjs (the Watch Party section:
 // getLocalLanIp, partyMemberSummaries, partyBroadcast, broadcastPartyState,
-// broadcastQueue, handlePartyMessage, closeParty, connectPartyWs,
+// handlePartyMessage, closeParty, connectPartyWs,
 // connectRelayWs, and every `party:*`/`party-sync:*` handler), since
 // reshaped around ONE hosting posture instead of a chosen mode: a host
 // always listens directly and additionally attaches to the R3-Party-Sync
@@ -10,7 +10,7 @@
 // versus a client.
 //
 // Direct/LAN/WAN connections speak a small custom WebSocket protocol
-// (hello/welcome/leave/party-state/queue-sync, all AES-256-GCM encrypted
+// (hello/welcome/leave/party-state, all AES-256-GCM encrypted
 // via party.ts's encryptMessage/decryptMessage with a per-party shared
 // secret) directly to peers. Relay connections speak the same encrypted
 // payloads, but wrapped in an unencrypted `{type:'relay', connId, isHost,
@@ -31,14 +31,12 @@ import type {
   PartyMemberSummary,
   PartyMode,
   PartyNowPlayingSummary,
-  PartyQueueEntry,
   PartyStatusResult
 } from '../../shared/media-hub/types'
 import { fetchJson } from './httpClient'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import {
-  applyQueueEvent,
   createMemberId,
   decodeShareCode,
   encodeHybridShareCode,
@@ -46,7 +44,6 @@ import {
   encryptMessage,
   decryptMessage,
   type PartyLanEndpoint,
-  type PartyQueueEvent,
   type PartyRelayEndpoint
 } from './party'
 import { encrypt, partySyncCredentials, readSettings, writeSettings } from './settingsStore'
@@ -57,7 +54,7 @@ import { attemptPortMapping } from './upnp'
 import { getLocalLanIp } from './network'
 
 // Every message this protocol actually sends (hello/welcome/leave/
-// party-state/queue-sync/playback actions) is small encrypted JSON — 64KB is
+// party-state/playback actions) is small encrypted JSON — 64KB is
 // generous headroom for any of them, never large enough to be a real memory-
 // exhaustion vector from a malicious peer/relay/host. Applied to every `ws`
 // constructor in this file (client and server) so it protects both
@@ -137,7 +134,6 @@ interface PartyStateHost {
   hostId: string
   selfName: string
   hostName: string
-  queue: PartyQueueEntry[]
   allowMemberControl: boolean
   /** What the party is currently watching, for LATE JOINERS: stored when
    *  the host announces it and replayed to every member that arrives
@@ -166,7 +162,6 @@ interface PartyStateClient {
   selfName: string
   hostName: string
   selfId: string
-  queue: PartyQueueEntry[]
   allowMemberControl: boolean
   /** Mirror of the host's nowPlaying summary, from party-state broadcasts —
    *  what lets the hub offer "Join the film" to someone who closed their
@@ -299,14 +294,6 @@ function broadcastPartyState(): void {
   })
 }
 
-function broadcastQueue(): void {
-  const current = party
-  if (!current || current.role !== 'host') return
-  const payload = encryptMessage(current.secret, { type: 'queue-sync', queue: current.queue })
-  partyBroadcast(payload)
-  sendPartyEvent({ type: 'queue-sync', queue: current.queue })
-}
-
 /** What a member may only send while the host has "Everyone can control
  *  playback" on. Gated on receipt, not just in the member's UI, so a member
  *  whose switch state is stale (or whose build ignores it) cannot pause the
@@ -372,35 +359,14 @@ function handlePartyMessage(fromId: string, msg: PartyMessage): void {
     }
     return
   }
-  if (current?.role === 'host' && msg?.type === 'play-request') {
-    sendPartyEvent({
-      type: 'play-request',
-      item: msg.item as { id: string; type: string; title: string; poster?: string }
-    })
+  // Legacy queue and play-request messages from older builds are dropped.
+  if (
+    msg?.type === 'suggest' ||
+    msg?.type === 'vote' ||
+    msg?.type === 'play-request' ||
+    msg?.type === 'queue-sync'
+  )
     return
-  }
-  if (current?.role === 'host' && (msg?.type === 'suggest' || msg?.type === 'vote')) {
-    const event: PartyQueueEvent =
-      msg.type === 'vote'
-        ? {
-            type: 'vote',
-            queueId: String(msg.queueId || ''),
-            voterId: fromId,
-            direction: Number(msg.direction)
-          }
-        : {
-            type: 'suggest',
-            queueId: String(msg.queueId || ''),
-            item: msg.item as PartyQueueEntry['item'],
-            suggestedBy:
-              current.members.get(fromId)?.name ||
-              (msg.suggestedBy as string | undefined) ||
-              'Someone'
-          }
-    current.queue = applyQueueEvent(current.queue, event)
-    broadcastQueue()
-    return
-  }
   if (current?.role === 'host' && isMemberControlAction(msg) && !current.allowMemberControl) return
   if (current?.role === 'host') {
     forwardFromMember(fromId, encryptMessage(current.secret, { ...msg, from: fromId }))
@@ -551,19 +517,6 @@ interface PartyJoinArgs {
   name?: string
 }
 
-interface PartySuggestArgs {
-  id?: unknown
-  type?: string
-  title?: string
-  poster?: string
-  year?: string
-}
-
-interface PartyVoteArgs {
-  queueId?: string
-  direction?: number
-}
-
 interface PartyPreparingArgs {
   item?: { id?: string; type?: string; title?: string; poster?: string } | null
 }
@@ -592,7 +545,7 @@ interface PartySyncConnectArgs {
   inviteKey?: string
 }
 
-/** Registers every `party:*` and `party-sync:*` IPC handler (hosting — direct LAN/WAN with optional UPnP, and relay via R3-Party-Sync —, joining, leaving, status, queue suggest/remove/vote, now-playing/playback-action broadcast, and R3-Party-Sync connect/disconnect). */
+/** Registers every `party:*` and `party-sync:*` IPC handler (hosting — direct LAN/WAN with optional UPnP, and relay via R3-Party-Sync —, joining, leaving, status, chat, now-playing/playback-action broadcast, and R3-Party-Sync connect/disconnect). */
 export function registerWatchPartyIpc(): void {
   handle<PartyHostArgs, PartyHostResult>(MEDIA_HUB_CHANNELS.partyHost, async (_e, payload) => {
     if (party) throw new Error('You are already in a watch party. Leave it first.')
@@ -640,7 +593,6 @@ export function registerWatchPartyIpc(): void {
       hostId,
       selfName: name,
       hostName: name,
-      queue: [],
       allowMemberControl: false,
       nowPlaying: null,
       preparing: false
@@ -981,7 +933,6 @@ export function registerWatchPartyIpc(): void {
         selfName: displayName,
         hostName: parsed.name || '',
         selfId: '',
-        queue: [],
         allowMemberControl: false,
         nowPlaying: null
       }
@@ -1011,16 +962,8 @@ export function registerWatchPartyIpc(): void {
           applyPartyState(msg)
           return
         }
-        if (msg.type === 'queue-sync') {
-          if (party?.role === 'client') {
-            party.queue = applyQueueEvent(party.queue, msg as unknown as PartyQueueEvent)
-            sendPartyEvent({
-              type: 'queue-sync',
-              queue: party.queue
-            })
-          }
-          return
-        }
+        // Legacy queue and play-request messages from older builds are dropped.
+        if (msg.type === 'queue-sync') return
         if (envelope.isHost && msg.type === 'leave') {
           party = null
           sendPartyEvent({ type: 'host-disconnected' })
@@ -1081,7 +1024,6 @@ export function registerWatchPartyIpc(): void {
         selfName: displayName,
         hostName: parsed.name || '',
         selfId: '',
-        queue: [],
         allowMemberControl: false,
         nowPlaying: null
       }
@@ -1114,13 +1056,8 @@ export function registerWatchPartyIpc(): void {
           applyPartyState(msg)
           return
         }
-        if (msg.type === 'queue-sync') {
-          if (party?.role === 'client') {
-            party.queue = applyQueueEvent(party.queue, msg as unknown as PartyQueueEvent)
-            sendPartyEvent({ type: 'queue-sync', queue: party.queue })
-          }
-          return
-        }
+        // Legacy queue and play-request messages from older builds are dropped.
+        if (msg.type === 'queue-sync') return
         handlePartyMessage('host', msg)
       })
       connectedWs.on('close', () => {
@@ -1221,52 +1158,6 @@ export function registerWatchPartyIpc(): void {
     }
   )
 
-  handle<{ item?: PartyQueueEntry['item'] }, { ok: true }>(
-    MEDIA_HUB_CHANNELS.partyRequestPlay,
-    (_e, payload) => {
-      const current = party
-      if (!current) throw new Error('You are not in a watch party.')
-      const item = payload?.item
-      if (!item?.id || !item.type) throw new Error('Nothing to play.')
-      const event = {
-        type: 'play-request' as const,
-        item: { id: item.id, type: item.type, title: item.title, poster: item.poster || '' }
-      }
-      if (current.role === 'host') {
-        sendPartyEvent({ type: 'play-request', item: event.item })
-      } else {
-        partyBroadcast(encryptMessage(current.secret, event))
-      }
-      return { ok: true }
-    }
-  )
-
-  handle<PartySuggestArgs, { ok: true }>(MEDIA_HUB_CHANNELS.partySuggest, (_e, item) => {
-    const current = party
-    if (!current) throw new Error('You are not in a watch party.')
-    if (!item || item.id === undefined || item.id === null) throw new Error('Nothing to suggest.')
-    const cleanItem: PartyQueueEntry['item'] = {
-      id: item.id as string,
-      type: item.type as string,
-      title: item.title as string,
-      poster: item.poster || '',
-      year: item.year || ''
-    }
-    const event: PartyQueueEvent = {
-      type: 'suggest',
-      queueId: createMemberId(),
-      item: cleanItem,
-      suggestedBy: current.selfName || 'Someone'
-    }
-    if (current.role === 'host') {
-      current.queue = applyQueueEvent(current.queue, event)
-      broadcastQueue()
-    } else {
-      partyBroadcast(encryptMessage(current.secret, event))
-    }
-    return { ok: true }
-  })
-
   handle<PartyChatArgs, { ok: true; chat: PartyChatMessage }>(
     MEDIA_HUB_CHANNELS.partyChat,
     (_e, payload) => {
@@ -1295,41 +1186,6 @@ export function registerWatchPartyIpc(): void {
       return { ok: true, chat }
     }
   )
-
-  handle<string, { ok: true }>(MEDIA_HUB_CHANNELS.partyRemove, (_e, queueId) => {
-    const current = party
-    if (!current) throw new Error('You are not in a watch party.')
-    if (current.role !== 'host') throw new Error('Only the host can remove suggestions.')
-    const event: PartyQueueEvent = { type: 'remove', queueId: String(queueId || '') }
-    current.queue = applyQueueEvent(current.queue, event)
-    broadcastQueue()
-    return { ok: true }
-  })
-
-  handle<PartyVoteArgs, { ok: true }>(MEDIA_HUB_CHANNELS.partyVote, (_e, payload) => {
-    const current = party
-    if (!current) throw new Error('You are not in a watch party.')
-    const { queueId, direction } = payload || {}
-    const dir = Number(direction)
-    if (dir !== 1 && dir !== -1) throw new Error('Invalid vote.')
-    const voterId = current.role === 'host' ? current.hostId : current.selfId
-    if (!voterId) throw new Error('Still connecting to the watch party — try again in a moment.')
-    const event: PartyQueueEvent = {
-      type: 'vote',
-      queueId: String(queueId || ''),
-      voterId,
-      direction: dir
-    }
-    if (current.role === 'host') {
-      current.queue = applyQueueEvent(current.queue, event)
-      broadcastQueue()
-    } else {
-      partyBroadcast(encryptMessage(current.secret, event))
-    }
-    return { ok: true }
-  })
-
-  handle(MEDIA_HUB_CHANNELS.partyQueue, () => ({ queue: party?.queue || [] }))
 
   // Host-only, and deliberately fire-and-forget from the renderer's point
   // of view: this goes out BEFORE the host has resolved anything, so it

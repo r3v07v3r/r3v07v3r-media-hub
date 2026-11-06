@@ -55,6 +55,15 @@ Requirements 1 and 2 are **one decision, not two**, and the order matters — se
 only ever billed its own owner's account, never a housemate's**. `server.ts` already computed
 `callerDeviceId` on every authenticated route.
 
+**The key rule now.** Each person's TorBox key is saved on the cache and used only for their own
+requests. The app saves it whenever it joins, by hand or by the launch search (the Join panel's
+consent box is ticked by default), saves it again when the key changes in the app, and removes it
+when the key is removed. `POST /api/jobs` refuses a device with no saved key with 403
+`torbox-key-required` and queues nothing for it, so its request can never be fetched with another
+person's key. The check comes after the dedupe: a file already cached is still granted to that
+device, and a download already under way is answered with its state. The app tells the person once
+and falls back to its other tiers.
+
 **The hole.** Nothing used it for reading. `GET /api/catalog` with no `keys` filter returned **every
 cached item, with titles, to any paired device**, and `GET /stream/{infoHash}` authorised on "is
 this token paired" rather than on who owned the item. Ownership was enforced for _spending_ and
@@ -110,7 +119,8 @@ thing that cannot be taken from you remotely.
 **The administrator manages the service, not other people's libraries.** They also have a shell on
 that box and can read every file, so an interface claiming otherwise would be lying. The
 administrator gets the join settings, aggregate usage, the device list, the whole job queue with
-owner names, and "Update now". They can revoke a device, which also forgets its TorBox token and
+owner names, and "Update now". Approving a device lends it nothing: it fetches with its own TorBox
+key, never the administrator's. They can revoke a device, which also forgets its TorBox token and
 cancels its jobs but keeps the items it already fetched. They can cancel any job, and remove or
 change the sharing of any item they can name by its hash. The administrator does not get a "browse
 everyone's items" screen: no route lists another device's items.
@@ -233,7 +243,7 @@ learn that a title it names is being fetched right now or was recently expired, 
 This is left open on purpose, because those two lists steer the app's feeder rather than just
 describe the cache: a feeder that stopped seeing a housemate's queued job would queue the same title
 again on every pass (the job store keeps the first owner, so that request joins the job rather than
-taking it over; a queued job moves only when its owner has shared no TorBox key and the newcomer
+taking it over; a queued job moves only when its owner has removed its TorBox key and the newcomer
 has); and tombstones record no owner at all, so hiding them would let every other device re-fetch a
 title the TTL just expired. Filtering the response would not close it on its own either:
 `POST /api/jobs` answers with the state of the job a caller joins, so the same fact is one request
@@ -242,7 +252,12 @@ away.
 While `--claim-admin` has reopened claiming, `/api/ping` reports the server as unclaimed and every
 device that asks to join is let in without asking; the daemon logs each one by name so whoever is
 recovering the box can see who joined. A claim by the current administrator succeeds but does not
-close that window, and the log says so; only a claim by another device does.
+close that window, and the log says so; a claim by another device does. The current administrator
+can also close it without handing the role on: the app's **Administer it** button does so straight
+after its claim, and **Close claim window** in the Caching section calls the admin-only
+`POST /api/admin/close-claim` (backed by `admin.closeReopen()`), which ends the reopening, persists
+it and logs it. The app never closes it from its background poll, because the owner may have
+reopened claiming on purpose to hand the role to another device.
 
 The Caching panel says only that shared items can be streamed by anyone who has joined and private
 ones only by you. It does not tell people that visibility is a rule rather than encryption, that

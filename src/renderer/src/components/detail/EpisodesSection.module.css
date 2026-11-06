@@ -494,6 +494,26 @@
   text-align: center;
 }
 
+/* A season the services do not get (EpisodesSection's unsentSeasons): a
+   small muted dot on its pill, and one muted line under the row for the
+   open one. */
+.unsentDot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.55;
+  vertical-align: middle;
+}
+
+.unsentLine {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
 .watchedLoading {
   display: flex;
   align-items: center;

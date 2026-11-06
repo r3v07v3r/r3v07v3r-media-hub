@@ -71,6 +71,30 @@ export function upgradeHideDislikedDefault<T extends Record<string, unknown>>(
 }
 
 /**
+ * The one-time upgrade for installs that were scrobbling before scrobbles
+ * became something to turn on. Turning the default off also turned them off
+ * on every install that never touched the switch, including the ones with
+ * Simkl or Trakt connected that had been sending them all along. So once,
+ * where the setting has never been stored and `connected` says a Simkl or
+ * Trakt access token is there, it is switched on. A stored true or false is
+ * the person's own choice and is left alone, and an install with nothing
+ * connected (a fresh one included) only gets the marker, so connecting an
+ * account later never turns it on. scrobbleDefaultMigrated records that it
+ * has run. The settings to write, or null when it already has.
+ */
+export function upgradeScrobbleDefault<T extends Record<string, unknown>>(
+  settings: T,
+  connected: boolean
+): (T & { scrobbleDefaultMigrated: true }) | null {
+  if (settings.scrobbleDefaultMigrated === true) return null
+  const upgraded = { ...settings, scrobbleDefaultMigrated: true as const }
+  if (settings.scrobbleEnabled === undefined && connected) {
+    return { ...upgraded, scrobbleEnabled: true }
+  }
+  return upgraded
+}
+
+/**
  * Projects the raw persisted settings object down to the fields safe to
  * expose to the renderer. `settings` is the raw settings-store record
  * (shape defined by settingsStore.ts), loosely typed here since untrusted/
@@ -149,7 +173,8 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
  * pair for every pause, per service, and Simkl counts each one against the
  * account's 500 requests a day, which a phone linked to this desktop draws
  * on too. So they are something to ask for, not something every install
- * does by default.
+ * does by default. Installs that already had Simkl or Trakt connected when
+ * that default arrived were switched on once: see upgradeScrobbleDefault.
  */
 export function scrobblingEnabled(settings: { scrobbleEnabled?: unknown } = {}): boolean {
   return settings.scrobbleEnabled === true
@@ -299,8 +324,9 @@ export function logoutSettings(settings: Record<string, unknown> = {}): Pick<
   // preference like videoScaling beside it — the shader files stay on this
   // machine through a logout, so the choice to use them should too.
   Partial<{ anime4kEnabled: boolean; anime4kMode: string }> &
-  // Raw-settings field: see upgradeHideDislikedDefault.
-  Partial<{ hideDislikedDefaultMigrated: boolean }> {
+  // Raw-settings fields: see upgradeHideDislikedDefault and
+  // upgradeScrobbleDefault.
+  Partial<{ hideDislikedDefaultMigrated: boolean; scrobbleDefaultMigrated: boolean }> {
   return {
     theme: normalizeTheme(settings.theme),
     updateChannel: normalizeUpdateChannel(settings.updateChannel),
@@ -385,6 +411,10 @@ export function logoutSettings(settings: Record<string, unknown> = {}): Pick<
     // Kept with the choice it protects. Dropping it would let the next
     // launch's upgrade turn a Hide Disliked switched off after the upgrade
     // back on.
-    ...(settings.hideDislikedDefaultMigrated === true ? { hideDislikedDefaultMigrated: true } : {})
+    ...(settings.hideDislikedDefaultMigrated === true ? { hideDislikedDefaultMigrated: true } : {}),
+    // The same for scrobbles: without it, signing back in with a token
+    // already there would let the next launch switch them on again for a
+    // person who had turned them off.
+    ...(settings.scrobbleDefaultMigrated === true ? { scrobbleDefaultMigrated: true } : {})
   }
 }

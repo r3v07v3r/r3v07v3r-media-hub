@@ -179,7 +179,7 @@ export function WatchlistSyncSection() {
         </button>
       </div>
 
-      {/* Off by default. The watched mark at 80% reaches the services
+      {/* Off on a new install, switched on once where a service was already connected. The watched mark at 80% reaches the services
           whatever this says; scrobbles are the extra live updates, and they
           are what spends Simkl's daily allowance fastest. */}
       <div className={styles.row}>

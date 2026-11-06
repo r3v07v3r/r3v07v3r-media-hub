@@ -447,7 +447,10 @@ old lets it go. A rating given since replaces it.
 
 **Scrobbles are off unless turned on.** The player's start, pause and stop
 messages to Simkl and Trakt are sent only when "Scrobble while playing" is
-on (Control centre → Accounts → Tracking). Each is a request against
+on (Control centre → Accounts → Tracking). It is off on a new install. An
+install that already had Simkl or Trakt connected when this default arrived
+was switched on once, the first time that version ran, and from then on the
+switch is the person's to turn off; it is never turned on again. Each is a request against
 Simkl's daily allowance, and a finished episode or film is sent as a
 history add at 80% whatever the setting says. The phone and TV player sends
 none either way. An anime played with no episode number (its episode list
@@ -805,9 +808,11 @@ nothing, and its stamp is left, so the next pass reads it again.
 - Anime at Simkl, entry by entry, placed by the rules every Simkl push uses
   ("Anime: one show here, an entry per season at Simkl", below): a later
   season only where `laterSeasonOf` can show its place is its season on the
-  page. A member that cannot be shown to be its season keeps its whole show
-  out of the comparison, since compared by position it would send the wrong
-  season or report one missing. A season the rules name no entry for
+  page. A member that cannot be shown to be its season leaves out of the
+  comparison only the seasons of its show that no member can be shown to be
+  (`seasonHasPlacedMember`), since compared by position it would send the
+  wrong season or report one missing. The show's other seasons are compared
+  as usual. A season the rules name no entry for
   (`toSimklAnimeEpisode` gives none) is listed as **cannot be sent to
   Simkl**, not sent. An anime's specials are not compared.
 - Anime is not compared at Trakt. This app never sends anime there, and
@@ -942,6 +947,13 @@ whole title, a scrobble) is translated first, by `toSimklAnimeEpisode` in
 - Specials (season 0) are not sent. They are TMDB's list for the whole
   franchise and belong to no entry this app can name.
 - A season the group has no member for is not sent.
+- The show's page on the desktop says so: a season that is not sent has a
+  small dot on its pill, and the open one a line under the pills, "Not sent
+  to Simkl", "Not sent to MyAnimeList" or "Not sent to Simkl or
+  MyAnimeList", naming only the services that are connected
+  (`unsentAnimeSeasons`, channel `tracking:unsent-seasons`). Nothing is
+  said before the catalog is grouped, while a TheTVDB lookup it waits on is
+  pending, or for Specials.
 - While the anime catalog is still being organised into its seasons, only a
   first season is sent. A later one waits in the retry queue ("History
   pushes that fail are kept", above), a mark or an un-mark alike, without
@@ -1007,8 +1019,9 @@ read from the cached mappings with no request):
 
 - Its own TheTVDB season, in the show's series, is the place it sits at. A
   later season Kitsu has no mapping for breaks it. So does an entry of
-  unknown kind among the seasons, which is still grouped as one ("Films,
-  OVAs and specials are not seasons", below). A member of another series
+  unknown kind among the seasons, which is still grouped as one, and an ONA
+  numbered past a season no entry has ("Films, OVAs and specials are not
+  seasons", below). A member of another series
   never is one: Naruto is the second member of the Naruto: Shippuden
   group.
 - No other member maps to that season. Two cours of one TheTVDB season
@@ -1051,9 +1064,13 @@ member's place. What happens instead:
   Trakt numbers a show's seasons itself, and they are filed under the show
   as they came.
 - **The episode comparison on the desktop.** A Simkl entry that cannot be
-  placed is left out of the comparison, together with the show it would
-  have landed on: nothing is taken in or sent for either. That goes for a
-  show's own id that cannot be shown to be its first season as well.
+  placed leaves out of the comparison the seasons of the show it would have
+  landed on that no member can be shown to be: nothing is taken in or sent
+  for those, or for the entry's own id. The show's placed seasons are
+  compared as usual. A show's own id that cannot be shown to be its first
+  season leaves out its first season the same way.
+- **The show's page** marks each season no member can be shown to be as not
+  sent (see "Anime: one show here, an entry per season at Simkl", above).
 - **A page or a card opened by a later member's own id** opens and saves as
   itself, and its rows are not moved under the show.
 - **Home.** A tracked later member that cannot be placed is counted from
@@ -1107,13 +1124,22 @@ them out, fewer places are off.
 
 Kitsu says what kind of entry each anime is: a TV series, a film, an OVA,
 an ONA (a web release), a special or a music video. The grouping reads it
-(`normalizeKitsuAnime` keeps it as `subtype`), and only TV entries become
-seasons of a merged show. Merged in as a numbered season, a film would take
+(`normalizeKitsuAnime` keeps it as `subtype`), and TV entries become seasons
+of a merged show, with the ONAs TheTVDB numbers as seasons
+(`seasonEntriesOf`, below). Merged in as a numbered season, a film would take
 a season's place, push the seasons after it one place along, and, since
 TheTVDB files films at season 0, could sort first and front the show,
 leaving no later season provably at its place.
 
-- A film, OVA, ONA, special or music entry stays a title of its own, with
+- An ONA is a season when TheTVDB maps it into the same series as one of
+  the show's TV entries, at season 1 or later, and no TV entry and no other
+  ONA maps to that season. Some shows' later seasons came out on the web
+  (JoJo's Stone Ocean), and this is what tells such a season from a
+  spin-off, a recap or a run of shorts, which TheTVDB files at season 0 or
+  not at all. An ONA joins at its place in TheTVDB's order; where that
+  place is not its TheTVDB season (one numbered past a season nobody has),
+  it is a member the page cannot place, and it opens and is sent as itself.
+- A film, OVA, special, music entry or any other ONA stays a title of its own, with
   its own page, its own rows and its own Simkl and MyAnimeList entry. It is
   still listed in the franchise guide, and the show's page lists it between
   the seasons it came out between, by Kitsu's start dates (`groupedExtras`
@@ -1122,12 +1148,13 @@ leaving no later season provably at its place.
   only recorded sequel is a film, and the film's own sequel the second
   season, are one show of two seasons.
 - An entry whose kind is not known is grouped as a season.
-- A show whose real seasons Kitsu lists as ONAs, OVAs or specials comes
-  apart: each such season is a title of its own. Kitsu's kind is the only
-  signal used, and telling which web releases are seasons would be a guess.
-  A franchise left with fewer than two TV entries is not a merged show at
-  all: its one TV season and everything linked to it keep their own tiles
-  and pages.
+- OVAs, specials, films and music entries are never seasons, whatever
+  TheTVDB says: it files them at season 0, and the services list them as
+  entries of their own. A show whose real seasons Kitsu lists as OVAs or
+  specials, or as ONAs TheTVDB does not number, comes apart: each such
+  season is a title of its own. A franchise left with fewer than two seasons
+  is not a merged show at all: its one season and everything linked to it
+  keep their own tiles and pages.
 
 A film or OVA leaving a show reaches watch history the way any change of
 grouping does ("When the grouping changes", below). On a show numbered by
@@ -1137,6 +1164,14 @@ by TMDB, the rows were TMDB's seasons and stay at their numbers; where the
 film fronted the show, they move to the id that fronts the series now.
 Where the film fronted a show of one season, there is no show left: that
 season's rows go to the season's own entry.
+
+An ONA joining a show as a season goes the other way. Before, it was a title
+of its own with its rows under its own id. Where its place in the show is
+its season on the page, its rows move under the show at that season, with
+its rating, and the backup before a regroup is taken first as for any move;
+its Simkl and MyAnimeList entry is the same one as before. Where its place
+is not its season, its rows stay under its own id and it still opens as
+itself (`tests/animeRegroup.test.ts`).
 
 ### A later season under its own id
 
@@ -1194,8 +1229,9 @@ place. A member is dropped as a candidate, dropped again when a stored
 list is read, and is not offered as what comes next either: the next season
 of a merged show is inside the show. This is every season of a merged show,
 not only the ones whose place is their season, since nothing here acts on
-the place. A film, OVA, ONA or special is not a member ("Films, OVAs and
-specials are not seasons", above): it is a title of its own and can be
+the place. A film, OVA, special, or an ONA that is not a season of the
+show, is not a member ("Films, OVAs and specials are not seasons", above):
+it is a title of its own and can be
 suggested like any other, including as what comes after the show's last
 season. An entry of unknown kind is still a member.
 
@@ -1277,7 +1313,8 @@ What moves depends on how the show's page numbers its seasons:
   its show is all fronted by one id of the same series.
 - **A show with a TheTVDB mapping that comes apart**, every member standing
   alone (one TV season left once a film or an OVA stops being one, or a
-  second season Kitsu calls an ONA): each TMDB season under the old front
+  second season Kitsu calls an ONA that TheTVDB does not number as a
+  season of the series): each TMDB season under the old front
   goes to the one former member whose own TheTVDB season it is, as that
   entry's own episodes, and the rating goes with season 1. Season 0, and a
   season no member can be shown to be, stay where they are and the log

@@ -21,7 +21,7 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 import type { ActivityTracker } from './activity'
 import type { Credentials } from './credentials'
 import type { ApplyNowResult, UpdaterStatus } from './updater'
-import type { JobStore, JobRecord } from './jobs'
+import { heldIsSameFile, sameFile, type JobStore, type JobRecord } from './jobs'
 import { deviceIdForToken, isApproved, type Pairing } from './pairing'
 import type { Admin } from './admin'
 import { isEntitled, type ItemStore } from './storage'
@@ -522,6 +522,31 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       return
     }
 
+    // CLOSING A REOPENED CLAIM WINDOW without handing the role over.
+    //
+    // --claim-admin leaves claiming open until another device claims, and
+    // the current administrator claiming back does not spend it (see the
+    // claim route). While it is open every device that asks to join is let
+    // in without asking. The administrator still holds the role while it is
+    // open, so they are the one who may close it.
+    if (route === 'POST /api/admin/close-claim') {
+      if (!isAdminCaller) {
+        json(res, 403, { error: 'Only the administrator of this server can do that.' })
+        return
+      }
+      const wasReopened = reopenedForClaim()
+      await admin.closeReopen()
+      if (wasReopened) {
+        const closer = pairing.findByToken(callerToken)
+        log(
+          `claiming closed by the administrator ${JSON.stringify(closer?.deviceName ?? '')}` +
+            (admin.openJoin() ? '' : '; joining needs approval again')
+        )
+      }
+      json(res, 200, { unclaimed: admin.isUnclaimed() })
+      return
+    }
+
     const deviceMatch = /^\/api\/admin\/devices\/([a-f0-9]{16})$/.exec(url.pathname)
     if (deviceMatch && req.method === 'POST') {
       if (!isAdminCaller) {
@@ -849,12 +874,59 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       const dedupeHash = String(body.infoHash ?? '').toLowerCase()
       if (callerDeviceId && /^[a-f0-9]{40}$/.test(dedupeHash)) {
         const held = await storage.get(dedupeHash)
-        if (held?.complete) {
+        // The same FILE: a season pack is one hash holding many episodes,
+        // and asking for one is not asking for another already here.
+        const sameHeldFile =
+          held !== null &&
+          heldIsSameFile(held, {
+            infoHash: dedupeHash,
+            contentKey: String(body.contentKey ?? ''),
+            fileIdx: Number.isFinite(Number(body.fileIdx)) ? Number(body.fileIdx) : undefined
+          })
+        if (held?.complete && sameHeldFile) {
           await storage.grantEntitlement(dedupeHash, callerDeviceId)
           await storage.clearTombstone(held.contentKey)
           json(res, 200, { state: 'ready' })
           return
         }
+      }
+      // EVERYONE PAYS WITH THEIR OWN KEY, so a device that has not saved one
+      // here cannot queue a download. Checked after the dedupe above, so a
+      // file already on disk stays shareable, and after the in-flight check
+      // below, so somebody else's download under way is answered with its
+      // state (the caller is granted the copy when it asks again after the
+      // file lands). Nothing is enqueued for a keyless caller, and its
+      // request is never fetched with another device's key.
+      const asked = {
+        contentKey: String(body.contentKey ?? ''),
+        infoHash: dedupeHash,
+        fileIdx: Number.isFinite(Number(body.fileIdx)) ? Number(body.fileIdx) : undefined
+      }
+      if (
+        !asked.contentKey ||
+        !String(body.title ?? '') ||
+        !/^[a-f0-9]{40}$/.test(asked.infoHash)
+      ) {
+        json(res, 400, { error: 'A job needs a contentKey, a 40-hex infoHash, and a title.' })
+        return
+      }
+      if (!credentials.tokenForDevice(callerDeviceId)) {
+        const inFlight = jobs.list().find(
+          // Not 'ready': a file really held was answered by the dedupe
+          // above, and a ready record whose file has gone holds nothing.
+          (job) =>
+            (job.state === 'queued' || job.state === 'fetching') &&
+            (job.contentKey === asked.contentKey || sameFile(job, asked))
+        )
+        if (inFlight) {
+          json(res, 200, { state: inFlight.state })
+          return
+        }
+        json(res, 403, {
+          error: 'Save your TorBox key on this server before queueing downloads.',
+          code: 'torbox-key-required'
+        })
+        return
       }
       const record = jobs.enqueue(
         {
@@ -883,7 +955,11 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       }
       // Queueing is an explicit statement of renewed interest, so it lifts
       // any tombstone for the same title.
+      // Both keys: a request that joined another key's download (the same
+      // file under another name) is renewed interest in its own title too.
       await storage.clearTombstone(record.contentKey)
+      const askedKey = String(body.contentKey ?? '')
+      if (askedKey !== record.contentKey) await storage.clearTombstone(askedKey)
       json(res, 200, { state: record.state })
       return
     }

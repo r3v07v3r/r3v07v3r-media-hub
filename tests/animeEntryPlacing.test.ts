@@ -30,7 +30,9 @@ import {
   laterSeasons,
   placeAnimeEntry,
   regroupPlaceIsSeason,
-  seasonMatchesPage
+  seasonHasPlacedMember,
+  seasonMatchesPage,
+  unsentAnimeSeasons
 } from '../src/main/media-hub/animeSeasons'
 import { createDatabase } from '../src/main/media-hub/database'
 import { setDatabase } from '../src/main/media-hub/dbState'
@@ -159,6 +161,63 @@ check('seasonMatchesPage is the same answer, one member at a time', () => {
   assert.equal(seasonMatchesPage(SHIPPUDEN, NARUTO, 2), false)
   assert.equal(seasonMatchesPage(SOLO, SOLO_2, 2), true)
   assert.equal(seasonMatchesPage(MHA, MHA_3, 0), false)
+})
+
+check('seasonHasPlacedMember: some member is that season of the page', () => {
+  assert.equal(seasonHasPlacedMember(MHA, 1), true)
+  assert.equal(seasonHasPlacedMember(MHA, 3), true)
+  assert.equal(seasonHasPlacedMember(MHA, 4), false)
+  assert.equal(seasonHasPlacedMember(MHA, 5), false)
+  assert.equal(seasonHasPlacedMember(RECAP, 1), false)
+  assert.equal(seasonHasPlacedMember(SOLO, 2), true)
+  // An id that fronts no group has no page seasons to place.
+  assert.equal(seasonHasPlacedMember(MHA_4, 1), false)
+  assert.equal(seasonHasPlacedMember(FRIEREN, 1), false)
+})
+
+console.log('\nthe seasons a page says are not sent')
+
+check('unsentAnimeSeasons: the seasons no member can be shown to be', () => {
+  const both = ['simkl', 'mal'] as const
+  assert.deepEqual(unsentAnimeSeasons(MHA, both), [
+    { season: 4, services: ['simkl', 'mal'] },
+    { season: 5, services: ['simkl', 'mal'] }
+  ])
+  assert.deepEqual(
+    unsentAnimeSeasons(JOJO, both).map((s) => s.season),
+    [2, 3]
+  )
+  assert.deepEqual(
+    unsentAnimeSeasons(RECAP, both).map((s) => s.season),
+    [1, 2],
+    'a show fronted by a recap'
+  )
+  // Only the services connected are named.
+  assert.deepEqual(unsentAnimeSeasons(MHA, ['simkl']), [
+    { season: 4, services: ['simkl'] },
+    { season: 5, services: ['simkl'] }
+  ])
+  // The page's own seasons: a season past the members has no entry either,
+  // and Specials are never said to be unsent.
+  assert.deepEqual(
+    unsentAnimeSeasons(MHA, both, [0, 1, 2, 3, 4, 5, 6]).map((s) => s.season),
+    [4, 5, 6]
+  )
+})
+
+check('unsentAnimeSeasons says nothing where nothing is unsent or known yet', () => {
+  const both = ['simkl', 'mal'] as const
+  assert.deepEqual(unsentAnimeSeasons(SOLO, both), [], 'built from its members')
+  assert.deepEqual(unsentAnimeSeasons(FRIEREN, both), [], 'a title of its own')
+  assert.deepEqual(unsentAnimeSeasons(MHA_4, both), [], 'a later season opened as itself')
+  assert.deepEqual(unsentAnimeSeasons(MHA, []), [], 'no service connected')
+  neverAsked(MHA_4)
+  assert.deepEqual(unsentAnimeSeasons(MHA, both), [], 'a lookup is pending')
+  unmapped(MHA_4)
+  seed(false)
+  assert.deepEqual(unsentAnimeSeasons(MHA, both), [], 'not grouped yet')
+  seed(true)
+  assert.equal(unsentAnimeSeasons(MHA, both).length, 2)
 })
 
 console.log('\nwhere an import keeps an entry (the catch-up, the MyAnimeList import)')

@@ -20,7 +20,9 @@ import type {
   MediaHubPublicSettings,
   MediaHubSettingsSnapshot,
   SavedFilter,
-  SourcePreference
+  SourcePreference,
+  UnsentAnimeSeason,
+  UnsentService
 } from '../../shared/media-hub/types'
 import { parseImdbRatingsCsv } from '../../shared/media-hub/importCsv'
 import { importLetterboxdLibrary } from './letterboxdImport'
@@ -29,6 +31,7 @@ import { backupBeforeRewrite } from './autoBackup'
 import { requestRecommendationsRebuild } from './recommendations'
 import { watchRegion } from './watchProviders'
 import { keepAnimeHistoryWithShows } from './animeSyncRepair'
+import { unsentAnimeSeasons } from './animeSeasons'
 import { getDatabase } from './dbState'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
@@ -79,10 +82,12 @@ import { isAllowedExternalUrl } from './security'
 import { cacheRootDir, clearAllSessions, MIN_CACHE_BYTES } from './streamCache'
 import {
   getTorBoxToken,
+  malCredentials,
   omdbCredentials,
   osConnected,
   partySyncCredentials,
   readSettings,
+  simklCredentials,
   subdlConnected,
   tmdbCredentials,
   writeSettings
@@ -124,6 +129,22 @@ export function registerAppIpc(): void {
       setupComplete: stored.setupComplete === true
     }
   })
+
+  // The anime page's "Not sent to Simkl" line: the seasons of one show no
+  // entry at a connected service can be shown to be. Cached lookups only.
+  handle<{ id: string; seasons?: unknown }, UnsentAnimeSeason[]>(
+    MEDIA_HUB_CHANNELS.trackingUnsentSeasons,
+    (_e, payload) => {
+      const id = String(payload?.id ?? '')
+      const seasons = Array.isArray(payload?.seasons)
+        ? payload.seasons.filter((s): s is number => Number.isInteger(s)).slice(0, 200)
+        : undefined
+      const connected: UnsentService[] = []
+      if (simklCredentials().accessToken) connected.push('simkl')
+      if (malCredentials().accessToken) connected.push('mal')
+      return unsentAnimeSeasons(id, connected, seasons)
+    }
+  )
 
   handle<undefined, { setupComplete: boolean }>(MEDIA_HUB_CHANNELS.settingsCompleteSetup, () => {
     const settings = readSettings()

@@ -14,6 +14,16 @@
 // spawned as a subprocess with a media URL — see mpv.ts's own header on why
 // that process is a security boundary. A hash mismatch is a hard failure, never
 // a warning.
+//
+// Mirror: shinchiro deletes old builds after a few weeks, and a pin that 404s
+// breaks every release build. So each pinned archive is also kept as an asset
+// on this repository's `mpv-mirror` release (a prerelease whose tag is not a
+// version, so neither updater can take it for an app release). That copy is
+// tried first, then upstream. The hash is the only trust anchor: whichever
+// source answers is checked against the same MPV_SHA256. To move the pin, run
+// the "mpv re-pin" workflow (.github/workflows/mpv-repin.yml). It mirrors the
+// new archive and opens a PR that rewrites the three constants below by
+// pattern, so keep each of them on one line as written.
 
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, copyFileSync } from 'node:fs'
@@ -30,7 +40,24 @@ const MPV_RELEASE_TAG = '20261101'
 const MPV_ASSET = 'mpv-x86_64-20261101-git-48fca90e8c.7z'
 const MPV_SHA256 = '7a887a10b74c1a4a7e8c29ead8300cfc610c466c4686bf9dcb92ca2f224ba110'
 
-const MPV_URL = `https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/${MPV_RELEASE_TAG}/${MPV_ASSET}`
+/** This repository's release that holds every pinned archive. Old assets are
+ *  never deleted, so an older commit still builds. */
+const MPV_MIRROR_TAG = 'mpv-mirror'
+
+/** Tried in order; the first one whose bytes match MPV_SHA256 wins. */
+const MPV_SOURCES = [
+  {
+    name: 'mirror',
+    url: `https://github.com/r3v07v3r/r3v07v3r-media-hub/releases/download/${MPV_MIRROR_TAG}/${MPV_ASSET}`
+  },
+  {
+    name: 'upstream',
+    url: `https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/${MPV_RELEASE_TAG}/${MPV_ASSET}`
+  }
+]
+
+/** Per source, so a stalled mirror falls through to upstream. */
+const DOWNLOAD_TIMEOUT_MS = 120_000
 
 // The x86_64 baseline build, deliberately not the `-v3` variant: v3 requires
 // AVX2 and would simply not start on pre-Haswell CPUs.
@@ -63,7 +90,10 @@ function isUpToDate(): boolean {
 }
 
 async function download(url: string, target: string): Promise<void> {
-  const response = await fetch(url, { redirect: 'follow' })
+  const response = await fetch(url, {
+    redirect: 'follow',
+    signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS)
+  })
   if (!response.ok) {
     throw new Error(`GET ${url} failed: ${response.status} ${response.statusText}`)
   }
@@ -90,18 +120,33 @@ async function main(): Promise<void> {
   const archive = path.join(work, MPV_ASSET)
 
   try {
-    log(`downloading ${MPV_ASSET} (~32MB)`)
-    await download(MPV_URL, archive)
-
-    const actual = createHash('sha256').update(readFileSync(archive)).digest('hex')
-    if (actual !== MPV_SHA256) {
+    const failures: string[] = []
+    let served: string | null = null
+    for (const source of MPV_SOURCES) {
+      try {
+        log(`downloading ${MPV_ASSET} (~32MB) from the ${source.name}: ${source.url}`)
+        await download(source.url, archive)
+        const actual = createHash('sha256').update(readFileSync(archive)).digest('hex')
+        if (actual !== MPV_SHA256) {
+          throw new Error(`sha256 mismatch, expected ${MPV_SHA256}, got ${actual}`)
+        }
+        served = source.name
+        break
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        failures.push(`  ${source.name}: ${message}`)
+        log(`the ${source.name} failed (${message})`)
+        rmSync(archive, { force: true })
+      }
+    }
+    if (served === null) {
       throw new Error(
-        `sha256 mismatch for ${MPV_ASSET}\n  expected ${MPV_SHA256}\n  actual   ${actual}\n` +
-          'Refusing to use this archive. If mpv was upgraded upstream, update the pinned ' +
-          'tag/asset/hash at the top of scripts/fetch-mpv.ts deliberately.'
+        `could not fetch ${MPV_ASSET} from any source:\n${failures.join('\n')}\n` +
+          'Refusing to go on without the pinned archive. If upstream deleted the build and the ' +
+          'mirror does not have it, run the "mpv re-pin" workflow to move the pin to a current build.'
       )
     }
-    log('sha256 verified')
+    log(`sha256 verified, served by the ${served}`)
 
     // bsdtar, shipped in Windows since 10 1803, reads 7z via libarchive — so
     // this needs no 7-Zip install on either a dev machine or a CI runner.

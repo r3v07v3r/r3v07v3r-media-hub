@@ -30,6 +30,7 @@ import {
   groupAnimeCatalog,
   groupedIdsFor,
   invalidateAnimeGroupIndex,
+  laterSeasonOf,
   laterSeasons,
   resolveAnimeGroupTarget,
   regroupPlaceIsSeason
@@ -1099,6 +1100,79 @@ async function groupingChecks(): Promise<void> {
     assert.equal(resolveAnimeGroupTarget(FILM).id, FILM)
     assert.equal(laterSeasons()?.has(FILM), false)
     assert.deepEqual(laterSeasons()?.get(S2), { id: S1, season: 2 })
+    db.close()
+  })
+
+  // Web seasons. Kitsu lists some shows' later seasons as ONAs (JoJo's Stone
+  // Ocean); such an ONA is a season where TheTVDB numbers it as one of the
+  // same series and nothing else claims that season. Other ONAs, and every
+  // OVA, stay extras.
+  const JJ1 = 'kitsu:71'
+  const JJ2 = 'kitsu:72'
+  const JJ_ONA = 'kitsu:73'
+  const JJ_OVA = 'kitsu:74'
+  const JJ_CLAIMED = 'kitsu:75'
+  const JJ_LATE = 'kitsu:76'
+  const WEB_CRAWL = [
+    entry(JJ1, 'tv', '2012-10-06'),
+    entry(JJ2, 'tv', '2014-04-05'),
+    entry(JJ_ONA, 'ona', '2021-12-01'),
+    entry(JJ_OVA, 'ova', '2015-01-01'),
+    entry(JJ_CLAIMED, 'ona', '2016-01-01'),
+    entry(JJ_LATE, 'ona', '2024-01-01')
+  ]
+  const WEB_TVDB = {
+    [JJ1]: { seriesId: '200', season: 1 },
+    [JJ2]: { seriesId: '200', season: 2 },
+    [JJ_ONA]: { seriesId: '200', season: 3 },
+    [JJ_OVA]: { seriesId: '200', season: 4 },
+    // The second season's ONA recap, which TheTVDB files at the same season.
+    [JJ_CLAIMED]: { seriesId: '200', season: 2 },
+    // Numbered past a season nobody has: it joins, at a place not its season.
+    [JJ_LATE]: { seriesId: '200', season: 5 }
+  }
+
+  await checkAsync('an ONA numbered as a season of the series joins the show', async () => {
+    const db = groupingDb(ids(WEB_CRAWL), WEB_TVDB, {})
+    const grouped = await groupAnimeCatalog(WEB_CRAWL)
+    assert.deepEqual(ids(grouped), [JJ1, JJ_OVA, JJ_CLAIMED])
+    assert.deepEqual(grouped[0].groupedIds, [JJ2, JJ_ONA, JJ_LATE])
+    // An OVA stays an extra wherever TheTVDB files it, and so does an ONA on
+    // a season a TV entry has.
+    assert.deepEqual(grouped[0].groupedExtras, [JJ_OVA, JJ_CLAIMED])
+    assert.equal(grouped[0].episodeCounts?.totalSeasons, 4)
+    db.close()
+  })
+
+  await checkAsync('the rows of an ONA that stood alone follow it into the show', async () => {
+    const db = groupingDb(ids(WEB_CRAWL), WEB_TVDB, {})
+    const seriesOf = (id: string): string | null =>
+      WEB_TVDB[id as keyof typeof WEB_TVDB]?.seriesId ?? ''
+    // Before the change the ONAs were titles of their own.
+    const before: AnimeGroupRecord[] = [{ id: JJ1, members: [JJ1, JJ2], series: '200' }]
+    followAnimeRegroup(db, before, regroupPlaceIsSeason)
+    mark(db, JJ1, 1, [1])
+    mark(db, JJ_ONA, 1, [1, 2])
+    mark(db, JJ_LATE, 1, [1])
+
+    const grouped = await groupAnimeCatalog(WEB_CRAWL)
+    db.putCache('catalog:v2:anime', grouped, 60_000)
+    db.putCache(ANIME_GROUPED_KEY, true, 60_000)
+    invalidateAnimeGroupIndex()
+    const after = animeGroupRecordsOf(grouped, seriesOf)
+    assert.deepEqual(after, [{ id: JJ1, members: [JJ1, JJ2, JJ_ONA, JJ_LATE], series: '200' }])
+    followAnimeRegroup(db, after, regroupPlaceIsSeason)
+
+    // Its place is its TheTVDB season: it opens as the show's season 3, and
+    // its rows are there now.
+    assert.deepEqual(keys(db, JJ1), ['1:1', '3:1', '3:2'])
+    assert.deepEqual(keys(db, JJ_ONA), [])
+    // At place 4 but TheTVDB's season 5: it still opens as itself, and its
+    // rows stay under its own id.
+    assert.deepEqual(keys(db, JJ_LATE), ['1:1'])
+    assert.equal(laterSeasonOf(JJ_LATE), null)
+    assert.deepEqual(laterSeasonOf(JJ_ONA), { id: JJ1, season: 3 })
+    assert.deepEqual(laterSeasons()?.get(JJ_ONA), { id: JJ1, season: 3 })
     db.close()
   })
 }

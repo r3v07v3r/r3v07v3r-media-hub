@@ -16,7 +16,7 @@ import path from 'node:path'
 
 import { fetchMediaWithRetry } from '../src/main/media-hub/playback'
 import type { Credentials } from './credentials'
-import type { JobStore, JobRecord } from './jobs'
+import { heldIsSameFile, type JobStore, type JobRecord } from './jobs'
 import type { ItemStore } from './storage'
 import { resolveDownload, type ResolvedDownload } from './torbox'
 
@@ -97,14 +97,28 @@ export function createFetcher({
   }
 
   async function fetchOne(job: JobRecord): Promise<void> {
-    // Always the OWNER's account — the person whose request this is pays
-    // with their own TorBox quota, never a housemate's. A job whose owner
-    // has not shared a credential waits; it can still be adopted by a
-    // later requester who has (jobs.enqueue's ownership healing).
+    // ALREADY ON DISK, under this job or another one for the same file.
+    // Downloading it again would spend the owner's quota on a copy that
+    // exists and rewrite the item's meta.json, dropping whoever it already
+    // belongs to. The owner is granted the copy instead. The same FILE, not
+    // just the same hash: another episode of one season pack is not it.
+    const held = await storage.get(job.infoHash)
+    if (held?.complete && heldIsSameFile(held, job)) {
+      if (job.ownerDeviceId) await storage.grantEntitlement(job.infoHash, job.ownerDeviceId)
+      jobs.update(job.contentKey, { state: 'ready', progressBytes: held.presentBytes })
+      nextAttemptAt.delete(job.contentKey)
+      log(`held     ${job.title} (already on disk)`)
+      return
+    }
+    // Always the OWNER's account: the person whose request this is pays
+    // with their own TorBox quota, never a housemate's. POST /api/jobs
+    // refuses a device with no saved key, so this only catches a key
+    // removed after the job was queued. It waits, and it can still be
+    // adopted by a later requester who has a key (jobs.enqueue).
     const token = credentials.tokenForDevice(job.ownerDeviceId ?? '')
     if (!token) {
       jobs.update(job.contentKey, {
-        lastError: 'Waiting: the requesting device has not shared TorBox access.'
+        lastError: 'Waiting: the requesting device removed its TorBox key from this server.'
       })
       // Backed off, not retried hot: nothing changes until a person acts.
       nextAttemptAt.set(job.contentKey, Date.now() + 5 * 60_000)
@@ -205,6 +219,7 @@ export function createFetcher({
         infoHash: job.infoHash,
         fileName: resolved.fileName,
         sizeBytes: resolved.sizeBytes,
+        fileIdx: job.fileIdx,
         resolution: job.resolution,
         sourceRef: { source: 'torbox', infoHash: job.infoHash },
         fetchedAt: Date.now(),

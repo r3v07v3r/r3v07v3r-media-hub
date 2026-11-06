@@ -46,6 +46,11 @@ export interface ItemMeta {
   infoHash: string
   fileName: string
   sizeBytes: number
+  /** The file index into the torrent this item holds, when the job named
+   *  one. One season pack is one infoHash holding many episodes, so the
+   *  hash alone does not say which file is here. Absent on items written
+   *  before it was recorded. */
+  fileIdx?: number
   resolution?: number
   sourceRef?: CacheSourceRef
   fetchedAt: number

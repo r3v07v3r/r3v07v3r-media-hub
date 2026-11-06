@@ -12,7 +12,7 @@
 //   empty name is ignored.
 // - The Watch Party Queue tab could never receive a title, so it is hidden
 //   behind one constant until a way to suggest a title returns.
-// - Sharing the TorBox key with a cache server starts unticked.
+// - Saving the TorBox key on a cache server starts ticked.
 // - A film marked Not interested is dimmed and named in Rest of the series,
 //   and a title so marked in the library page's hero and Similar list.
 // - The host's local-network hint names the relay's real place and no port.
@@ -84,13 +84,11 @@ check('Rename this list uses an inline field, not window.prompt', () => {
   )
 })
 
-check('the Watch Party Queue tab is hidden behind one constant', () => {
+check('the Watch Party has only Chat and People tabs', () => {
   const hub = read('components/party/SessionHub.tsx')
-  assert.match(hub, /const QUEUE_TAB_ENABLED = false/)
-  // Left out of the tab list, and its panel cannot render either.
-  assert.match(hub, /\.filter\(\(\[key\]\) => key !== 'queue' \|\| QUEUE_TAB_ENABLED\)/)
-  assert.match(hub, /\{QUEUE_TAB_ENABLED && tab === 'queue' && \(/)
-  // The party opens on Chat, never on the hidden tab.
+  assert.match(hub, /type PartyTab = 'chat' \| 'people'/)
+  // The old shared queue is gone, not just hidden.
+  assert.doesNotMatch(hub, /queue/i)
   assert.match(hub, /useState<PartyTab>\('chat'\)/)
 })
 
@@ -103,9 +101,11 @@ check("the host's hint names Control centre, Community and no port", () => {
   )
 })
 
-check('sharing the TorBox key with a cache server starts unticked', () => {
+check('saving the TorBox key on a cache server starts ticked', () => {
+  // The maintainer's 2026-11 rule: each person's key is saved on the cache
+  // and used only for their own requests, so the consent defaults to on.
   const caching = read('components/controlcentre/sections/CachingSection.tsx')
-  assert.match(caching, /const \[shareTorbox, setShareTorbox\] = useState\(false\)/)
+  assert.match(caching, /const \[shareTorbox, setShareTorbox\] = useState\(true\)/)
   // Nothing else ticks it: the only writer is the checkbox itself.
   const writes = caching.match(/setShareTorbox\(/g) ?? []
   assert.equal(writes.length, 1, 'only the checkbox sets the TorBox opt-in')

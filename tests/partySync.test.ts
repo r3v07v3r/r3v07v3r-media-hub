@@ -103,4 +103,11 @@ assert.match(
   /sendRoomPayload\(room, \{\s*type: 'friend-join-declined',[\s\S]*?\}\)\s*return\s*\}/
 )
 
+// The shared queue and its play-request are gone. Older builds may still
+// send suggest/vote/play-request or broadcast queue-sync; they are dropped
+// before the generic relay, so a new host never re-broadcasts them.
+const drop = watchParty.indexOf("msg?.type === 'queue-sync'")
+assert.ok(drop > 0 && drop < watchParty.indexOf('{ ...msg, from: fromId }'))
+assert.equal(watchParty.split("if (msg.type === 'queue-sync') return").length - 1, 2)
+
 console.log('party sync tests passed')

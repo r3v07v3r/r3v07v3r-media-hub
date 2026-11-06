@@ -97,6 +97,7 @@ async function main(): Promise<void> {
     // them, and a job is fetched with its OWNER's token only.
     await credentials.setTokenForDevice('device-alice', 'alice-torbox-token')
 
+    let resolveCalls = 0
     const fetcher = createFetcher({
       jobs,
       storage,
@@ -105,11 +106,14 @@ async function main(): Promise<void> {
       log: () => {},
       // Test seam: the TorBox resolve step is injected so the loop can be
       // driven against the stub content host without patching globals.
-      resolveDownloadImpl: async () => ({
-        url: contentUrl,
-        fileName: 'Movie.2024.1080p.mkv',
-        sizeBytes: Buffer.byteLength(CONTENT)
-      })
+      resolveDownloadImpl: async () => {
+        resolveCalls += 1
+        return {
+          url: contentUrl,
+          fileName: 'Movie.2024.1080p.mkv',
+          sizeBytes: Buffer.byteLength(CONTENT)
+        }
+      }
     })
 
     const hash = 'd'.repeat(40)
@@ -146,7 +150,7 @@ async function main(): Promise<void> {
 
     const bob = jobs.list().find((candidate) => candidate.contentKey === 'tt43::')
     assert.equal(bob?.state, 'queued', "bob's job waits — it never borrows alice's account")
-    assert.match(bob?.lastError ?? '', /not shared TorBox access/)
+    assert.match(bob?.lastError ?? '', /TorBox key/)
 
     // Ownership healing: alice also wants the title, and bob cannot fetch it
     // at all, so the job adopts her (credentialed) device and becomes
@@ -173,6 +177,45 @@ async function main(): Promise<void> {
     assert.equal(item.contentKey, 'tt42::')
     const onDisk = await fsp.readFile(storage.filePath(item), 'utf8')
     assert.equal(onDisk, CONTENT, 'file content is byte-identical')
+
+    // ALREADY COMPLETE: a job for the same file under another key (queued
+    // before the first landed) is answered from disk, not downloaded again.
+    // The item keeps its first owner and the new owner is granted the copy.
+    await credentials.setTokenForDevice('device-carol', 'carol-torbox-token')
+    const callsBefore = resolveCalls
+    jobs.enqueue({
+      contentKey: 'kitsu:99',
+      infoHash: hash,
+      title: 'Movie',
+      ownerDeviceId: 'device-carol'
+    })
+    const again = createFetcher({
+      jobs,
+      storage,
+      credentials,
+      dataDir: root,
+      log: () => {},
+      resolveDownloadImpl: async (_token, infoHash) => {
+        // tt43:: (adopted by alice above) is still queued and resolves too.
+        if (infoHash === hash) resolveCalls += 1
+        return null
+      }
+    })
+    again.start()
+    const heldDeadline = Date.now() + 15_000
+    for (;;) {
+      const job = jobs.list().find((candidate) => candidate.contentKey === 'kitsu:99')
+      if (job?.state === 'ready') break
+      if (Date.now() > heldDeadline) assert.fail('the held copy was not granted in time')
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    await again.stop()
+    assert.equal(resolveCalls, callsBefore, 'a file already on disk is never resolved again')
+    const heldItem = await storage.get(hash)
+    assert.equal(heldItem?.ownerDeviceId, 'device-alice', 'the first owner keeps the item')
+    assert.equal(heldItem?.contentKey, 'tt42::', 'meta.json is not rewritten')
+    assert.ok(heldItem?.entitled?.includes('device-carol'), 'the new owner is granted the copy')
+    assert.ok(heldItem?.entitled?.includes('device-alice'))
     assert.equal(
       item.sourceRef?.source,
       'torbox',

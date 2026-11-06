@@ -60,7 +60,13 @@
 // tracks real release order closely enough — as the last resort when
 // neither external source has anything to say.
 
-import type { AnimeTimelineEntry, CatalogItem, Episode } from '../../shared/media-hub/types'
+import type {
+  AnimeTimelineEntry,
+  CatalogItem,
+  Episode,
+  UnsentAnimeSeason,
+  UnsentService
+} from '../../shared/media-hub/types'
 import {
   animeEntryTarget,
   animeSeasonMembers,
@@ -123,6 +129,18 @@ export function seasonMatchesPage(showId: string, memberId: string, season: numb
 }
 
 /**
+ * Whether some member can be shown to be `season` of the page of the show
+ * `showId` fronts (animeSeasonMembers): what the Simkl episode comparison
+ * asks of a show one of whose entries has no place (episodeSync.ts's
+ * simklAnimeRead), so that only the seasons without a member are left out.
+ * No for an id that fronts no group: such an id is named there only as a
+ * member that opens as itself, and its own rows are not compared. No request.
+ */
+export function seasonHasPlacedMember(showId: string, season: number): boolean {
+  return seasonMembersOf(showId)?.[season - 1] != null
+}
+
+/**
  * Whether a no from seasonMatchesPage for the show `showId` fronts is still
  * waiting on a lookup: the TheTVDB mapping of the show's first member, or of
  * a later one while the first has one, was never asked for (or never
@@ -134,6 +152,34 @@ export function seasonLookupsPending(showId: string): boolean {
   if (front === null) return true
   if (front === 'none') return false
   return (groupedIdsFor(showId) ?? []).some((member) => cachedTvdbMapping(member) === null)
+}
+
+/**
+ * The seasons of the page of the show `showId` fronts that are not sent to
+ * the services in `connected`: those no member can be shown to be
+ * (animeSeasonMembers), so a viewing of them has no entry to go to at
+ * Simkl or MyAnimeList (toSimklAnimeEpisode, planMalPushes). `seasons` are
+ * the page's own; without them, one per member.
+ *
+ * Empty where that is not an answer yet or not one worth saying: before the
+ * catalog is grouped, while a TheTVDB lookup the answer waits on has not
+ * come back (seasonLookupsPending), for an id that fronts no group (a title
+ * of its own is its own entry), with no service connected, and for Specials,
+ * which are never sent to either. No request.
+ */
+export function unsentAnimeSeasons(
+  showId: string,
+  connected: readonly UnsentService[],
+  seasons?: readonly number[]
+): UnsentAnimeSeason[] {
+  if (!connected.length || !showId.startsWith('kitsu:') || !animeGroupingReady()) return []
+  const members = seasonMembersOf(showId)
+  if (!members?.length || seasonLookupsPending(showId)) return []
+  const pageSeasons = seasons ?? members.map((_, index) => index + 1)
+  return [...new Set(pageSeasons)]
+    .filter((season) => Number.isInteger(season) && season >= 1 && members[season - 1] == null)
+    .sort((a, b) => a - b)
+    .map((season) => ({ season, services: [...connected] }))
 }
 
 /**
@@ -263,8 +309,14 @@ function normalizeTmdbEpisode(record: RawApiPayload, parentId: string, season: n
 /** Cached (24h) real episode list for one TMDB tv season. Returns `[]`
  *  (not an error) on any failure, including a season that doesn't exist
  *  (e.g. probing for a season-0 Specials entry that isn't there) — callers
- *  treat empty as "fall back", never as a hard error. */
-async function tmdbSeasonEpisodes(
+ *  treat empty as "fall back", never as a hard error.
+ *
+ *  TMDB's 404 for a season it does not have is an answer, and is cached as
+ *  the empty list for the same 24 hours, so a page rebuilt within the day
+ *  (a degraded page is rebuilt every few minutes) does not ask again. Any
+ *  other failure (rate limited, offline) is not cached. Exported for its
+ *  test. */
+export async function tmdbSeasonEpisodes(
   tmdbTvId: number,
   seasonNumber: number,
   apiKey: string,
@@ -288,6 +340,10 @@ async function tmdbSeasonEpisodes(
     db.putCache(key, episodes, 24 * 60 * 60 * 1000)
     return episodes
   } catch (error) {
+    if ((error as { status?: number }).status === 404) {
+      db.putCache(key, [], 24 * 60 * 60 * 1000)
+      return []
+    }
     logError('anime:tmdb-season', error)
     return []
   }
@@ -404,13 +460,14 @@ async function kitsuSequelEdges(kitsuId: string, priority: TaskPriority): Promis
  * buildGroupedAnimeVideos to fetch on demand when that title's detail page
  * is actually opened.
  *
- * Only TV entries become seasons (isSeasonEntry). Until Kitsu's kind of
- * entry was read, a film or an OVA linked to a show was merged into it as a
- * numbered season: it took a season's place, on a show numbered by TMDB
- * usually showed TMDB's season of that number instead of itself, and
- * dropped out of the story panel as part of the show. Such an entry now
- * stays in the returned array as a title of its own, and the show lists it
- * in groupedExtras. A grouping that changes this way reaches watch history
+ * TV entries become seasons (isSeasonEntry), and so does an ONA that
+ * TheTVDB numbers as a season of the same series (seasonEntriesOf). Until
+ * Kitsu's kind of entry was read, a film or an OVA linked to a show was
+ * merged into it as a numbered season: it took a season's place, on a show
+ * numbered by TMDB usually showed TMDB's season of that number instead of
+ * itself, and dropped out of the story panel as part of the show. Such an
+ * entry now stays in the returned array as a title of its own, and the show
+ * lists it in groupedExtras. A grouping that changes this way reaches watch history
  * through the ledger like any other (animeRegroup.ts): on a show numbered by
  * its members, the rows kept for a film at its season go back under the
  * film's own id; on one numbered by TMDB they were TMDB's seasons and stay.
@@ -543,8 +600,9 @@ export async function groupAnimeCatalog(
   }
 
   // Every item that the evidence above links together is one franchise; its
-  // TV entries are the show's seasons. A film, an OVA, an ONA, a special or
-  // a music video is not a season: it stays a title of its own, and the show
+  // TV entries are the show's seasons, with any ONA TheTVDB numbers as one of
+  // the same series (seasonEntriesOf). A film, an OVA, any other ONA, a
+  // special or a music video is not a season: it stays a title of its own, and the show
   // names it in groupedExtras for its page to list between the seasons. It
   // still links the seasons on either side of it — a first season whose only
   // recorded sequel is a film, and the film's own sequel the second season,
@@ -553,19 +611,27 @@ export async function groupAnimeCatalog(
   for (let i = 0; i < items.length; i++) {
     const root = find(i)
     const list = groups.get(root) || []
+    const mapping = mappingByItemId.get(items[i].id)
     list.push({
       item: items[i],
-      season: mappingByItemId.get(items[i].id)?.season ?? null,
+      seriesId: mapping?.seriesId || null,
+      season: mapping?.season ?? null,
       anilistOrderKey: anilistOrderKeyByItemId.get(items[i].id) ?? null
     })
     groups.set(root, list)
   }
 
   // Each franchise's card, by its root, built when its root is first met
-  // below; null for one that is not a merged show.
+  // below; null for one that is not a merged show. With it, the ids of the
+  // entries that are its seasons.
   const shows = new Map<number, CatalogItem | null>()
+  const seasonIds = new Map<number, Set<string>>()
   const showOf = (root: number): CatalogItem | null => {
-    if (!shows.has(root)) shows.set(root, mergedShow(groups.get(root) || []))
+    if (!shows.has(root)) {
+      const group = groups.get(root) || []
+      shows.set(root, mergedShow(group))
+      seasonIds.set(root, new Set(seasonEntriesOf(group).map((member) => member.item.id)))
+    }
     return shows.get(root) ?? null
   }
   // In the crawl's own order, as before: a show takes the place of the first
@@ -576,7 +642,7 @@ export async function groupAnimeCatalog(
   for (let i = 0; i < items.length; i++) {
     const root = find(i)
     const show = showOf(root)
-    if (!show || !isSeasonEntry(items[i])) {
+    if (!show || !seasonIds.get(root)?.has(items[i].id)) {
       result.push(items[i])
       continue
     }
@@ -589,6 +655,8 @@ export async function groupAnimeCatalog(
 
 interface GroupMember {
   item: CatalogItem
+  /** The TheTVDB series and season Kitsu maps the entry to, null for none. */
+  seriesId: string | null
   season: number | null
   anilistOrderKey: number | null
 }
@@ -603,10 +671,64 @@ export function isSeasonEntry(item: Pick<CatalogItem, 'subtype'>): boolean {
   return !item.subtype || item.subtype === 'tv'
 }
 
-/** One franchise's card: its TV entries in season order, the first in front
- *  — or null when fewer than two of its entries are seasons. */
+/** What seasonEntriesOf reads of one linked entry. */
+export interface SeasonCandidate {
+  item: Pick<CatalogItem, 'id' | 'subtype'>
+  seriesId: string | null
+  season: number | null
+}
+
+/**
+ * The entries of one franchise that are seasons of its show, in the order
+ * given: every TV entry (isSeasonEntry), and an ONA when TheTVDB numbers it
+ * as a season of the show.
+ *
+ * Some shows' later seasons came out on the web, and Kitsu lists those as
+ * ONAs (JoJo's Stone Ocean). Kitsu's kind alone cannot tell such a season
+ * from a spin-off, a recap or a run of shorts, so an ONA counts only when
+ * all of this holds:
+ *
+ *  - TheTVDB maps it into the same series as one of the TV entries, at a
+ *    season of 1 or more. TheTVDB files OVAs, specials and films at season
+ *    0, which is why those are never seasons here: promoting them would put
+ *    them at a place the services and TMDB do not.
+ *  - No TV entry maps to that season of that series. Two entries claiming
+ *    one season would leave the season placeable on neither
+ *    (animeSeasonMembers), so the TV entry keeps it.
+ *  - No other ONA maps to that season either, for the same reason.
+ *
+ * An OVA, a special, a film or a music entry is never a season.
+ */
+export function seasonEntriesOf<T extends SeasonCandidate>(group: readonly T[]): T[] {
+  const tv = group.filter((member) => isSeasonEntry(member.item))
+  const series = new Set(tv.map((member) => member.seriesId).filter(Boolean))
+  const claimedByTv = new Set(
+    tv.filter((member) => member.seriesId).map((member) => `${member.seriesId}:${member.season}`)
+  )
+  const onaClaims = new Map<string, number>()
+  const webSeason = (member: T): string | null => {
+    if (member.item.subtype !== 'ona' || !member.seriesId || !series.has(member.seriesId)) {
+      return null
+    }
+    if (member.season === null || member.season < 1) return null
+    const key = `${member.seriesId}:${member.season}`
+    return claimedByTv.has(key) ? null : key
+  }
+  for (const member of group) {
+    const key = webSeason(member)
+    if (key) onaClaims.set(key, (onaClaims.get(key) ?? 0) + 1)
+  }
+  return group.filter((member) => {
+    if (isSeasonEntry(member.item)) return true
+    const key = webSeason(member)
+    return key !== null && onaClaims.get(key) === 1
+  })
+}
+
+/** One franchise's card: its seasons (seasonEntriesOf) in season order, the
+ *  first in front, or null when fewer than two of its entries are seasons. */
 function mergedShow(group: readonly GroupMember[]): CatalogItem | null {
-  const seasons = group.filter((member) => isSeasonEntry(member.item))
+  const seasons = seasonEntriesOf(group)
   if (seasons.length < 2) return null
   seasons.sort((a, b) => {
     // Tier 1: a real TheTVDB season number, when both sides have one.
@@ -628,7 +750,7 @@ function mergedShow(group: readonly GroupMember[]): CatalogItem | null {
     return Number(a.item.id.replace(/^kitsu:/, '')) - Number(b.item.id.replace(/^kitsu:/, ''))
   })
   const [canonical, ...siblings] = seasons
-  const extras = group.filter((member) => !isSeasonEntry(member.item))
+  const extras = group.filter((member) => !seasons.includes(member))
   return {
     ...canonical.item,
     groupedIds: siblings.map((s) => s.item.id),

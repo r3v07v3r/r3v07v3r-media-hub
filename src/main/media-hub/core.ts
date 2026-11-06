@@ -1048,7 +1048,8 @@ export function mergedShowStoryLinks(
 
 /**
  * A merged show's seasons, in their order, with the parts filed with it
- * (groupedExtras: its films, OVAs, ONAs, specials and music entries) each
+ * (groupedExtras: its films, OVAs, specials, music entries and the ONAs
+ * that are not seasons of it) each
  * placed after the last season that started on or before it came out — the
  * seasons it came out between. One that came out before the first season
  * goes first, and one with no date last. Parts in one gap are in date order.

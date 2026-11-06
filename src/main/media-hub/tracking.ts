@@ -99,7 +99,8 @@ import {
   laterSeasonOf,
   laterSeasons,
   placeAnimeEntry,
-  resolveAnimeGroupTarget
+  resolveAnimeGroupTarget,
+  seasonHasPlacedMember
 } from './animeSeasons'
 import { catchUpFromServices, noteSimklActivities, recentSimklActivities } from './simklCatchUp'
 import { getDatabase } from './dbState'
@@ -2083,7 +2084,9 @@ function episodeKeysOwed(service: EpisodeService): Set<string> {
  *  (placeAnimeEntry): a later season only where it can be shown to be that
  *  season of the page, and the show's own id only where it can be shown to
  *  be the first — never by its position in the group. One that cannot be
- *  shown is left out of the comparison, with the show it would land on. */
+ *  shown leaves out of the comparison only the seasons of the show it would
+ *  land on that no member is shown to be (seasonHasPlacedMember); the
+ *  show's placed seasons are compared as usual. */
 async function placeSimklAnime(title: SimklLibraryTitle): Promise<AnimePlace> {
   let kitsu = title.kitsu ?? null
   if (!kitsu) {
@@ -2115,7 +2118,11 @@ async function readEpisodeSource(source: EpisodeSource): Promise<RemoteRead> {
       return simklShowsRead(await simklLibrary('show', 'background', null))
     case 'simkl-anime':
       if (!animeGroupingReady()) throw new Error('The anime catalog is still being organised.')
-      return simklAnimeRead(await simklLibrary('anime', 'background', null), placeSimklAnime)
+      return simklAnimeRead(
+        await simklLibrary('anime', 'background', null),
+        placeSimklAnime,
+        seasonHasPlacedMember
+      )
     case 'trakt-shows':
       return traktShowsRead(await traktRequest('/sync/watched/shows', {}, 'background'))
   }

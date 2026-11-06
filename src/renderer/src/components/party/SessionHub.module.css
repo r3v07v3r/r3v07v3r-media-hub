@@ -172,7 +172,6 @@
   background: var(--accent-cyan);
 }
 .chatPanel,
-.queuePanel,
 .peoplePanel {
   min-height: 250px;
 }
@@ -268,7 +267,6 @@
   text-align: center;
 }
 
-.queueList,
 .memberList {
   display: flex;
   flex-direction: column;
@@ -276,55 +274,6 @@
   padding: 0;
   margin: 0;
   list-style: none;
-}
-.queueItem {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.045);
-}
-.queueItem > div:first-child {
-  min-width: 0;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.queueItem strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-primary);
-  font-size: 12.5px;
-}
-.queueItem span {
-  color: var(--text-muted);
-  font-size: 10px;
-}
-.queueActions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-.queueActions button {
-  width: 23px;
-  height: 23px;
-  display: grid;
-  place-items: center;
-  border-radius: 7px;
-  color: var(--text-secondary);
-}
-.queueActions button:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: var(--text-primary);
-}
-.queueActions > span {
-  min-width: 12px;
-  text-align: center;
-  color: var(--text-secondary);
-  font-weight: 700;
 }
 
 .memberList li {

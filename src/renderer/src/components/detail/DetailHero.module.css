@@ -251,7 +251,7 @@
    the title/description/button stack for attention. Pausing or closing
    the trailer removes this class and the fade reverses. pointer-events:
    none matters here, not just the opacity — without it these buttons
-   (Play, Trailer, My List, Suggest to Party) stay fully clickable while
+   (Play, Trailer, My List) stay fully clickable while
    invisible. */
 .contentFaded {
   opacity: 0;

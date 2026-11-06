@@ -40,7 +40,10 @@ import {
   combineGroupEpisodeCounts,
   groupedVideosAreComplete,
   invalidateAnimeGroupIndex,
-  isSeasonEntry
+  isSeasonEntry,
+  seasonEntriesOf,
+  tmdbSeasonEpisodes,
+  type SeasonCandidate
 } from '../src/main/media-hub/animeSeasons'
 
 // animeStory.ts (storyForShow, the page's catalog:story) imports 'electron'
@@ -376,6 +379,49 @@ check("normalizeKitsuAnime keeps Kitsu's kind of entry, lowercased", () => {
   }
 })
 
+// An ONA is a season of the show when TheTVDB numbers it as one of the same
+// series and no other entry claims that season (seasonEntriesOf).
+check('an ONA TheTVDB numbers as a season of the series is a season', () => {
+  const linked = (
+    id: string,
+    subtype: string | undefined,
+    seriesId: string | null,
+    season: number | null
+  ): SeasonCandidate => ({ item: { id, ...(subtype ? { subtype } : {}) }, seriesId, season })
+  const seasons = (group: SeasonCandidate[]): string[] =>
+    seasonEntriesOf(group).map((member) => member.item.id)
+  const tv = [linked('kitsu:1', 'tv', '100', 1), linked('kitsu:2', 'tv', '100', 2)]
+
+  assert.deepEqual(seasons([...tv, linked('kitsu:3', 'ona', '100', 3)]), [
+    'kitsu:1',
+    'kitsu:2',
+    'kitsu:3'
+  ])
+  // Filed at season 0, unmapped, or mapped into another series: an extra.
+  assert.deepEqual(seasons([...tv, linked('kitsu:3', 'ona', '100', 0)]), ['kitsu:1', 'kitsu:2'])
+  assert.deepEqual(seasons([...tv, linked('kitsu:3', 'ona', null, null)]), ['kitsu:1', 'kitsu:2'])
+  assert.deepEqual(seasons([...tv, linked('kitsu:3', 'ona', '999', 3)]), ['kitsu:1', 'kitsu:2'])
+  // A season a TV entry has already: the TV entry keeps it.
+  assert.deepEqual(seasons([...tv, linked('kitsu:3', 'ona', '100', 2)]), ['kitsu:1', 'kitsu:2'])
+  // Two ONAs on one season: neither, as either would leave it unplaceable.
+  assert.deepEqual(
+    seasons([...tv, linked('kitsu:3', 'ona', '100', 3), linked('kitsu:4', 'ona', '100', 3)]),
+    ['kitsu:1', 'kitsu:2']
+  )
+  // No TV entry with a series to be a season of: nothing to join.
+  assert.deepEqual(seasons([linked('kitsu:3', 'ona', '100', 1)]), [])
+  // An OVA, a special, a film or a music entry never is, wherever it maps.
+  for (const subtype of ['ova', 'special', 'movie', 'music']) {
+    assert.deepEqual(seasons([...tv, linked('kitsu:3', subtype, '100', 3)]), ['kitsu:1', 'kitsu:2'])
+  }
+  // Unknown kind counts as TV, as before.
+  assert.deepEqual(seasons([...tv, linked('kitsu:3', undefined, null, null)]), [
+    'kitsu:1',
+    'kitsu:2',
+    'kitsu:3'
+  ])
+})
+
 console.log('\nrelease order and story order')
 
 // A franchise to put in order: a show of three seasons, a film that came
@@ -618,6 +664,32 @@ async function pageChecks(): Promise<void> {
     }
     globalThis.fetch = realFetch
     assert.deepEqual(requests, [])
+  })
+
+  // TMDB answers 404 for a season it does not have (no Specials, a member
+  // past its season count). That is an answer: kept for the day like a
+  // season it does have, so a rebuilt page does not ask again. A failure
+  // that is not one (rate limited) is asked again next time.
+  await checkAsync('a season TMDB does not have is cached as empty for the day', async () => {
+    const requests: string[] = []
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (url: string | URL) => {
+      requests.push(String(url))
+      const status = String(url).includes('/season/5') ? 404 : 429
+      return new Response(JSON.stringify({ status_message: 'nope' }), { status })
+    }) as typeof fetch
+    try {
+      for (let i = 0; i < 2; i++) {
+        assert.deepEqual(await tmdbSeasonEpisodes(9001, 5, 'key', 'kitsu:1', 'interactive'), [])
+        assert.deepEqual(await tmdbSeasonEpisodes(9001, 6, 'key', 'kitsu:1', 'interactive'), [])
+      }
+    } finally {
+      globalThis.fetch = realFetch
+    }
+    assert.equal(requests.filter((url) => url.includes('/season/5')).length, 1)
+    assert.equal(requests.filter((url) => url.includes('/season/6')).length, 2)
+    assert.deepEqual(db.getCache('tmdb:season:9001:5'), [])
+    assert.equal(db.getCache('tmdb:season:9001:6'), null)
   })
   db.close()
 }

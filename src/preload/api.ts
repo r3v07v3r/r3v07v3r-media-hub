@@ -64,7 +64,6 @@ import type {
   PartyNowPlayingPayload,
   PartyPlaybackAction,
   PartyPreparingPayload,
-  PartyQueueEntry,
   PartyStatusResult,
   PersonCreditsResult,
   PlayRecord,
@@ -103,6 +102,7 @@ import type {
   SubtitlesApplyResult,
   TitleCollectionResult,
   TitleWatchState,
+  UnsentAnimeSeason,
   TorBoxConnectResult,
   TrackingHistoryResult,
   TrackingListResult,
@@ -403,6 +403,13 @@ export function createApi(transport: ApiTransport) {
         }> => transport.invoke(MEDIA_HUB_CHANNELS.lanCachePairStatus),
         claim: (): Promise<{ ok: boolean; message: string }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.lanCacheClaim),
+        /** Administrator only: end a --claim-admin reopening. */
+        closeClaim: (): Promise<{ ok: boolean; message: string }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.lanCacheCloseClaim),
+        /** Save this person's TorBox key on the cache (and remember the
+         *  consent, so a changed key follows). */
+        shareKey: (): Promise<{ ok: boolean; message: string }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.lanCacheShareKey),
         devices: (): Promise<
           ({ ok: true } & LanCacheDevicesResponse) | { ok: false; message: string }
         > => transport.invoke(MEDIA_HUB_CHANNELS.lanCacheDevices),
@@ -629,8 +636,9 @@ export function createApi(transport: ApiTransport) {
          *  docs/WATCHLIST-SYNC.md for what each direction does. */
         setWatchlistTwoWay: (enabled: boolean): Promise<{ watchlistTwoWay: boolean }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.trackingSetTwoWay, { enabled }),
-        /** Turn the player's scrobbles to Simkl and Trakt on or off. Off by
-         *  default; the watched mark at 80% is sent either way. */
+        /** Turn the player's scrobbles to Simkl and Trakt on or off. Off on
+         *  a new install, switched on once for one that already had Simkl or
+         *  Trakt connected; the watched mark at 80% is sent either way. */
         setScrobble: (enabled: boolean): Promise<{ scrobbleEnabled: boolean }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.trackingSetScrobble, { enabled }),
         /** Bring this device up to date with the tracking services — the
@@ -649,6 +657,12 @@ export function createApi(transport: ApiTransport) {
          *  the database only, so it answers at once. */
         titleState: (id: string): Promise<TitleWatchState> =>
           transport.invoke(MEDIA_HUB_CHANNELS.trackingTitleState, { id }),
+        /** The seasons of one anime page (`seasons`, the page's own) that
+         *  are not sent to a connected Simkl or MyAnimeList, because no
+         *  entry there can be shown to be them. Empty while that is not
+         *  known yet. No request. */
+        unsentSeasons: (id: string, seasons: number[]): Promise<UnsentAnimeSeason[]> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.trackingUnsentSeasons, { id, seasons }),
         toggle: (item: TrackableItem): Promise<{ tracked: boolean }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.trackingToggle, item),
         /** Undo of a Remove from plan made through toggle: the removed row
@@ -1029,19 +1043,6 @@ export function createApi(transport: ApiTransport) {
           transport.invoke(MEDIA_HUB_CHANNELS.partyJoin, { code, name }),
         leave: (): Promise<{ ok: true }> => transport.invoke(MEDIA_HUB_CHANNELS.partyLeave),
         status: (): Promise<PartyStatusResult> => transport.invoke(MEDIA_HUB_CHANNELS.partyStatus),
-        suggest: (item: {
-          id: unknown
-          type?: string
-          title?: string
-          poster?: string
-          year?: string
-        }): Promise<{ ok: true }> => transport.invoke(MEDIA_HUB_CHANNELS.partySuggest, item),
-        remove: (queueId: string): Promise<{ ok: true }> =>
-          transport.invoke(MEDIA_HUB_CHANNELS.partyRemove, queueId),
-        vote: (queueId: string, direction: 1 | -1): Promise<{ ok: true }> =>
-          transport.invoke(MEDIA_HUB_CHANNELS.partyVote, { queueId, direction }),
-        queue: (): Promise<{ queue: PartyQueueEntry[] }> =>
-          transport.invoke(MEDIA_HUB_CHANNELS.partyQueue),
         preparing: (payload: PartyPreparingPayload): Promise<{ ok: true }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.partyPreparing, payload),
         nowPlaying: (payload: PartyNowPlayingPayload): Promise<{ ok: true }> =>
@@ -1050,13 +1051,6 @@ export function createApi(transport: ApiTransport) {
           transport.invoke(MEDIA_HUB_CHANNELS.partyPlaybackAction, action),
         setMemberControl: (allow: boolean): Promise<{ ok: true }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.partySetMemberControl, { allow }),
-        requestPlay: (item: {
-          id: string
-          type: string
-          title: string
-          poster?: string
-        }): Promise<{ ok: true }> =>
-          transport.invoke(MEDIA_HUB_CHANNELS.partyRequestPlay, { item }),
         chat: (payload: {
           id: string
           text: string
