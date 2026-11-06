@@ -355,7 +355,7 @@ export function SessionHub() {
                     checked={Boolean(partyStatus?.allowMemberControl)}
                     onChange={(event) => setPartyMemberControl(event.target.checked)}
                   />
-                  <span>Everyone can control playback</span>
+                  <span>Everyone can play, pause and seek</span>
                 </label>
               )}
               <div className={styles.discordCard}>

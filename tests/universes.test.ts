@@ -9,10 +9,17 @@
 // Run with: npx tsx tests/universes.test.ts
 
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import { registerHooks } from 'node:module'
+import os from 'node:os'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import {
+  COLLECTIONS_STATE_TTL_MS,
   UNIVERSES,
   addedCollectionId,
+  collectionsStateKey,
   findUniverse,
   parseTraktListLink,
   universeEntries,
@@ -261,4 +268,107 @@ assert.equal(addedCollectionId(1338), 'trakt-1338')
 assert.match(addedCollectionId(1338), /^[a-z0-9-]+$/, 'a route segment, like the bundled ids')
 assert.ok(!UNIVERSES.some((universe) => universe.id.startsWith('trakt-')), 'no clash with added')
 
-console.log('universes: ok')
+// ---- Keeping added lists fresh, per profile --------------------------------
+//
+// collections.ts's refreshStale, against Trakt faked at fetch and a real
+// temporary database. Its guard against running twice used to be one for the
+// whole app, so a switch to another profile while the first one's refresh
+// ran skipped the second one's stale lists. collections.ts reaches Electron,
+// so it is loaded with the headless stand-in, as tests/watchSync.test.ts
+// loads simklClient.
+
+async function refreshPerProfile(): Promise<void> {
+  process.env.R3_USER_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-collections-refresh-'))
+  process.env.R3_ELECTRON_SHIM = '1'
+  const shim = pathToFileURL(
+    path.join(__dirname, '..', 'src', 'headless', 'electronShim', 'index.ts')
+  )
+  registerHooks({
+    resolve(specifier, context, next) {
+      if (specifier === 'electron') return { url: shim.href, shortCircuit: true }
+      return next(specifier, context)
+    }
+  })
+  const store = await import('../src/main/media-hub/settingsStore')
+  const { createDatabase } = await import('../src/main/media-hub/database')
+  const { setDatabase } = await import('../src/main/media-hub/dbState')
+  const collections = await import('../src/main/media-hub/collections')
+  const db = createDatabase(path.join(process.env.R3_USER_DATA, 'collections.sqlite'), 'profile-a')
+  setDatabase(db)
+  store.writeSettings({ traktClientId: 'cid' })
+
+  // One added list each, read two days ago.
+  const stale = (listId: number): UniverseDefinition => ({
+    id: addedCollectionId(listId),
+    name: `List ${listId}`,
+    blurb: '',
+    hasStoryOrder: true,
+    entries: [{ id: 'tt0000001', type: 'movie', title: 'Old', year: '2000', released: '' }],
+    source: {
+      service: 'trakt',
+      listId,
+      owner: 'someone',
+      url: `https://trakt.tv/lists/${listId}`,
+      refreshedAt: Date.now() - 2 * 24 * 60 * 60 * 1000
+    }
+  })
+  for (const [profile, listId] of [
+    ['profile-a', 1],
+    ['profile-b', 2]
+  ] as const) {
+    db.putCache(
+      collectionsStateKey(profile),
+      { added: [stale(listId)], removed: [] },
+      COLLECTIONS_STATE_TTL_MS,
+      { durable: true }
+    )
+  }
+
+  // List 1's record waits until released, so profile A's refresh is still
+  // running when profile B's page opens.
+  let releaseFirst: () => void = () => {}
+  const firstHeld = new Promise<void>((resolve) => (releaseFirst = resolve))
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = new URL(String(input instanceof Request ? input.url : input))
+    const listId = Number(url.pathname.split('/')[2])
+    if (url.pathname.includes('/items/')) {
+      const item = { title: `Fresh ${listId}`, year: 2020, ids: { imdb: `tt100000${listId}` } }
+      return Response.json([{ type: 'movie', movie: { ...item, released: '2020-01-01' } }])
+    }
+    if (listId === 1) await firstHeld
+    return Response.json({ ids: { trakt: listId }, name: `List ${listId}`, sort_by: 'rank' })
+  }) as typeof fetch
+
+  const first = collections.refreshStale('profile-a')
+  assert.ok(first, "profile A's stale list starts a refresh")
+  assert.equal(collections.refreshStale('profile-a'), null, 'not twice for the same profile')
+  const second = collections.refreshStale('profile-b')
+  assert.ok(second, "profile B's refresh is not skipped while A's runs")
+  releaseFirst()
+  await Promise.all([first, second])
+
+  for (const [profile, listId] of [
+    ['profile-a', 1],
+    ['profile-b', 2]
+  ] as const) {
+    const stored = db.getCache<{ added: UniverseDefinition[] }>(collectionsStateKey(profile), {
+      allowExpired: true
+    })
+    assert.deepEqual(
+      stored?.added.map((collection) => collection.entries[0].title),
+      [`Fresh ${listId}`],
+      `${profile} got its own list, read again`
+    )
+  }
+  // Done, and no longer stale: the guard is let go and finds nothing to do.
+  assert.equal(collections.refreshStale('profile-a'), null)
+  assert.equal(collections.refreshStale('profile-b'), null)
+  db.close()
+}
+
+void refreshPerProfile()
+  .then(() => console.log('universes: ok'))
+  .catch((error) => {
+    console.log(`FAIL  ${(error as Error).stack}`)
+    process.exitCode = 1
+  })

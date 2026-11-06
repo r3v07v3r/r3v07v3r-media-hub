@@ -529,8 +529,9 @@ export function readStoredRecommendations(
     // The shelves' cards carry their reasons as the row's do.
     reasons: reasonsFor([...items, ...anime, ...Object.values(byKind).flat()], surviving),
     // Over everything that survived, not the served row: the shelves are
-    // where the rest of the buffer becomes visible.
-    rails: groupRecommendationRails(surviving),
+    // where the rest of the buffer becomes visible. In pass-over order, so a
+    // "Show me others" title goes behind the rest of its shelf too.
+    rails: groupRecommendationRails(ordered),
     preferredGenres: Array.isArray(stored.preferredGenres) ? stored.preferredGenres : []
   }
 }

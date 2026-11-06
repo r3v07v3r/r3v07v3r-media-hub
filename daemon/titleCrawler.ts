@@ -69,10 +69,31 @@ async function fetchJsonWithTimeout(url: string): Promise<RawApiPayload> {
       signal: controller.signal,
       headers: { accept: 'application/json' }
     })
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    if (!response.ok) {
+      throw Object.assign(new Error(`HTTP ${response.status}`), { status: response.status })
+    }
     return (await response.json()) as RawApiPayload
   } finally {
     clearTimeout(timer)
+  }
+}
+
+/**
+ * Cinemeta's two hosts, in the app's order (src/main/media-hub/catalog.ts's
+ * CINEMETA_HOSTS): v3 first, cinemeta-live only when v3 could not be
+ * reached at all. A DNS filter such as Cloudflare's family resolver answers
+ * v3 with 0.0.0.0 and lets cinemeta-live through, and a server behind one
+ * crawled no films or series. A host that answered (a 404, a 500) is not
+ * asked again: the other serves the same data and would say the same.
+ */
+const CINEMETA_HOSTS = ['https://v3-cinemeta.strem.io', 'https://cinemeta-live.strem.io'] as const
+
+async function cinemetaJson(path: string): Promise<RawApiPayload> {
+  try {
+    return await fetchJsonWithTimeout(`${CINEMETA_HOSTS[0]}${path}`)
+  } catch (error) {
+    if ((error as { status?: number }).status) throw error
+    return fetchJsonWithTimeout(`${CINEMETA_HOSTS[1]}${path}`)
   }
 }
 
@@ -104,9 +125,7 @@ async function fetchCatalogPage(kind: MediaKind, pageIndex: number): Promise<Cat
         .map((record: RawApiPayload) => normalizeKitsuAnime(record, true))
     }
     const skip = pageIndex * CINEMETA_PAGE_SIZE
-    const result = await fetchJsonWithTimeout(
-      `https://v3-cinemeta.strem.io/catalog/${kind}/top/skip=${skip}.json`
-    )
+    const result = await cinemetaJson(`/catalog/${kind}/top/skip=${skip}.json`)
     return ((result.metas as RawApiPayload[]) || []).map((x) => normalizeMeta(x, kind, true))
   } catch {
     return []

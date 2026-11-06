@@ -733,10 +733,16 @@ async function snapshots(): Promise<void> {
       }
     ]
   }
+  // A film Simkl files as anime, as it does the Demon Slayer films.
+  const anime = { anime: [{ show: { title: 'Mugen Train', ids: { imdb: 'tt11032374' } } }] }
   let cut = true
   globalThis.fetch = (async (input: string | URL | Request) => {
     const url = new URL(String(input instanceof Request ? input.url : input))
-    const body = url.pathname.includes('/movies/') ? JSON.stringify(film) : '{"shows":[]}'
+    const body = url.pathname.includes('/movies/')
+      ? JSON.stringify(film)
+      : url.pathname.includes('/anime/')
+        ? JSON.stringify(anime)
+        : '{"shows":[]}'
     if (!cut) return new Response(body, { status: 200 })
     const bytes = new TextEncoder().encode(body.slice(0, 12))
     const stream = new ReadableStream<Uint8Array>({
@@ -758,6 +764,12 @@ async function snapshots(): Promise<void> {
     const whole = await simkl.simklWatchedSnapshot('background')
     assert.equal(whole.complete, false)
   })
+  await checkAsync('nor is the completed-anime read, and nothing empty is cached', async () => {
+    // Lenient, this read `{}`, cached an empty set for twenty minutes, and
+    // the films diff called the anime-filed films unwatched at Simkl.
+    assert.equal(await simkl.simklCompletedAnimeImdbIds('background'), null)
+    assert.equal(db.getCache('simkl:anime-completed:v1', { allowExpired: true }), null)
+  })
   await checkAsync('read whole, the same requests answer as before', async () => {
     cut = false
     const films = await simkl.simklWatchedSnapshot('background', { moviesOnly: true })
@@ -766,6 +778,10 @@ async function snapshots(): Promise<void> {
     assert.deepEqual(
       films.entries.map((entry) => entry.id),
       ['tt1160419']
+    )
+    assert.deepEqual(
+      [...((await simkl.simklCompletedAnimeImdbIds('background')) ?? [])],
+      ['tt11032374']
     )
   })
 }

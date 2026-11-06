@@ -95,6 +95,10 @@ export const MEDIA_HUB_CHANNELS = {
   settingsSetHideDefaults: 'mediahub:settings:set-hide-defaults',
   settingsCompleteSetup: 'mediahub:settings:complete-setup',
   settingsCacheDiskProbe: 'mediahub:settings:cache-disk-probe',
+  /** True once after the app key could not be unsealed and was replaced, so
+   *  every saved sign-in reads as empty; cleared as it is answered. See
+   *  main/media-hub/secretStorage.ts's takeSecretsResetNotice. */
+  settingsTakeSecretsNotice: 'mediahub:settings:take-secrets-notice',
   /** Write every profile's library out to a JSON file the person picks, and
    *  read one back. See main/media-hub/backup.ts for what a backup carries. */
   backupExport: 'mediahub:backup:export',

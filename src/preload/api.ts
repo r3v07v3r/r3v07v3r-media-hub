@@ -326,6 +326,8 @@ export function createApi(transport: ApiTransport) {
           transport.invoke(MEDIA_HUB_CHANNELS.settingsCompleteSetup),
         cacheDiskProbe: (): Promise<CacheDiskProbeResult> =>
           transport.invoke(MEDIA_HUB_CHANNELS.settingsCacheDiskProbe),
+        takeSecretsResetNotice: (): Promise<boolean> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.settingsTakeSecretsNotice),
         setHideDefaults: (
           partial: Partial<{
             hideWatchedDefault: boolean

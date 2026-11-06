@@ -35,6 +35,7 @@ import {
   universePartLabel,
   universePartProgress,
   type CollectionCandidate,
+  type UniverseDefinition,
   type UniverseEntry,
   type UniverseOrder
 } from '@shared/media-hub/universes'
@@ -129,7 +130,9 @@ function CollectionBrowser({ collections }: { collections: Collections }) {
   const [linkError, setLinkError] = useState('')
 
   // Searched once typing pauses; an empty box is the most liked lists, so
-  // the panel opens with something in it.
+  // the panel opens with something in it. A new query cancels the one
+  // before it, so an answer that arrives late for older text is dropped
+  // rather than listed under the new note.
   useEffect(() => {
     if (!api?.search) return
     let cancelled = false
@@ -188,7 +191,13 @@ function CollectionBrowser({ collections }: { collections: Collections }) {
         <input
           type="search"
           value={query}
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={(event) => {
+            // The note below switches to the new text at once, so the old
+            // text's lists go with it and "Looking…" shows until the answer.
+            setQuery(event.target.value)
+            setResults(null)
+            setSearchError('')
+          }}
           placeholder="Search Trakt lists — Stargate, Bond, Pixar…"
           aria-label="Search Trakt lists"
           autoFocus
@@ -266,18 +275,23 @@ function CollectionBrowser({ collections }: { collections: Collections }) {
 /** Every universe, as a tile. */
 export default function CollectionsPage() {
   useRestoreBrowsingOrigin(true)
-  const { continueWatching } = useAppState()
+  const { continueWatching, pushNotification } = useAppState()
   const collections = useCollections()
   const items = useUniverseItems(collections.shown)
   const history = useSeasonHistory(collections.shown)
   const [browsing, setBrowsing] = useState(false)
 
-  const restore = (id: string): void => {
+  const restore = (collection: UniverseDefinition): void => {
     void window.api?.mediaHub?.collections
-      ?.restore(id)
+      ?.restore(collection.id)
       .then(collections.apply)
       .catch(() => {
-        // Nothing changed; the row stays to be tried again.
+        // Nothing changed and the row stays to be tried again, but a press
+        // that does nothing at all reads as a button that does not work.
+        pushNotification({
+          tone: 'error',
+          message: `Could not restore "${collection.name}". Try again.`
+        })
       })
   }
 
@@ -372,11 +386,7 @@ export default function CollectionsPage() {
                     {collection.source ? ` · Trakt list by ${collection.source.owner}` : ''}
                   </span>
                 </span>
-                <button
-                  type="button"
-                  className={styles.pill}
-                  onClick={() => restore(collection.id)}
-                >
+                <button type="button" className={styles.pill} onClick={() => restore(collection)}>
                   <Icon name="refresh" size={12} />
                   Restore
                 </button>
@@ -401,7 +411,7 @@ export function CollectionPage() {
   const collections = useCollections()
   const universe = collections.find(id ?? '')
   const navigate = useNavigate()
-  const { continueWatching, openDetail } = useAppState()
+  const { continueWatching, openDetail, pushNotification } = useAppState()
   // In the address rather than in state: a title opened from here comes back
   // to this route, and should come back to the order it was opened from.
   const [search, setSearch] = useSearchParams()
@@ -425,7 +435,12 @@ export function CollectionPage() {
         if (collections.apply(state) && !removed) navigate('/collections')
       })
       .catch(() => {
-        // Nothing changed; the button stays to be pressed again.
+        // Nothing changed and the button stays to be pressed again; the
+        // toast says so, as Add's error line does for an add.
+        pushNotification({
+          tone: 'error',
+          message: `Could not ${removed ? 'restore' : 'remove'} "${universe.name}". Try again.`
+        })
       })
   }
 

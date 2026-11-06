@@ -35,6 +35,14 @@ import { logError } from './logger'
 /** The tag on every value sealed with the app key. */
 export const SEALED_PREFIX = 'k1:'
 const KEY_FILE = 'media-hub-secret.key'
+/**
+ * Left beside the key file when an unreadable key was set aside and
+ * replaced, and removed once the interface has told the person. A file
+ * rather than a setting: settingsStore.ts cannot be read before this module
+ * has a key, and the notice has to survive a crash or a quit before any
+ * window opens.
+ */
+const RESET_NOTICE_FILE = 'media-hub-secret.key.reset'
 const IV_BYTES = 12
 const TAG_BYTES = 16
 
@@ -46,6 +54,8 @@ const TAG_BYTES = 16
 let appKey: Buffer | null | undefined
 /** Legacy ciphertext -> plaintext, filled by openLegacySecrets(). */
 const legacyPlaintexts = new Map<string, string>()
+/** The folder initSecretStorage() was given, where RESET_NOTICE_FILE lives. */
+let noticeDir: string | null = null
 
 export function secretStorageReady(): boolean {
   return appKey !== undefined
@@ -125,6 +135,13 @@ async function loadOrCreateKey(file: string): Promise<Buffer> {
       // aside, never deleted, in case the key store comes back.
       logError('media-hub:secretStorage', error)
       fs.renameSync(file, `${file}.unreadable-${Date.now()}`)
+      // Every saved sign-in now reads as empty, and a log line is not
+      // somewhere anybody looks. Recorded so the next window can say so.
+      try {
+        fs.writeFileSync(path.join(path.dirname(file), RESET_NOTICE_FILE), String(Date.now()))
+      } catch (noticeError) {
+        logError('media-hub:secretStorage', noticeError)
+      }
     }
   }
   const fresh = crypto.randomBytes(32)
@@ -141,6 +158,7 @@ async function loadOrCreateKey(file: string): Promise<Buffer> {
  */
 export async function initSecretStorage(userDataDir: string): Promise<void> {
   if (appKey !== undefined) return
+  noticeDir = userDataDir
   try {
     if (!(await safeStorage().isAsyncEncryptionAvailable())) {
       appKey = null
@@ -224,6 +242,25 @@ export async function openLegacySecrets(values: Iterable<string>): Promise<Map<s
     }
   }
   return opened
+}
+
+/**
+ * True once after an unreadable key was replaced (see loadOrCreateKey), so
+ * the interface can tell the person their saved sign-ins are gone; the
+ * record is removed as it is read, so the notice is said once, not at
+ * every launch. Never throws.
+ */
+export function takeSecretsResetNotice(): boolean {
+  if (!noticeDir) return false
+  const file = path.join(noticeDir, RESET_NOTICE_FILE)
+  try {
+    if (!fs.existsSync(file)) return false
+    fs.rmSync(file, { force: true })
+    return true
+  } catch (error) {
+    logError('media-hub:secretStorage', error)
+    return false
+  }
 }
 
 /** Test seam: forget the key so a test can initialise against another folder. */

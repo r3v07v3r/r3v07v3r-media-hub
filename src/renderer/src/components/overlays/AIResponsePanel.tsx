@@ -91,6 +91,7 @@ export function AIResponsePanel() {
     assistantSimilarSource,
     assistantSearching,
     assistantProviderUnreachable,
+    assistantProviderReason,
     closeAssistant,
     openDetail,
     dislikedIds
@@ -138,11 +139,17 @@ export function AIResponsePanel() {
                     "not in the library yet", not "does not exist". The
                     flag is set when any one of the three kinds' catalogs
                     failed, and the others' results are complete, so the
-                    note does not claim they all failed. */}
+                    note does not claim they all failed. A catalog that
+                    was only slow is said to be slow, as the library
+                    page and the phone say it: it was there, and the
+                    same question asked again may well reach it. */}
                 {assistantProviderUnreachable && (
                   <p className={styles.aiSectionNote} role="status">
-                    One or more online catalogs could not be reached, so for those only titles
-                    already in the library are shown.
+                    One or more online catalogs{' '}
+                    {assistantProviderReason === 'slow'
+                      ? 'did not answer in time'
+                      : 'could not be reached'}
+                    , so for those only titles already in the library are shown.
                   </p>
                 )}
                 {assistantResults.length > 0 && (
