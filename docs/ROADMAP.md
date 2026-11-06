@@ -13,26 +13,19 @@ streaming apps people compare everything to.
 
 ## Progress
 
-Thirty features shipped. Sixteen merged as PR #105 and released in
-`v1.0.83-preview.70`; everything since — collection pages, content ratings,
-fixes from hands-on testing of that build, Trakt in both directions, saved
-filters, explained recommendations, the player's remaining mpv capabilities,
-subtitle hash matching, IMDb ratings import, a deeper catalog, chapter-based
-skip-intro for movies and series, Letterboxd import, and indexer visibility
-— merged to `preview` in PRs #106 and #107.
+Thirty-one features have shipped; the table below lists each one and the
+phase it belongs to.
 
-**Phases 0 to 3 are complete apart from one gap (Next up, item 1). Phase 4
+**Phases 0 to 3 are complete. Phase 4
 is done except two rows: browsing a connected library, and a debrid
 provider abstraction (see Phase 4).**
 
 The r3-cache daemon has also shipped and is running as tier 2 of playback
-(see `daemon/README.md`). On 2026-08-29 the instance at
-`192.168.88.237:8945` answered `/api/ping` as `r3-host` on
-`1.0.83-preview.86` (it updates itself on the preview channel, so that
-version has since moved on), and the app's status card reported 7 titles
-and 30.7 GB of a 43.7 GB budget with the TorBox account linked — so
-pairing, the credential hand-off and the fetch pipeline all work end to
-end against real TorBox downloads.
+(see `daemon/README.md`). The instance on r3-host at `192.168.88.243:8945`
+answers `/api/ping`; the daemon is built to update itself on the preview
+channel (see `daemon/README.md`), and its status card has shown titles and
+budget with the TorBox account linked, so pairing, the credential hand-off
+and the fetch pipeline work end to end against real TorBox downloads.
 
 Not yet observed directly: a playback session served by the `lancache`
 tier. The feeder and `stream:resolve`'s tier-2 lookup build the same key
@@ -62,7 +55,7 @@ both are read from the code.
 | Ratings                          | 2     | 1-10 per profile, read by preferred genres, the recommender's taste profile and MAL sync.                                                                                                                                                                                                                                                                                                                                                                         |
 | My Stuff tabs + history          | 2     | Eight tabs. A single viewing can be removed without un-watching the episode.                                                                                                                                                                                                                                                                                                                                                                                      |
 | Stats                            | 2     | Viewings, titles, estimated hours, twelve-month chart, top genres, seen-again counted per episode.                                                                                                                                                                                                                                                                                                                                                                |
-| Custom lists                     | 2     | Named lists in My Stuff's Lists tab, separate from Planned, with an add-to-list menu on every title page. One gap: Next up, item 1.                                                                                                                                                                                                                                                                                                                               |
+| Custom lists                     | 2     | Named lists in My Stuff's Lists tab, separate from Planned, with an add-to-list menu on every title page.                                                                                                                                                                                                                                                                                                                                                         |
 | Scrobble depth                   | 2     | start / pause / stop to Simkl and Trakt, on transitions. Off by default, because each scrobble spends Simkl's daily request allowance; [the README's Sync section](../README.md#5-sync--optional-one-account-per-service) says where to turn it on.                                                                                                                                                                                                               |
 | Trakt sync                       | 2     | Device-code sign-in; history pushed alongside Simkl, plus ratings and (when turned on) scrobbles, for films and series only (anime is not sent). Mirrors the Simkl split (pure builders in `trakt.ts`, I/O in `traktClient.ts`).                                                                                                                                                                                                                                  |
 | Trakt import                     | 2     | Pulls an existing Trakt account's history and ratings in; viewings keep their original dates, ratings are dated the day of the import. Never overwrites a local play or rating, and pressing Import again adds nothing it brought in before. It does not skip viewings held here, though: one played here and sent to Trakt comes back with Trakt's time as a second play (see [Trakt's history](WATCHLIST-SYNC.md#trakts-history)).                              |
@@ -72,9 +65,10 @@ both are read from the code.
 | Search by credits                | 3     | Typing a director's name finds their films, not films with their name in the title.                                                                                                                                                                                                                                                                                                                                                                               |
 | ~~Where to watch~~ (removed)     | 3     | Shipped as streaming, rent and buy for your region, from JustWatch via TMDB, and since removed: the panel was deleted, and the region setting now only picks the content-rating country (see `watchProviders.ts`).                                                                                                                                                                                                                                                |
 | Calendar                         | 3     | A week back and six weeks forward, from air dates already on disk.                                                                                                                                                                                                                                                                                                                                                                                                |
+| Collections                      | 3     | Whole universes in order, films and series together, from a hand-kept bundled set plus Trakt lists.                                                                                                                                                                                                                                                                                                                                                               |
 | Collection pages                 | 3     | The rest of a film's series, from TMDB data the similar-titles pass already fetched and discarded.                                                                                                                                                                                                                                                                                                                                                                |
 | Content ratings                  | 3     | The age certificate for your region, and the prerequisite for parental controls.                                                                                                                                                                                                                                                                                                                                                                                  |
-| Saved filters                    | 3     | Name a filter combination on any browse page; it comes back as a chip. The value saved is the URL's own filter-state string, so nothing the filter bar learns to express needs a second schema. One gap: Next up, item 1.                                                                                                                                                                                                                                         |
+| Saved filters                    | 3     | Name a filter combination on any browse page; it comes back as a chip. The value saved is the URL's own filter-state string, so nothing the filter bar learns to express needs a second schema.                                                                                                                                                                                                                                                                   |
 | Home rows with a reason          | 3     | Each suggestion says why: a franchise continuation, a director or actor who recurs in what you have watched, a genre match. Emitted by the ranker itself, from the same numbers the score is made of, so the reason can't disagree with the ordering.                                                                                                                                                                                                             |
 | More catalogs                    | 3     | A deeper pool, not a new page: the crawl merges Simkl trending with Cinemeta walked about 2,000 titles deep, into the same catalog every browse sort, search and recommendation already reads from, so every existing surface benefits at once. Anime comes from Kitsu. TMDB's now-playing, upcoming and top-rated lists were part of it once and were taken out on purpose: they needed a TMDB key and cost up to 120 id lookups per build for about 120 titles. |
 | Sonarr/Radarr requests           | 4     | Lookup by IMDb id through the server, add with a chosen profile and folder, search on add.                                                                                                                                                                                                                                                                                                                                                                        |
@@ -130,11 +124,12 @@ countdown, fixed in #106.
 Five constraints every item obeys. They exist because the failure mode here is not shipping too
 little — it is shipping all of it and ending up with a slower, noisier app than the one we have.
 
-1. **The navigation stays at eight.** Home, For You, Movies, Series, Anime, My Stuff, Calendar,
-   Settings (`NAV_ITEMS` in `data/constants.ts`). History, stats and lists land as tabs inside My
-   Stuff; Calendar is the one exception, with an entry of its own. People and collections are
-   drill-downs from a detail page. A new top-level destination requires a genuinely new mode, not a
-   new noun.
+1. **The navigation stays at nine.** Home, For You, Movies, Series, Anime, Collections, My Stuff,
+   Calendar, Settings (`NAV_ITEMS` in `data/constants.ts`). History, stats and lists land as tabs
+   inside My Stuff. Calendar and Collections are the exceptions, each with an entry of its own; a
+   universe mixes films and series, which none of the three library pages can show (see
+   Collections in the Progress table). People, and a single film's collection, are drill-downs
+   from a detail page. A new top-level destination requires a genuinely new mode, not a new noun.
 2. **Nothing new runs at launch.** `recommendations.ts` set the precedent: rank in a background job,
    store the row, read it on open; the taste profile is built inside that job. Stats (from SQL) and
    the calendar (from metadata read cache-first) are computed when they are opened. Opening the app
@@ -199,7 +194,7 @@ Two things here were wrong rather than merely missing: a rewatch destroyed the r
 viewing, and My Stuff showed only My List. Both were fixed first, then parity.
 
 **Done.** Trakt now covers both push and pull, and IMDb's and Letterboxd's own exports both read
-straight in; see the Progress table above. One gap remains (Next up, item 1).
+straight in; see the Progress table above.
 
 ## Phase 3 — Discovery on data we already cache
 
@@ -207,7 +202,7 @@ Mostly rendering work, not fetching work. Cast, creators, TMDB keywords, AniList
 records, and airing state were already cached; search ignored them and in some cases nothing
 rendered them at all.
 
-**Done.** See the Progress table above. One gap remains (Next up, item 1).
+**Done.** See the Progress table above.
 
 ## Phase 4 — Make the connected services do something
 
@@ -219,7 +214,7 @@ Request/queue control, notifications and indexer visibility shipped — see the 
 **Jellyfin is a playback source.** `mediaSources.ts` looks a title up on the server and returns a
 real `StreamCandidate`; `rankStreams` scores it against TorBox weighted by the user's
 `SourcePreference`; `jellyfin.ts` covers id-and-title matching for films, episodes and the anime
-special case; `tests/jellyfin.test.ts` pins it; and a rootless Jellyfin on `192.168.88.237` is there
+special case; `tests/jellyfin.test.ts` pins it; and a rootless Jellyfin on `192.168.88.243` is there
 to verify against.
 [The README's Choose a source section](../README.md#2-choose-a-source--needs-torbox-or-a-jellyfin-server)
 gives the order `stream:resolve` follows.
@@ -362,9 +357,9 @@ entitlement, "paired" meant "may stream everything", so dropping the code first 
 anyone on the LAN watch the whole cache. CACHE-PERMISSIONS.md records that order as the one it was
 built in.
 
-**Rooms are the existing precedent, not a new problem.** A party already has a host who holds the
-member-control toggles (`SessionHub.tsx`); its Queue tab exists, but nothing adds a title to it
-([the README's Known limitations](../README.md#known-limitations)). Rooms are host-less presence
+**Rooms are the existing precedent, not a new problem.** A party already has a host who decides whether
+members can control playback (`SessionHub.tsx`); its shared Queue tab is hidden, because nothing in
+the app can add a title to it; it returns once something can. Rooms are host-less presence
 channels, so they survive anyone going offline (`rooms.ts`). Server Control surfaces both rather
 than redesigning them.
 
@@ -420,16 +415,13 @@ recommender, Sonarr and Radarr requests, and the player menu harvest.
 
 What is still open:
 
-1. **Name prompts on the desktop (Phases 2 and 3).** Save view on a category page and Rename on a
-   list in My Stuff both open a browser name prompt the desktop app does not support, so neither
-   does anything there. Replace both with an in-app field.
-2. **Phase 4: browse a connected library.** A page that lists what a source actually holds — the
+1. **Phase 4: browse a connected library.** A page that lists what a source actually holds — the
    part of that phase that did not land.
-3. **Phase 4: the debrid provider abstraction.** Still deliberately deferred, for the reason that
+2. **Phase 4: the debrid provider abstraction.** Still deliberately deferred, for the reason that
    phase gives.
-4. **Phase 4.5: Viewer and Server Control.** Part of step 1 has shipped as the Control Centre, and
+3. **Phase 4.5: Viewer and Server Control.** Part of step 1 has shipped as the Control Centre, and
    the Settings page is cut down to what a viewer changes; the split by ownership has not.
-5. **Phase 5.** Bets, one at a time.
+4. **Phase 5.** Bets, one at a time.
 
 Every phase ships behind the checks listed in
 [the README's What CI checks section](../README.md#what-ci-checks).
