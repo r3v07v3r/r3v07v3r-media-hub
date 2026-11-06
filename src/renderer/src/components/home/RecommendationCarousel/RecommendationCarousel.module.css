@@ -323,6 +323,7 @@
 }
 .card:hover .playButton,
 .card:focus-visible .playButton,
+.card:focus-within .playButton,
 .playButton:disabled {
   opacity: 1;
   transform: scale(1);
@@ -366,8 +367,11 @@
   opacity: 0;
   transition: opacity var(--transition-fast);
 }
+/* :focus-within too: tabbing moves focus from the card onto these
+   buttons, and a button with focus has to be seen. */
 .card:hover .moreButton,
-.card:focus-visible .moreButton {
+.card:focus-visible .moreButton,
+.card:focus-within .moreButton {
   opacity: 1;
 }
 .moreButton svg {

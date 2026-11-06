@@ -48,19 +48,8 @@ export default defineConfig({
       }
     },
     build: {
-      rolldownOptions: { output: MAIN_PROCESS_OUTPUT },
-      // `sandbox: true` (see main/index.ts) runs the preload script through
-      // Electron's sandboxed loader, which only resolves `electron` itself
-      // at runtime (verified live) — a plain `require("@electron-toolkit/
-      // preload")` left as an external, as electron-vite defaults every
-      // package.json dependency to, throws "module not found" and the
-      // whole preload (so window.api) silently never loads. Bundling this
-      // one dependency inline instead keeps it self-contained; `electron`
-      // stays external since the sandboxed loader provides that one
-      // specially.
-      externalizeDeps: {
-        exclude: ['@electron-toolkit/preload']
-      }
+      // A sandboxed preload can only require('electron') at runtime, so anything else it needs must be bundled.
+      rolldownOptions: { output: MAIN_PROCESS_OUTPUT }
     }
   },
   renderer: {

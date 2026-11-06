@@ -25,9 +25,9 @@ const api = createApi(transport)
 
 // Use `contextBridge` to expose the typed api to the renderer only if context
 // isolation is enabled, otherwise just add it to the DOM global. Only `api`
-// goes across: the toolkit's `electronAPI` would hand the page a raw
-// ipcRenderer on any channel, which is what the transport above exists to
-// avoid, and nothing in the renderer uses it.
+// goes across. Nothing else is exposed on purpose: a raw ipcRenderer (which
+// is what the old `window.electron` handed over) would let the page use any
+// channel, which is what the transport above exists to avoid.
 if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('api', api)

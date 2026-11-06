@@ -74,6 +74,8 @@ async function main(): Promise<void> {
     assert.ok(sealed.length > 32)
     // Sealed by the OS layer, never the raw key.
     assert.equal(Buffer.from(sealed, 'base64').subarray(0, 4).toString('latin1'), 'r3h1')
+    // A first key is not a lost one: nothing to tell anybody.
+    assert.equal(secrets.takeSecretsResetNotice(), false)
   })
 
   await check('legacy values still read before the migration runs', async () => {
@@ -153,6 +155,18 @@ async function main(): Promise<void> {
     const aside = fs.readdirSync(userData).filter((name) => name.includes('.unreadable-'))
     assert.equal(aside.length, 1)
     assert.equal(store.decrypt(store.encrypt('fresh')), 'fresh')
+  })
+
+  await check('a replaced key is recorded until the interface has said so, once', async () => {
+    // Recorded on disk, so a quit before any window opens does not lose it.
+    secrets.resetSecretStorageForTests()
+    await secrets.initSecretStorage(userData)
+    assert.equal(secrets.takeSecretsResetNotice(), true)
+    assert.equal(secrets.takeSecretsResetNotice(), false)
+    // An ordinary launch with a readable key has nothing to say.
+    secrets.resetSecretStorageForTests()
+    await secrets.initSecretStorage(userData)
+    assert.equal(secrets.takeSecretsResetNotice(), false)
   })
 
   await check('service API keys in the second settings store move too', async () => {

@@ -103,11 +103,19 @@ import { metaCacheKey } from './titleNames'
 const CINEMETA_HOSTS = ['https://v3-cinemeta.strem.io', 'https://cinemeta-live.strem.io'] as const
 let cinemetaFallbackLogged = false
 
-async function cinemetaJson<T>(path: string, scheduling: FetchScheduling): Promise<T> {
+/**
+ * `firstHostOnly` is for search: cinemeta-live sends it back to v3, so the
+ * second attempt only waits on the host that just failed a second time.
+ */
+async function cinemetaJson<T>(
+  path: string,
+  scheduling: FetchScheduling,
+  { firstHostOnly = false }: { firstHostOnly?: boolean } = {}
+): Promise<T> {
   try {
     return await fetchJson<T>(`${CINEMETA_HOSTS[0]}${path}`, {}, scheduling)
   } catch (error) {
-    if ((error as HttpError).status) throw error
+    if ((error as HttpError).status || firstHostOnly) throw error
     // Once per run: a blocked host fails every page of every sweep.
     if (!cinemetaFallbackLogged) {
       cinemetaFallbackLogged = true
@@ -1168,7 +1176,10 @@ async function cinemetaSearch(
 ): Promise<CatalogItem[]> {
   const result = await cinemetaJson<{ metas?: RawApiPayload[] }>(
     `/catalog/${kind}/top/search=${encodeURIComponent(query)}.json`,
-    { priority: 'interactive', label: `${kind} search`, timeoutMs: SEARCH_TIMEOUT_MS }
+    { priority: 'interactive', label: `${kind} search`, timeoutMs: SEARCH_TIMEOUT_MS },
+    // No second host: it would only double the wait on a filtered network.
+    // See CINEMETA_HOSTS.
+    { firstHostOnly: true }
   )
   // The poster comes back as delivered: a search hit's art is on IMDb's
   // CDN (m.media-amazon.com) rather than the metahub proxy the catalog

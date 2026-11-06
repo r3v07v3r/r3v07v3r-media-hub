@@ -1420,6 +1420,26 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately once per app session, not re-armed by pushNotification identity
   }, [])
 
+  // The app key could not be unsealed at startup and was replaced (see
+  // secretStorage.ts), so every saved sign-in now reads as empty. Main
+  // answers true only once, so this is said once and not at every launch;
+  // no cancel on cleanup, since the answer is used up as it is given. The
+  // action keeps the toast up until it is dealt with.
+  useEffect(() => {
+    window.api?.mediaHub?.settings
+      .takeSecretsResetNotice()
+      .then((reset) => {
+        if (!reset) return
+        pushNotification({
+          tone: 'warning',
+          message:
+            'Saved sign-ins could not be unlocked. Reconnect your services under Control centre → Accounts.',
+          action: { label: 'Open control centre', run: () => setControlCentreOpen(true) }
+        })
+      })
+      .catch(() => {})
+  }, [pushNotification])
+
   const resolveSyncDiscrepancy = useCallback(
     (discrepancy: WatchStatusDiscrepancy, resolution: ReconcileResolution) => {
       // Optimistic — the list is meant to shrink as each item is handled,

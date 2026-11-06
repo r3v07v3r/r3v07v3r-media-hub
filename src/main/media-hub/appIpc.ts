@@ -32,6 +32,7 @@ import { keepAnimeHistoryWithShows } from './animeSyncRepair'
 import { getDatabase } from './dbState'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
+import { takeSecretsResetNotice } from './secretStorage'
 import {
   mpvPath,
   hasActivePlayback,
@@ -130,6 +131,14 @@ export function registerAppIpc(): void {
     writeSettings(settings)
     return { setupComplete: true }
   })
+
+  // Asked once by the interface as it starts; true only the first time
+  // after the app key was replaced, so the "reconnect your services" notice
+  // is said once. The headless backend bridges this channel as it is, so a
+  // phone or TV showing that backend hears it the same way.
+  handle<undefined, boolean>(MEDIA_HUB_CHANNELS.settingsTakeSecretsNotice, () =>
+    takeSecretsResetNotice()
+  )
 
   // What the welcome flow's tuning step sizes the cache from. Reports free
   // space rather than choosing anything: the recommendation logic lives in

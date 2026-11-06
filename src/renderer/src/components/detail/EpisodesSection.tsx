@@ -68,7 +68,7 @@ interface EpisodesSectionProps {
   /** The title's watched rows haven't arrived yet: every tile reads as
    *  unwatched for now, so say so rather than let that look like the answer. */
   watchedLoading?: boolean
-  status:'loading' | 'ready' | 'error'
+  status: 'loading' | 'ready' | 'error'
 }
 
 /** Which menu the single portal below is currently showing. One portal
@@ -342,7 +342,8 @@ export function EpisodesSection({
       const anchorIndex = visible.findIndex((e) => key(e.season, e.episode) === selectAnchor)
       const targetIndex = visible.findIndex((e) => key(e.season, e.episode) === epKey)
       if (anchorIndex !== -1 && targetIndex !== -1) {
-        const [from, to] = anchorIndex < targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex]
+        const [from, to] =
+          anchorIndex < targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex]
         const range = visible
           .slice(from, to + 1)
           .filter((e) => !e.unplayable && !isUpcomingEpisode(e))

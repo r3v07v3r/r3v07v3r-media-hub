@@ -397,10 +397,15 @@ export async function simklCompletedAnimeImdbIds(
   const fresh = cached(false)
   if (fresh) return fresh
   try {
+    // A whole-library read like the snapshot's, so the same WHOLE_READ: a
+    // lenient body cut off part way reads as `{}`, which would cache an
+    // empty set for twenty minutes and put the anime-filed films straight
+    // back into Sync review as unwatched at Simkl.
     const payload = await simklRequest<SimklAnimePayload>(
       '/sync/all-items/anime/completed',
       {},
-      priority
+      priority,
+      WHOLE_READ
     )
     if (simklAccountMark() !== account) return null
     const imdbIds = (payload.anime || [])

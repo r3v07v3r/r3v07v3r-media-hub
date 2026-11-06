@@ -1015,4 +1015,62 @@ check('the phone Title screen sets and takes back Not interested, with an Undo',
   assert.match(button, /setDisliked\(false\)\}>\s*Undo/)
 })
 
+// --- the card menu, the assistant note, Collections ------------------------
+//
+// Read from the source like the checks above: these need the app's context
+// and the CSS-module build to render.
+
+const rendererSource = (file: string): string =>
+  fs.readFileSync(path.resolve(__dirname, '../src/renderer/src', file), 'utf8')
+
+check('the card menu offers no Play on a title that is not out yet, as the card does not', () => {
+  const menu = rendererSource('components/overlays/ContextMenu.tsx')
+  assert.match(menu, /const unreleased = titleUnreleased\(media\)/)
+  assert.match(menu, /\.\.\.\(unreleased\s*\?\s*\[\]\s*:\s*\[\{ icon: 'play', label: 'Play'/)
+  // Exactly one Play item, and it is the gated one.
+  assert.equal(menu.match(/label: 'Play'/g)?.length, 1)
+})
+
+check('the assistant panel says a slow catalog did not answer in time', () => {
+  const panel = rendererSource('components/overlays/AIResponsePanel.tsx')
+  assert.match(
+    panel,
+    /assistantProviderReason === 'slow'\s*\?\s*'did not answer in time'\s*:\s*'could not be reached'/
+  )
+})
+
+check('the card buttons show while focus is on any of them, not only on the card', () => {
+  const css = rendererSource(
+    'components/home/RecommendationCarousel/RecommendationCarousel.module.css'
+  )
+  assert.match(css, /\.card:focus-within \.moreButton/)
+  assert.match(css, /\.card:focus-within \.playButton/)
+})
+
+check('the party handover switch has one label in the main window and the player', () => {
+  const hub = rendererSource('components/party/SessionHub.tsx')
+  const rail = rendererSource('components/party/PlayerSessionRail.tsx')
+  assert.match(hub, /<span>Everyone can play, pause and seek<\/span>/)
+  assert.match(rail, /<span>Everyone can play, pause and seek<\/span>/)
+  assert.doesNotMatch(hub, /Everyone can control playback/)
+})
+
+check('a failed collection remove or restore says so, and Browse clears old results', () => {
+  const collections = rendererSource('routes/CollectionsPage.tsx')
+  assert.match(collections, /message: `Could not restore "\$\{collection\.name\}"\. Try again\.`/)
+  assert.match(
+    collections,
+    /message: `Could not \$\{removed \? 'restore' : 'remove'\} "\$\{universe\.name\}"\. Try again\.`/
+  )
+  // No catch on this page is left empty any more.
+  assert.doesNotMatch(collections, /\.catch\(\(\) => \{\s*\/\/[^\n]*\n\s*\}\)/)
+  // A new query empties the list until its own answer, and an answer for
+  // older text is dropped by the effect's cancel.
+  assert.match(
+    collections,
+    /setQuery\(event\.target\.value\)\s*setResults\(null\)\s*setSearchError\(''\)/
+  )
+  assert.match(collections, /if \(!cancelled\) setResults\(answer\.results\)/)
+})
+
 console.log(`\n${pass} passed`)

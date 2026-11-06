@@ -515,10 +515,10 @@ Two different things, deliberately:
   network directly and tries to map a router port; if an [R3 Party
   Sync](party-sync-worker/README.md) relay is connected it attaches to that too, and the single
   invite carries every route. Guests chat, and play, pause and seek are synchronized. By default
-  only the host controls playback; **Everyone can control playback** hands play, pause and seek to
+  only the host controls playback; **Everyone can play, pause and seek** hands those controls to
   guests. The host's app enforces it: while it is off, a guest's play, pause or seek reaches no one,
-  even from an older version. The same switch is in the player's party rail as **Everyone can play,
-  pause and seek**, so the host can hand over control mid-film; guests see there whether they can.
+  even from an older version. The same switch, with the same name, is in the player's party rail,
+  so the host can hand over control mid-film; guests see there whether they can.
   Each guest plays the title from their own sources, so each needs a copy they can reach: in their
   own cache, on a paired r3-cache server, or through TorBox or Jellyfin. A party can also start
   partway through a film: the player's party rail has its own **Start a Watch Party**, the party is

@@ -7,6 +7,7 @@ import { Icon } from '@renderer/components/icons/Icon'
 import { positionFloatingPanel } from '@renderer/lib/floatingPanel'
 import { titleStatusOf, TITLE_STATUS_ACTION } from '@renderer/lib/mediaHub/titleStatus'
 import { dislikedToast } from '@renderer/lib/mediaHub/statusToasts'
+import { titleUnreleased } from '@renderer/lib/mediaHub/releaseDate'
 import styles from './Overlays.module.css'
 
 export function ContextMenu() {
@@ -76,8 +77,15 @@ export function ContextMenu() {
       ? `S${media.seasonNumber} E${media.episodeNumber}`
       : null
 
+  // No Play on a title that is not out yet, the same gate the card applies
+  // (titleUnreleased): the card shows when it releases where Play would be,
+  // and offering Play here offered a stream nothing can resolve.
+  const unreleased = titleUnreleased(media)
+
   const items: { icon: string; label: string; onSelect: () => void }[] = [
-    { icon: 'play', label: 'Play', onSelect: () => startPartyPlayback(media) },
+    ...(unreleased
+      ? []
+      : [{ icon: 'play', label: 'Play', onSelect: () => startPartyPlayback(media) }]),
     {
       icon: saved ? 'x' : 'clock',
       label: saved ? 'Remove from plan' : TITLE_STATUS_ACTION.planned,

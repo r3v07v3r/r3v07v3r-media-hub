@@ -34,6 +34,8 @@ import java.net.URL
 object Updater {
     private const val TAG = "R3Updater"
     private const val RELEASES = "https://api.github.com/repos/r3v07v3r/r3v07v3r-media-hub/releases?per_page=30"
+    /** GitHub's newest release that is neither a draft nor a prerelease. */
+    private const val LATEST_STABLE = "https://api.github.com/repos/r3v07v3r/r3v07v3r-media-hub/releases/latest"
     private const val ASSET = "r3-media-hub-android.apk"
     private const val ACTION_STATUS = "com.r3v07v3r.mediahub.INSTALL_STATUS"
 
@@ -96,8 +98,16 @@ object Updater {
                     if (assets.getJSONObject(j).optString("name") == ASSET) stableHasApk = true
                 }
             }
-            val stableOnly = channel(context) == "stable" && stableHasApk
-            var best: Release? = null
+            val stableChannel = channel(context) == "stable"
+            // The list is only the 30 newest releases: after 30 previews in a
+            // row the last stable release has dropped out of it, and a Stable
+            // phone fell back to preview. /releases/latest is the newest stable
+            // release however far back it is. One more request, and only on
+            // the stable channel when the list had no stable APK.
+            val latestStable = if (stableChannel && !stableHasApk) latestStableRelease() else null
+            if (latestStable != null) stableHasApk = true
+            val stableOnly = stableChannel && stableHasApk
+            var best: Release? = latestStable?.takeIf { it.code > installed }
             for (i in 0 until releases.length()) {
                 val release = releases.getJSONObject(i)
                 if (release.optBoolean("draft")) continue
@@ -121,6 +131,33 @@ object Updater {
             Log.w(TAG, "update check failed", error)
             null
         }
+    }
+
+    /** The APK on the newest stable release, or null when it carries none or
+     *  the question fails (no stable release yet is a 404). A failure here
+     *  leaves the phone on preview, as before, rather than failing the whole
+     *  check. */
+    private fun latestStableRelease(): Release? {
+        val release = try {
+            JSONObject(get(LATEST_STABLE))
+        } catch (error: Exception) {
+            Log.w(TAG, "latest stable release check failed", error)
+            return null
+        }
+        if (release.optBoolean("draft") || release.optBoolean("prerelease")) return null
+        val version = release.optString("tag_name").removePrefix("v")
+        val assets = release.optJSONArray("assets") ?: return null
+        for (j in 0 until assets.length()) {
+            val asset = assets.getJSONObject(j)
+            if (asset.optString("name") != ASSET) continue
+            return Release(
+                version,
+                versionCodeOf(version),
+                asset.getString("browser_download_url"),
+                asset.optLong("size")
+            )
+        }
+        return null
     }
 
     private fun get(url: String): String {

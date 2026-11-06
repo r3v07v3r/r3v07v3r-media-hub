@@ -257,21 +257,28 @@ async function searchCollections(query: string): Promise<CollectionCandidate[]> 
 
 // ---- Keeping added lists fresh ----------------------------------------------
 
-let refreshing: Promise<void> | null = null
+/**
+ * The refresh running for each profile. Kept per profile like the record
+ * itself: one app-wide guard meant a switch to another profile while the
+ * first one's refresh ran skipped the second one's stale lists until the
+ * page was opened again.
+ */
+const refreshing = new Map<string, Promise<void>>()
 
 /**
  * Reads again every added list older than a day, behind the answer the page
  * already has. A list that fails keeps what it had: Trakt being down for an
- * afternoon must not empty somebody's collection.
+ * afternoon must not empty somebody's collection. Returns the refresh it
+ * started, or null when there was nothing to start (exported for tests).
  */
-function refreshStale(profile: string): void {
-  if (refreshing || !traktCredentials().clientId) return
+export function refreshStale(profile: string): Promise<void> | null {
+  if (refreshing.has(profile) || !traktCredentials().clientId) return null
   const stale = readStored(profile).added.filter(
     (collection) =>
       collection.source && Date.now() - collection.source.refreshedAt > REFRESH_AFTER_MS
   )
-  if (stale.length === 0) return
-  refreshing = (async () => {
+  if (stale.length === 0) return null
+  const run = (async () => {
     const fresh = new Map<string, UniverseDefinition>()
     for (const collection of stale) {
       try {
@@ -290,8 +297,10 @@ function refreshStale(profile: string): void {
     writeStored(profile, current)
     notifyLibraryChanged('collections-refresh', 'lists')
   })().finally(() => {
-    refreshing = null
+    refreshing.delete(profile)
   })
+  refreshing.set(profile, run)
+  return run
 }
 
 // ---- IPC -------------------------------------------------------------------
@@ -299,7 +308,7 @@ function refreshStale(profile: string): void {
 export function registerCollectionsIpc(): void {
   handle<undefined, CollectionsState>(MEDIA_HUB_CHANNELS.collectionsState, () => {
     const profile = activeProfile()
-    refreshStale(profile)
+    void refreshStale(profile)
     return stateOf(readStored(profile))
   })
 

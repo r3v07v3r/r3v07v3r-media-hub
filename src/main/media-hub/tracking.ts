@@ -3491,7 +3491,7 @@ export function registerTrackingIpc(): void {
           [...recommendations, ...Object.values(recommendationsByKind).flat()],
           full
         )
-        recommendationRails = groupRecommendationRails(full)
+        recommendationRails = groupRecommendationRails(ordered)
       }
     }
 

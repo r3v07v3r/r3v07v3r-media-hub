@@ -441,4 +441,35 @@ check('passing over the whole buffer still serves a full row, in ranked order', 
   assert.equal(served.items[0].id, 'id-0')
 })
 
+check('a passed-over title goes last on its For You shelf too', () => {
+  freshDatabase()
+  // One genre shelf, so the whole ranking lands on it in ranked order.
+  const withReasons = ranked(8).map((entry) => ({
+    ...entry,
+    reason: { kind: 'genre' as const, detail: 'Action' }
+  }))
+  storeRecommendations(withReasons, ['Action'])
+  const none = {
+    watchedIds: new Set<string>(),
+    trackedIds: new Set<string>(),
+    dislikedIds: new Set<string>()
+  }
+
+  const before = readStoredRecommendations(none, NO_HISTORY)
+  assert.ok(before)
+  const shelfBefore = before.rails.find((rail) => rail.id === 'genre:Action')
+  assert.ok(shelfBefore, 'expected the Action shelf')
+  assert.equal(shelfBefore.items[0].id, 'id-0', 'the shelf starts in ranked order')
+
+  passOverRecommendations(['id-0'])
+  const after = readStoredRecommendations(none, NO_HISTORY)
+  assert.ok(after)
+  const shelf = after.rails.find((rail) => rail.id === 'genre:Action')
+  assert.ok(shelf, 'passing over is a reorder — the shelf must still be there')
+  const ids = shelf.items.map((x) => x.id)
+  assert.equal(ids[0], 'id-1', 'the shelf must lead with what was behind it')
+  assert.equal(ids[ids.length - 1], 'id-0', 'the passed-over title must go last on its shelf')
+  assert.equal(ids.length, 8, 'and stay on the shelf')
+})
+
 console.log(`\n${pass} passed`)

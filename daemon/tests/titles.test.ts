@@ -582,6 +582,60 @@ async function main(): Promise<void> {
     assert.equal(highest, 4, 'the walk stopped at the second consecutive empty page')
   })
 
+  await check(
+    'with v3 blocked, films come from cinemeta-live; a host that answered is final',
+    async () => {
+      // The real page fetcher, against Cinemeta faked at fetch: v3 refused the
+      // way a DNS filter refuses it, cinemeta-live answering. Before, a server
+      // on such a network crawled no films or series at all.
+      const { store } = await tempStore()
+      const realFetch = globalThis.fetch
+      const asked: string[] = []
+      let v3Answers = false
+      globalThis.fetch = (async (input: string | URL | Request) => {
+        const url = String(input instanceof Request ? input.url : input)
+        asked.push(url)
+        if (url.startsWith('https://v3-cinemeta.strem.io/')) {
+          if (v3Answers) return new Response('{}', { status: 500 })
+          throw new TypeError('fetch failed')
+        }
+        const metas = url.endsWith('/skip=0.json')
+          ? [{ id: 'tt0111161', type: 'movie', name: 'The Shawshank Redemption' }]
+          : []
+        return Response.json({ metas })
+      }) as typeof fetch
+      try {
+        const crawler = createTitleCrawler({ store, log: () => {}, pageGapMs: 0 })
+        crawler.refresh('movie')
+        for (let i = 0; i < 200 && crawler.isCrawling(); i++) {
+          await new Promise((resolve) => setTimeout(resolve, 10))
+        }
+        assert.equal(store.counts().movie, 1, 'the page came from the second host')
+        assert.ok(
+          asked.includes('https://cinemeta-live.strem.io/catalog/movie/top/skip=0.json'),
+          'cinemeta-live was asked for the same page'
+        )
+
+        // v3 reachable but failing: the same data would fail the same way.
+        v3Answers = true
+        asked.length = 0
+        const answered = await tempStore()
+        const second = createTitleCrawler({ store: answered.store, log: () => {}, pageGapMs: 0 })
+        second.refresh('series')
+        for (let i = 0; i < 200 && second.isCrawling(); i++) {
+          await new Promise((resolve) => setTimeout(resolve, 10))
+        }
+        assert.ok(asked.length > 0)
+        assert.ok(
+          asked.every((url) => url.startsWith('https://v3-cinemeta.strem.io/')),
+          'a host that answered is not asked again elsewhere'
+        )
+      } finally {
+        globalThis.fetch = realFetch
+      }
+    }
+  )
+
   // --- the HTTP surface --------------------------------------------------
 
   await check('routes: auth required, kinds validated, paging and refresh answer', async () => {
