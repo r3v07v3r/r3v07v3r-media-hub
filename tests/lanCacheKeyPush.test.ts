@@ -221,6 +221,39 @@ async function main(): Promise<void> {
       store.setLanCacheConnection(live)
     })
 
+    await check('a sync sends nothing to a cache joined while it waited', async () => {
+      // Another pairing of this app (a leave and a join elsewhere look the
+      // same to the sync: a different token) made while a legacy sync was
+      // asking the first cache for its status.
+      const live = store.getLanCacheConnection()!
+      setAppKey('app-torbox-key-first')
+      assert.equal(await lan.syncTorBoxKeyToLanCache(), true)
+      const otherToken = (
+        (await (
+          await fetch(`${url}/api/pair`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ deviceName: 'the same app, paired again' })
+          })
+        ).json()) as { token: string }
+      ).token
+      store.setLanCacheConnection({ ...live, shareTorbox: undefined })
+      const older = lan.syncTorBoxKeyToLanCache()
+      store.setLanCacheConnection({ ...live, token: otherToken, shareTorbox: undefined })
+      await older
+      assert.equal(
+        credentials.tokenForDevice(deviceIdForToken(otherToken)),
+        '',
+        'the newcomer never gets the key'
+      )
+      assert.equal(store.isLanCacheKeySyncPending(), false)
+      // Back on the first pairing, with no key, as the next check expects.
+      store.setLanCacheConnection(live)
+      setAppKey('')
+      await lan.syncTorBoxKeyToLanCache()
+      assert.equal(savedKey(), '')
+    })
+
     await check('a download refused for want of a key is reported once', async () => {
       events.length = 0
       const job = (key: string): Parameters<typeof lan.queueLanCacheJob>[0] =>

@@ -59,8 +59,22 @@ const UPDATE_NOW_TIMEOUT_MS = 3 * 60 * 1000
  *  only after the lookup had queued behind them. */
 export const LAN_LOOKUP_TIMEOUT_MS = 3_000
 
-function request<T>(pathname: string, init: RequestInit = {}, timeoutMs?: number): Promise<T> {
-  const connection = getLanCacheConnection()
+type LanCacheConnection = NonNullable<ReturnType<typeof getLanCacheConnection>>
+
+/** Whether two stored connections are the same server and the same pairing. */
+function sameConnection(a: LanCacheConnection, b: LanCacheConnection | undefined): boolean {
+  return Boolean(b && a.token === b.token && a.url === b.url)
+}
+
+/** A request to the paired cache server, or to `at` when a call that spans
+ *  several awaits must keep talking to the server it started with. */
+function request<T>(
+  pathname: string,
+  init: RequestInit = {},
+  timeoutMs?: number,
+  at?: LanCacheConnection
+): Promise<T> {
+  const connection = at ?? getLanCacheConnection()
   if (!connection) throw new Error('No cache server is paired.')
   return fetchJson<T>(
     `${connection.url}${pathname}`,
@@ -216,7 +230,9 @@ export async function queueLanCacheJob(payload: LanCacheJobPayload): Promise<boo
  * reads the key again just before sending it: the TorBox handlers start
  * them without waiting, so a removal that came in while an older sync was
  * still asking the cache for its status must win, not be undone by that
- * older sync sending the key it read first.
+ * older sync sending the key it read first. A sync is bound to the
+ * connection it started with: one that is left, or replaced by another
+ * cache, while the sync waits sends nothing to the newcomer.
  */
 export function syncTorBoxKeyToLanCache(): Promise<boolean> {
   const run = keySyncChain.then(syncTorBoxKeyNow, syncTorBoxKeyNow)
@@ -231,7 +247,8 @@ async function syncTorBoxKeyNow(): Promise<boolean> {
   if (!connection || connection.pending) return false
   try {
     if (getTorBoxToken() && !connection.shareTorbox) {
-      const status = await request<LanCacheStatusResponse>('/api/status')
+      const status = await request<LanCacheStatusResponse>('/api/status', {}, undefined, connection)
+      if (!sameConnection(connection, getLanCacheConnection())) return false
       if (!status.torboxLinked) {
         setLanCacheKeySyncPending(false)
         return false
@@ -240,11 +257,17 @@ async function syncTorBoxKeyNow(): Promise<boolean> {
     // Read again after the wait above: what the app holds now is what the
     // cache must hold, a removal made meanwhile included.
     const torboxToken = getTorBoxToken()
-    const answer = await request<{ torboxLinked?: boolean }>('/api/credentials', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ torboxToken })
-    })
+    const answer = await request<{ torboxLinked?: boolean }>(
+      '/api/credentials',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ torboxToken })
+      },
+      undefined,
+      connection
+    )
+    if (!sameConnection(connection, getLanCacheConnection())) return answer.torboxLinked === true
     setLanCacheKeySyncPending(false)
     if (answer.torboxLinked) keyRequiredRaisedFor = null
     return answer.torboxLinked === true
@@ -252,7 +275,7 @@ async function syncTorBoxKeyNow(): Promise<boolean> {
     // The server was away (or refused). Remembered, so the change, a
     // removal included, is sent the next time the server answers
     // (retryLanCacheKeySync) rather than lost with this one attempt.
-    setLanCacheKeySyncPending(true)
+    if (sameConnection(connection, getLanCacheConnection())) setLanCacheKeySyncPending(true)
     logError('lancache:credentials', error)
     return false
   }
