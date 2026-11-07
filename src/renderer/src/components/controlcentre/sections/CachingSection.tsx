@@ -82,10 +82,10 @@ export function CachingSection() {
   const [daemons, setDaemons] = useState<DiscoveredDaemon[]>([])
   const [discovering, setDiscovering] = useState(false)
   const [url, setUrl] = useState('')
-  // Starts unticked: copying a credential to another machine is an explicit
-  // opt-in (lanCache.ts's pair payload says it is never implied), so joining
-  // without reading the box below must not share the key.
-  const [shareTorbox, setShareTorbox] = useState(false)
+  // Starts ticked: the server fetches each person's requests with their own
+  // TorBox key and never anyone else's, so without it the server can only
+  // share files it already has. Still a choice, and unticking it is kept.
+  const [shareTorbox, setShareTorbox] = useState(true)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
 
@@ -346,6 +346,20 @@ export function CachingSection() {
       setMessage({ ok: true, text: 'Left. The server keeps its files until they expire.' })
     })
 
+  const handleCloseClaim = (): void =>
+    void guard(async () => {
+      const result = await api.closeClaim()
+      setMessage({ ok: result.ok, text: result.message })
+      await refreshStatus()
+    })
+
+  const handleShareKey = (): void =>
+    void guard(async () => {
+      const result = await api.shareKey()
+      setMessage({ ok: result.ok, text: result.message })
+      await refreshStatus()
+    })
+
   const handleClaim = (): void =>
     void guard(async () => {
       const result = await api.claim()
@@ -561,10 +575,10 @@ export function CachingSection() {
               onChange={(event) => setShareTorbox(event.target.checked)}
             />
             <span>
-              Let this server download with my TorBox account. The key is copied to that machine —
-              protected by file permissions, not an OS keychain — so your titles can be fetched
-              overnight with the app closed. Everyone who joins shares their own account, and every
-              download bills whoever asked for that title. Leaving revokes yours.
+              Save my TorBox key on this server. It downloads my requests with my own account and
+              never anyone else&apos;s, so my titles can be fetched overnight with the app closed.
+              The key is protected by file permissions on that machine, not an OS keychain. Without
+              it the server only shares files it already has. Leaving removes it.
             </span>
           </label>
 
@@ -616,7 +630,33 @@ export function CachingSection() {
               by accident. Status is reference and can wait; an unclaimed
               server and a device waiting for approval are things to ACT on,
               and they belong where they are seen. */}
-          {status?.unclaimed && (
+          {/* REOPENED WHILE YOU HOLD IT. --claim-admin at the server's
+              console leaves claiming open until another device claims, and
+              while it is open every device that asks is let in. The current
+              administrator is the one who may close it. */}
+          {status?.unclaimed && status.isAdmin && (
+            <section className={`${styles.card} ${styles.claim} glass-panel`}>
+              <span className={styles.claimIcon} aria-hidden="true">
+                <Icon name="lock" size={18} />
+              </span>
+              <div>
+                <h3 className={styles.cardTitle}>Claiming is open</h3>
+                <p className={styles.note}>
+                  This server is open for a new administrator to take, and lets in every device that
+                  asks. Close it if you are still the one.
+                </p>
+              </div>
+              <button
+                type="button"
+                className={styles.primaryButton}
+                onClick={handleCloseClaim}
+                disabled={busy}
+              >
+                Close claim window
+              </button>
+            </section>
+          )}
+          {status?.unclaimed && !status.isAdmin && (
             <section className={`${styles.card} ${styles.claim} glass-panel`}>
               <span className={styles.claimIcon} aria-hidden="true">
                 <Icon name="lock" size={18} />
@@ -888,6 +928,23 @@ export function CachingSection() {
                     <dd>{status.torboxLinked ? 'Linked' : 'Not linked'}</dd>
                   </div>
                 </dl>
+
+                {!status.torboxLinked && (
+                  <div className={styles.actions}>
+                    <p className={styles.note}>
+                      The LAN cache needs your TorBox key before it can fetch for you. Add one under
+                      Control centre &rarr; Media servers, or wait for the cache to have it.
+                    </p>
+                    <button
+                      type="button"
+                      className={styles.ghostButton}
+                      onClick={handleShareKey}
+                      disabled={busy}
+                    >
+                      Save my key here
+                    </button>
+                  </div>
+                )}
 
                 {status.jobs.length > 0 && (
                   <ul className={styles.jobs}>

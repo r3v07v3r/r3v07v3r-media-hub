@@ -619,8 +619,9 @@ export function simklShowsRead(payload: unknown): RemoteRead {
  * Where one Simkl anime entry is kept here:
  *  - `placed`: under this show, at this season;
  *  - `mismatched`: a member of a merged show whose place in the group cannot
- *    be shown to be its season on the page — the ids named are not compared
- *    at all, rather than compared by position;
+ *    be shown to be its season on the page. Of the ids named, only the
+ *    seasons simklAnimeRead's `seasonPlaced` says no member can be shown to
+ *    be are left out of the comparison, rather than compared by position;
  *  - `none`: nothing here can be this entry;
  *  - `unanswered`: nobody could be asked, and the read is incomplete.
  */
@@ -638,10 +639,17 @@ const NOT_EPISODIC = new Set(['movie', 'music video'])
  * placed by `place` (the wiring asks animeSeasons.ts's placeAnimeEntry, never
  * a position). An entry that cannot be placed because nobody answered makes
  * the read incomplete, and it throws: rule 5.
+ *
+ * An entry that is `mismatched` leaves out of the comparison only the seasons
+ * of the ids it names that no member can be shown to be (`seasonPlaced`, the
+ * wiring's seasonHasPlacedMember): the show's other seasons arrive as
+ * `placed` entries and are compared as any show's are. Without `seasonPlaced`
+ * every season of those ids is left out.
  */
 export async function simklAnimeRead(
   payload: unknown,
-  place: (title: SimklLibraryTitle) => Promise<AnimePlace>
+  place: (title: SimklLibraryTitle) => Promise<AnimePlace>,
+  seasonPlaced?: (showId: string, season: number) => boolean
 ): Promise<RemoteRead> {
   const shows = new Map<string, RemoteShow>()
   const skipped = new Set<string>()
@@ -664,11 +672,24 @@ export async function simklAnimeRead(
       addEpisode(shows, show, { season: where.season, episode: ep.episode }, ep.watchedAt)
     }
   }
-  for (const id of skipped) shows.delete(id)
+  const left = (id: string, season: number): boolean =>
+    skipped.has(id) && !(seasonPlaced?.(id, season) ?? false)
+  // Only placed entries add episodes, and a placed entry is at a season some
+  // member is shown to be, so what is left out holds nothing from Simkl. A
+  // season it does hold is dropped all the same, as it would not be compared.
+  for (const [id, remote] of shows) {
+    for (const key of [...remote.episodes.keys()]) {
+      if (left(id, Number(key.split(':')[0]))) remote.episodes.delete(key)
+    }
+    if (!remote.episodes.size && skipped.has(id)) shows.delete(id)
+  }
   return {
     shows,
     covers: (row) =>
-      row.type === 'anime' && row.id.startsWith('kitsu:') && row.season >= 1 && !skipped.has(row.id)
+      row.type === 'anime' &&
+      row.id.startsWith('kitsu:') &&
+      row.season >= 1 &&
+      !left(row.id, row.season)
   }
 }
 

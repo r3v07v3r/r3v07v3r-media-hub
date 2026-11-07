@@ -996,10 +996,9 @@ export async function startPlayerSession(
   queuePatch({ videoScaling: normalizeVideoScaling(options.videoScaling) }, true)
 
   // Re-asserted per title rather than assumed, because main-window UI being up
-  // is a state a title change does NOT close: a host playing something from
-  // the watch-party queue goes through here with the panel still open and
-  // still rendering (PartyPanel's Play button -> requestPartyPlay, which
-  // starts the title and leaves the panel alone). The new film's video child
+  // is a state a title change does NOT close: a host starting a new title
+  // while the watch-party panel is open goes through here with the panel
+  // still rendering. The new film's video child
   // appearing over the panel would make it vanish mid-party, for no reason the
   // person could see — so the child stays hidden until the panel closes (see
   // party-panel-closed). The false branch matters equally: it clears a hide

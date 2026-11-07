@@ -119,10 +119,15 @@ administrator who chose **Leave**:
 
 While claiming is reopened, the daemon's log says so when it starts and
 again every five minutes, names every device it lets in without asking,
-and logs the claim that closes the window. Only a device other than the
-current administrator closes it: if the old administrator device claims
-again, the claim succeeds but the window stays open, and the log says that
-too.
+and logs the claim that closes the window. A claim by a device other than
+the current administrator closes it. If the old administrator claims again
+by hand (`POST /api/admin/claim`), the claim succeeds but the window stays
+open, and the log says that too. The app's own **Administer it** button
+closes it straight after the claim, and while it is open the administrator's
+Caching section shows **Close claim window**, which calls the admin-only
+`POST /api/admin/close-claim`. Nothing closes it on its own, so a window
+opened to hand the role to another device stays open until that device
+claims or the administrator closes it.
 
 If the app answers "Too many devices are waiting to join", wait a minute and
 ask again. If it still says so, eight requests are already waiting
@@ -184,6 +189,8 @@ The console window shows the same banner as above.
   [Auto-start, self-updating, rollback](#auto-start-self-updating-rollback)).
   The default allocation applies to every approved device that has no
   allocation of its own, including devices that joined before it was set.
+  Approving a device lends it nothing: it downloads with its own TorBox key,
+  never the administrator's.
 - **Private by default.** What one device fetches is visible only to that
   device until it shares the title with everyone, using the switch in
   **What you have cached** in the same section (the daemon's sharing API can
@@ -197,17 +204,34 @@ The console window shows the same banner as above.
 - **Jobs are scoped.** Each device sees its own queue and a count of
   everyone else's; the administrator sees the whole queue with each job's
   device name.
-- **Everyone pays for their own downloads.** Each person shares their own
-  TorBox key from the app, kept as plain text in one `credentials.json` in
-  the daemon's data directory, keyed by device. On Linux the file is `0600`;
-  on Windows that mode does not apply and the user profile's own
-  permissions are the only protection. There is no OS
-  keychain. A fetch is always made with the account of whoever asked for
-  that title; the daemon never bills one household member for another's
-  watchlist. A job whose owner has not shared a key waits; if somebody who
-  has shared one asks for the same title while it is still queued, the job
-  becomes theirs and is fetched with their key. Any other second request
-  leaves the job with the device that queued it.
+- **Everyone pays for their own downloads.** Each person's TorBox key is
+  saved on the daemon by their app when it joins, by hand or by the launch
+  search (the Join panel has a consent box, ticked by default), and again
+  when the key changes in the app; removing the key in the app removes it
+  here. Keys are kept as plain text in one `credentials.json` in the
+  daemon's data directory, keyed by device. On Linux the file is `0600`; on
+  Windows that mode does not apply and the user profile's own permissions
+  are the only protection. There is no OS keychain. A fetch is always made
+  with the key of whoever asked for that title, and never with anyone
+  else's. `POST /api/jobs` refuses a device with no saved key (403,
+  `code: "torbox-key-required"`), after the dedupe, so that device still
+  gets a file already cached and is answered with the state of a download
+  already under way, but nothing is queued for it. A job whose owner removes
+  their key after queueing waits; if somebody with a key asks for the same
+  title while it is still queued, the job becomes theirs and is fetched with
+  their key. Any other second request leaves the job with the device that
+  queued it.
+- **One download per file.** A request for a file already queued or being
+  fetched under another title key (the same release named by a tt id and a
+  kitsu id, say) joins that job instead of starting a second download, and
+  a job whose file is already complete on disk is granted from disk rather
+  than fetched again. The file is the infoHash plus the file index, or the
+  episode named by the key when there is no index, so the episodes of one
+  season pack stay separate jobs. The store still keeps one file per
+  torrent (one folder and one `meta.json` per infoHash), so while one
+  episode of a pack is held, a request for another episode of it is refused
+  with 409 `other-file-held` (the app falls back to its other tiers), and a
+  job for one queued earlier is expired rather than written over it.
 - **Leaving.** **Leave** in the app forgets the server on this device and,
   if the server answers at that moment, withdraws your TorBox key, or, if
   your request is still waiting, withdraws the request.

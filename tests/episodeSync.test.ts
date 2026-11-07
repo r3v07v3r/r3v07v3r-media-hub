@@ -60,6 +60,7 @@ import {
   undoneHeldBack,
   withWatchedAt,
   writeShowSync,
+  type AnimePlace,
   type CompareDeps,
   type CompareState,
   type Ep,
@@ -369,27 +370,88 @@ async function main(): Promise<void> {
     await assert.rejects(simklAnimeRead(payload, async () => ({ kind: 'unanswered' })))
   })
 
-  await check('an anime entry whose place is not its season keeps its show out', async () => {
-    const payload = {
-      anime: [
-        {
-          show: { title: 'Frieren', ids: { simkl: 3, kitsu: 100 } },
-          episodes: [{ number: 1, watched_at: OLD }]
-        },
-        {
-          show: { title: 'Frieren 2', ids: { simkl: 4, kitsu: 200 } },
-          episodes: [{ number: 1, watched_at: OLD }]
-        }
-      ]
+  /** Frieren at Simkl: an entry per season, the third (kitsu:300) one no
+   *  member of the show here can be shown to be. */
+  const FRIEREN_AT_SIMKL = {
+    anime: [
+      {
+        show: { title: 'Frieren', ids: { simkl: 3, kitsu: 100 } },
+        episodes: [
+          { number: 1, watched_at: OLD },
+          { number: 2, watched_at: OLD }
+        ]
+      },
+      {
+        show: { title: 'Frieren 2', ids: { simkl: 4, kitsu: 200 } },
+        episodes: [
+          { number: 1, watched_at: OLD },
+          { number: 3, watched_at: OLD }
+        ]
+      },
+      {
+        show: { title: 'Frieren 3', ids: { simkl: 5, kitsu: 300 } },
+        episodes: [{ number: 1, watched_at: OLD }]
+      }
+    ]
+  }
+  const placeFrieren = async (title: { kitsu?: number | null }): Promise<AnimePlace> =>
+    title.kitsu === 100
+      ? { kind: 'placed', id: 'kitsu:100', season: 1 }
+      : title.kitsu === 200
+        ? { kind: 'placed', id: 'kitsu:100', season: 2 }
+        : { kind: 'mismatched', ids: ['kitsu:300', 'kitsu:100'] }
+  const seasonPlaced = (id: string, season: number): boolean =>
+    SEASON_MEMBERS(id)?.[season - 1] != null
+
+  await check(
+    'an anime entry with no place leaves out only the seasons with no member',
+    async () => {
+      const read = await simklAnimeRead(FRIEREN_AT_SIMKL, placeFrieren, seasonPlaced)
+      assert.deepEqual(
+        [...read.shows.get('kitsu:100')!.episodes.keys()],
+        ['1:1', '1:2', '2:1', '2:3']
+      )
+      const covers = (id: string, season: number): boolean =>
+        read.covers({ id, type: 'anime', season })
+      assert.equal(covers('kitsu:100', 1), true)
+      assert.equal(covers('kitsu:100', 2), true)
+      assert.equal(covers('kitsu:100', 3), false, 'no member is season 3')
+      assert.equal(covers('kitsu:300', 1), false, 'the entry with no place, under its own id')
+      // A show none of whose entries is mismatched is untouched.
+      assert.equal(covers('kitsu:900', 4), true)
+
+      // Without the per-season answer, every season of the ids named is out.
+      const whole = await simklAnimeRead(FRIEREN_AT_SIMKL, placeFrieren)
+      assert.equal(whole.shows.has('kitsu:100'), false)
+      assert.equal(whole.covers({ id: 'kitsu:100', type: 'anime', season: 1 }), false)
     }
-    const read = await simklAnimeRead(payload, async (title) =>
-      title.kitsu === 100
-        ? { kind: 'placed', id: 'kitsu:100', season: 1 }
-        : { kind: 'mismatched', ids: ['kitsu:100', 'kitsu:200'] }
-    )
-    assert.equal(read.shows.has('kitsu:100'), false)
-    assert.equal(read.covers({ id: 'kitsu:100', type: 'anime', season: 1 }), false)
-  })
+  )
+
+  await check(
+    'a partly placeable anime is compared on its placed seasons and not on the rest',
+    async () => {
+      const db = tempDb()
+      seed(db, ANIME, [...range(1, 1, 3), ...range(2, 1, 2), ...range(3, 1, 2)])
+      const h = harness(db)
+      h.stamps['simkl-anime'] = 'stamp-1'
+      const read = await simklAnimeRead(FRIEREN_AT_SIMKL, placeFrieren, seasonPlaced)
+      h.answer['simkl-anime'] = () => read
+      await compareEpisodeSets(h.deps)
+      // Seasons 1 and 2 are compared: what Simkl lacks goes to it.
+      assert.deepEqual(
+        h.sent.flatMap((s) => s.eps.map((ep) => `${s.id} ${ep.season}:${ep.episode}`)),
+        ['kitsu:100 1:3', 'kitsu:100 2:2']
+      )
+      // Season 3 is neither sent, nor taken in, nor listed as cannot be sent.
+      const row = liveShowSync(readShowSync(db, PROFILE), MARKS, T0)[0]
+      assert.deepEqual(row.parts.simkl?.unsendable ?? [], [])
+      assert.deepEqual(
+        heldKeys(db, ANIME.id).filter((key) => key.startsWith('3:')),
+        ['3:1', '3:2']
+      )
+      db.close()
+    }
+  )
 
   // --- the comparison ------------------------------------------------------
 

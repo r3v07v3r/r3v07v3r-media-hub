@@ -1,0 +1,181 @@
+# Moves the mpv pin in scripts/fetch-mpv.ts to another shinchiro build and
+# mirrors that build on this repository's `mpv-mirror` release.
+#
+# Why: shinchiro/mpv-winbuild-cmake deletes old builds after a few weeks, and
+# a pinned archive that 404s breaks every Windows build (fetch-mpv runs in
+# postinstall). fetch-mpv tries the mirror first and upstream second, so once
+# an archive is mirrored here it keeps building after upstream drops it.
+#
+# The mirror release is a prerelease whose tag is not a version. electron-updater
+# skips non-semver tags on the preview channel, the Android updater only looks
+# at releases carrying r3-media-hub-android.apk, and release-notes.mjs only
+# describes `v*` tags, so none of them mistake it for an app release. Old
+# assets are never deleted, so older commits still build.
+#
+# Run it from the Actions tab. It uploads the archive and its .sha256, rewrites
+# the three pin constants and opens a PR to preview. The PR needs the repo
+# setting "Allow GitHub Actions to create and approve pull requests"; if that
+# is off, the branch is still pushed and the step summary says so. A PR opened
+# with GITHUB_TOKEN does not start other workflows, so close and reopen it (or
+# push to it) to run verify.
+
+name: mpv re-pin
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'shinchiro release tag (a build date such as 20261106), or "latest"'
+        required: true
+        default: latest
+
+permissions:
+  contents: write # create/upload the mpv-mirror release, push the pin branch
+  pull-requests: write # open the PR that moves the pin
+
+concurrency:
+  group: mpv-repin
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: shinchiro/mpv-winbuild-cmake
+  MIRROR_TAG: mpv-mirror
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  repin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: preview
+
+      - name: Pick the upstream build
+        id: pick
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="$INPUT_TAG"
+          if [ "$tag" = "latest" ] || [ -z "$tag" ]; then
+            tag="$(gh release view -R "$UPSTREAM" --json tagName --jq .tagName)"
+          fi
+          if ! printf '%s' "$tag" | grep -Eq '^[0-9A-Za-z._-]+$'; then
+            echo "::error::Unexpected tag '$tag'"
+            exit 1
+          fi
+          # The x86_64 baseline build only: not -v3 (needs AVX2), not -dev,
+          # not the ffmpeg or lgpl archives.
+          asset="$(gh release view "$tag" -R "$UPSTREAM" --json assets --jq '.assets[].name' \
+            | grep -E '^mpv-x86_64-[0-9]{8}-git-[0-9a-f]+[.]7z$' | head -n 1 || true)"
+          if [ -z "$asset" ]; then
+            echo "::error::No mpv-x86_64-<date>-git-<hash>.7z asset on $UPSTREAM release $tag"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
+          echo "Picked $asset from $UPSTREAM $tag"
+
+      - name: Download, hash and check the archive
+        id: hash
+        env:
+          TAG: ${{ steps.pick.outputs.tag }}
+          ASSET: ${{ steps.pick.outputs.asset }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mpv"
+          cd "$RUNNER_TEMP/mpv"
+          gh release download "$TAG" -R "$UPSTREAM" -p "$ASSET" --clobber
+          sha="$(sha256sum "$ASSET" | cut -d' ' -f1)"
+          printf '%s  %s\n' "$sha" "$ASSET" > "$ASSET.sha256"
+          # fetch-mpv keeps these two files; refuse an archive without them.
+          listing="$(7z l -ba "$ASSET")"
+          for name in mpv.exe d3dcompiler_43.dll; do
+            if ! printf '%s\n' "$listing" | grep -Eq "(^|[ /])${name//./[.]}\$"; then
+              echo "::error::$name is not in $ASSET"
+              exit 1
+            fi
+          done
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "dir=$RUNNER_TEMP/mpv" >> "$GITHUB_OUTPUT"
+          echo "$ASSET sha256 $sha"
+
+      - name: Upload to the mirror release
+        env:
+          ASSET: ${{ steps.pick.outputs.asset }}
+          DIR: ${{ steps.hash.outputs.dir }}
+        run: |
+          set -euo pipefail
+          # The release is created once by hand, just before an app release
+          # goes out: a stable install switched to the preview channel reads
+          # the newest release in the feed with no version check, so a
+          # freshly created mirror release at the top of the feed would
+          # fail its update checks until the next app release. This
+          # workflow only adds assets to the release that exists.
+          if ! gh release view "$MIRROR_TAG" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "::error::The $MIRROR_TAG release does not exist. Create it by hand (see the README mpv paragraph) right before an app release, then re-run." >&2
+            exit 1
+          fi
+          # --clobber only replaces an asset of the same name, which is the
+          # same upstream file. Other pins' assets are left alone.
+          gh release upload "$MIRROR_TAG" -R "$GITHUB_REPOSITORY" --clobber \
+            "$DIR/$ASSET" "$DIR/$ASSET.sha256"
+
+      - name: Rewrite the pin
+        id: pin
+        env:
+          TAG: ${{ steps.pick.outputs.tag }}
+          ASSET: ${{ steps.pick.outputs.asset }}
+          SHA: ${{ steps.hash.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          file=scripts/fetch-mpv.ts
+          sed -i -E \
+            -e "s|^const MPV_RELEASE_TAG = '[^']*'|const MPV_RELEASE_TAG = '$TAG'|" \
+            -e "s|^const MPV_ASSET = '[^']*'|const MPV_ASSET = '$ASSET'|" \
+            -e "s|^const MPV_SHA256 = '[^']*'|const MPV_SHA256 = '$SHA'|" \
+            "$file"
+          grep -q "^const MPV_RELEASE_TAG = '$TAG'" "$file"
+          grep -q "^const MPV_ASSET = '$ASSET'" "$file"
+          grep -q "^const MPV_SHA256 = '$SHA'" "$file"
+          if git diff --quiet -- "$file"; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "The pin is already $ASSET; the mirror upload above is all there was to do." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open the PR
+        if: steps.pin.outputs.changed == 'true'
+        env:
+          TAG: ${{ steps.pick.outputs.tag }}
+          ASSET: ${{ steps.pick.outputs.asset }}
+          SHA: ${{ steps.hash.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          branch="chore/repin-mpv-$TAG"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add scripts/fetch-mpv.ts
+          git commit -m "Move the mpv pin to $ASSET" -m "Mirrored on the $MIRROR_TAG release. sha256 $SHA."
+          git push --force-with-lease origin "$branch"
+          body="Moves the pin in scripts/fetch-mpv.ts to \`$ASSET\` from $UPSTREAM release \`$TAG\`.
+
+          sha256: \`$SHA\`
+
+          The archive and its .sha256 are on the \`$MIRROR_TAG\` release. Earlier pins stay there.
+          This PR was opened with GITHUB_TOKEN, so checks do not start on their own: close and reopen it to run them."
+          if ! gh pr create --base preview --head "$branch" \
+            --title "Move the mpv pin to $TAG" --body "$body"; then
+            {
+              echo "Could not open the PR (is \"Allow GitHub Actions to create and approve pull requests\" off?)."
+              echo "The branch \`$branch\` is pushed; open a PR from it to preview by hand."
+              echo
+              echo '```diff'
+              git show --format= HEAD
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi

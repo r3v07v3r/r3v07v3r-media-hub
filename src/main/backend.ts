@@ -18,10 +18,12 @@ import {
   ensureSetupCompleteDecided,
   migrateLegacySecrets,
   readSettings,
+  simklCredentials,
+  traktCredentials,
   writeSettings
 } from './media-hub/settingsStore'
 import { initSecretStorage } from './media-hub/secretStorage'
-import { upgradeHideDislikedDefault } from './media-hub/preferences'
+import { upgradeHideDislikedDefault, upgradeScrobbleDefault } from './media-hub/preferences'
 import { getDatabase, setDatabase } from './media-hub/dbState'
 import { closeParty } from './media-hub/watchParty'
 import { stopPlayback } from './media-hub/playbackSession'
@@ -71,6 +73,15 @@ export function startBackend(): void {
   // preferences.ts's upgradeHideDislikedDefault.
   const upgraded = upgradeHideDislikedDefault(readSettings())
   if (upgraded) writeSettings(upgraded)
+  // Once per install as well: scrobbles back on where Simkl or Trakt was
+  // already connected when they stopped being on by default. After
+  // prepareBackend(), so the stored tokens can be read. See preferences.ts's
+  // upgradeScrobbleDefault.
+  const scrobbleUpgrade = upgradeScrobbleDefault(
+    readSettings(),
+    Boolean(simklCredentials().accessToken || traktCredentials().accessToken)
+  )
+  if (scrobbleUpgrade) writeSettings(scrobbleUpgrade)
   setDatabase(createDatabase(join(app.getPath('userData'), 'media-hub.sqlite'), activeProfileId()))
   registerMediaHubIpc()
 }

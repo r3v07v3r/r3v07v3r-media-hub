@@ -30,7 +30,6 @@ import type {
   MediaKind,
   PartyHostResult,
   PartyChatMessage,
-  PartyQueueEntry,
   PartyStatusResult,
   PlaybackResult,
   ProfilePublic,
@@ -163,7 +162,6 @@ interface AppStateValue {
   // Settings card can never disagree about whether we're in a party (see
   // main/media-hub/watchParty.ts for the real backend this is wired to).
   partyStatus: PartyStatusResult | null
-  partyQueue: PartyQueueEntry[]
   /** Ephemeral, encrypted room conversation. Cleared when the room ends. */
   partyChat: PartyChatMessage[]
   /** Only known right after hosting (party:host's own response — party:status never returns it) — cleared on leave. */
@@ -186,8 +184,6 @@ interface AppStateValue {
   hostParty: (name: string) => Promise<PartyHostResult>
   joinParty: (code: string, name: string) => Promise<void>
   leaveParty: () => Promise<void>
-  voteQueue: (queueId: string, direction: 1 | -1) => Promise<void>
-  removeFromQueue: (queueId: string) => Promise<void>
   sendPartyChat: (text: string) => Promise<void>
 
   // My List — a Set of media ids. Kept centrally so the hero, the
@@ -514,13 +510,6 @@ interface AppStateValue {
   partyPreparing: { title: string; poster: string } | null
   /** Host-only, broadcast to every member: unlocks everyone's own play/pause/seek controls instead of just the host's. */
   setPartyMemberControl: (allow: boolean) => Promise<void>
-  /** Any member can call this to start a suggested queue item playing for the whole party — the host resolves and starts it (directly if this device IS the host, otherwise by asking the host over the party channel). */
-  requestPartyPlay: (item: {
-    id: string
-    type: string
-    title: string
-    poster?: string
-  }) => Promise<void>
 
   openContextMenu: (x: number, y: number, media: MediaItem) => void
   closeContextMenu: () => void
@@ -577,7 +566,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [activeProfileId, setActiveProfileIdState] = useState(FALLBACK_PROFILES[0].id)
   const [profilePinPrompt, setProfilePinPrompt] = useState<ProfilePublic | null>(null)
   const [partyStatus, setPartyStatus] = useState<PartyStatusResult | null>(null)
-  const [partyQueue, setPartyQueue] = useState<PartyQueueEntry[]>([])
   const [partyChat, setPartyChat] = useState<PartyChatMessage[]>([])
   const [partyHostCode, setPartyHostCode] = useState<string | null>(null)
   const [partyWanAvailable, setPartyWanAvailable] = useState<boolean | null>(null)
@@ -940,10 +928,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         }
       })
       .catch(() => {})
-    api
-      .queue()
-      .then(({ queue }) => setPartyQueue((prev) => (sameJson(prev, queue) ? prev : queue)))
-      .catch(() => {})
   }, [])
 
   // Toasts and the card menu live in OverlayProvider (see
@@ -996,8 +980,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         // way, and also picks up every other field (role, selfId, ...)
         // consistently rather than only members/allowMemberControl.
         refreshPartyStatus()
-      } else if (event.type === 'queue-sync') {
-        setPartyQueue(event.queue)
       } else if (event.type === 'chat') {
         setPartyChat((previous) => {
           // Relay rooms can echo a local host's message back after the local
@@ -1310,7 +1292,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
                       tone: 'success',
                       message:
                         action === 'approve'
-                          ? `${event.deviceName} can now use ${event.serverName}.`
+                          ? `${event.deviceName} can now use ${event.serverName}. It downloads with its own TorBox key, never yours.`
                           : `${event.deviceName} was turned away.`
                     }
                   : {
@@ -1329,13 +1311,27 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         })
         return
       }
+      if (event.kind === 'key-required') {
+        pushNotification({
+          tone: 'info',
+          message:
+            'The LAN cache needs your TorBox key before it can fetch for you. Add one under Control centre → Media servers, or wait for the cache to have it.'
+        })
+        return
+      }
+      // Each person's requests are fetched with their own key, so a join
+      // says where this device's key now is.
+      const keyNote =
+        (event.kind === 'joined' || event.kind === 'approved') && event.keySaved
+          ? ' Your TorBox key is saved on the cache and used only for your own requests.'
+          : ''
       const message =
         event.kind === 'asked'
           ? `Found ${event.serverName} on your network and asked to use it. Its administrator has to allow this device.`
           : event.kind === 'joined'
-            ? `Found ${event.serverName} on your network and joined it.`
+            ? `Found ${event.serverName} on your network and joined it.${keyNote}`
             : event.kind === 'approved'
-              ? `${event.serverName} let this device in.`
+              ? `${event.serverName} let this device in.${keyNote}`
               : `${event.serverName} moved to ${event.url}. Following it there.`
       pushNotification({ tone: event.kind === 'asked' ? 'info' : 'success', message })
     })
@@ -1717,7 +1713,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setPartyChat([])
     setPartyPanelOpen(false)
     setPartyStatus(null)
-    setPartyQueue([])
     setPartyChat([])
   }, [])
 
@@ -1728,26 +1723,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     if (!trimmed) return
     await api.chat({ id: crypto.randomUUID(), text: trimmed, sentAt: Date.now() })
   }, [])
-
-  const voteQueue = useCallback(
-    async (queueId: string, direction: 1 | -1) => {
-      const api = window.api?.mediaHub?.party
-      if (!api) return
-      await api.vote(queueId, direction)
-      refreshPartyStatus()
-    },
-    [refreshPartyStatus]
-  )
-
-  const removeFromQueue = useCallback(
-    async (queueId: string) => {
-      const api = window.api?.mediaHub?.party
-      if (!api) return
-      await api.remove(queueId)
-      refreshPartyStatus()
-    },
-    [refreshPartyStatus]
-  )
 
   // Stops main generating an answer nobody is waiting for any more. The
   // generation counter alone only discards the answer when it eventually
@@ -2849,8 +2824,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const nowPlayingInFlightRef = useRef<string | null>(null)
 
   // Follower side of the above: unwrap an incoming `nowPlaying` (see
-  // watchParty.ts's handlePartyMessage — every message type other than
-  // suggest/vote falls through to the generic `{type:'message', message}`
+  // watchParty.ts's handlePartyMessage — every message type falls
+  // through to the generic `{type:'message', message}`
   // relay, so this is only ever received by clients, never echoed to the
   // host that sent it) into a real MediaItem via the same catalog:meta +
   // catalogItemToMediaItem path MediaDetailPage would use, then plays it
@@ -3062,70 +3037,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     })
   }, [partyStatus, partyHostCode, pushNotification])
 
-  // A suggestion only ever carries {id, type, title, poster} — no episode —
-  // so a series/anime suggestion is inherently ambiguous about which
-  // episode to start. Defaulting to S1E1 (rather than leaving season/
-  // episode undefined) matters here specifically: an undefined
-  // season/episode against a multi-episode torrent leaves stream:play with
-  // no way to pick which file inside it to serve, silently failing to
-  // produce a playable stream at all. Movies have no such ambiguity.
-  const startSuggestedPlayback = useCallback(
-    (catalogItem: CatalogItem) => {
-      const media = catalogItemToMediaItem(catalogItem)
-      return startPartyPlayback(
-        media.mediaKind === 'movie' ? media : { ...media, seasonNumber: 1, episodeNumber: 1 }
-      )
-    },
-    [startPartyPlayback]
-  )
-
-  // Host side of "any member can play a suggestion" (see PartyPanel's
-  // queue Play button): a non-host member's play-request arrives here
-  // exactly like the nowPlaying unwrap above, then starts for real via
-  // the normal startPartyPlayback — so it's announced to everyone else
-  // the same as if the host had picked it themselves.
-  useEffect(() => {
-    if (partyStatus?.role !== 'host') return
-    const api = window.api?.mediaHub?.party
-    if (!api) return
-    return api.onEvent((event) => {
-      if (event.type !== 'play-request') return
-      const catalogApi = window.api?.mediaHub?.catalog
-      if (!catalogApi || !event.item.id || !event.item.type) return
-      catalogApi
-        .meta(event.item.type as MediaKind, event.item.id)
-        .then(startSuggestedPlayback)
-        .catch(() => {
-          pushNotification({ tone: 'error', message: "Couldn't load that suggestion." })
-        })
-    })
-  }, [partyStatus, startSuggestedPlayback, pushNotification])
-
   const setPartyMemberControl = useCallback(async (allow: boolean) => {
     const api = window.api?.mediaHub?.party
     if (!api) return
     await api.setMemberControl(allow)
   }, [])
-
-  const requestPartyPlay = useCallback(
-    async (item: { id: string; type: string; title: string; poster?: string }) => {
-      const api = window.api?.mediaHub?.party
-      if (!api) return
-      if (partyStatus?.role === 'host') {
-        const catalogApi = window.api?.mediaHub?.catalog
-        if (!catalogApi) return
-        try {
-          const catalogItem = await catalogApi.meta(item.type as MediaKind, item.id)
-          await startSuggestedPlayback(catalogItem)
-        } catch {
-          pushNotification({ tone: 'error', message: "Couldn't load that suggestion." })
-        }
-        return
-      }
-      await api.requestPlay(item)
-    },
-    [partyStatus, startSuggestedPlayback, pushNotification]
-  )
 
   const toggleCombinedMood = useCallback((moodId: string) => {
     setCombinedMoods((prev) =>
@@ -3366,7 +3282,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       updateProfile,
       deleteProfile,
       partyStatus,
-      partyQueue,
       partyChat,
       partyHostCode,
       partyWanAvailable,
@@ -3377,8 +3292,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       hostParty,
       joinParty,
       leaveParty,
-      voteQueue,
-      removeFromQueue,
       sendPartyChat,
       myList,
       plannedSources: homeFeed.plannedSources,
@@ -3443,7 +3356,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       startPartyPlayback,
       partyPreparing,
       setPartyMemberControl,
-      requestPartyPlay,
       openContextMenu,
       closeContextMenu,
       activeMood,
@@ -3470,7 +3382,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       updateProfile,
       deleteProfile,
       partyStatus,
-      partyQueue,
       partyChat,
       partyHostCode,
       partyWanAvailable,
@@ -3480,8 +3391,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       hostParty,
       joinParty,
       leaveParty,
-      voteQueue,
-      removeFromQueue,
       sendPartyChat,
       myList,
       homeFeed.plannedSources,
@@ -3545,7 +3454,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       startPartyPlayback,
       partyPreparing,
       setPartyMemberControl,
-      requestPartyPlay,
       openContextMenu,
       closeContextMenu,
       activeMood,

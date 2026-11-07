@@ -58,6 +58,11 @@ export interface Admin {
   claim(deviceId: string): Promise<boolean>
   /** Console recovery: allows one further claim. */
   reopen(): Promise<void>
+  /** Ends a reopening without spending it on a claim: what the current
+   *  administrator does when they ran --claim-admin and are still the one.
+   *  Harmless when claiming is not reopened. A fresh install is left
+   *  unclaimed, because there is no administrator to close it. */
+  closeReopen(): Promise<void>
   /** Whether new devices join without waiting for approval. */
   openJoin(): boolean
   setOpenJoin(value: boolean): Promise<void>
@@ -134,6 +139,13 @@ export function createAdmin(dataDir: string): Admin {
     },
     async reopen() {
       state = { ...state, reopened: true }
+      await persist()
+    },
+    async closeReopen() {
+      if (state.reopened !== true) return
+      const next = { ...state }
+      delete next.reopened
+      state = next
       await persist()
     },
     async load() {

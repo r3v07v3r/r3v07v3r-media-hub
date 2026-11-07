@@ -77,7 +77,7 @@ Check Cloudflare's current pricing page before relying on either plan.
   current. Then comes `{"type":"peers","connIds":[...]}`, listing every
   other connection currently in the room (empty for the first to join).
 - The server never decrypts anything. Every real message (who is in the
-  party, what is playing, seek and pause, chat, suggestions) is encrypted
+  party, what is playing, seek and pause, chat) is encrypted
   end to end by the app before it reaches this Worker; the Worker tags each
   message with who sent it and relays it to everyone else in the room. What
   the Worker does see in the clear is routing metadata (connection tags, host

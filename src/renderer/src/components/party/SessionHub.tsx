@@ -6,13 +6,7 @@ import { Icon } from '@renderer/components/icons/Icon'
 import { RoomsSection } from './RoomsSection'
 import styles from './SessionHub.module.css'
 
-type PartyTab = 'chat' | 'queue' | 'people'
-
-/** The shared queue tab is kept but not drawn. Nothing in the app can put a
- *  title in the queue any more (the title-page control its empty state
- *  pointed at is gone), so the tab could only ever be empty. Turning this
- *  back on is the one change needed once a way to suggest a title returns. */
-const QUEUE_TAB_ENABLED = false
+type PartyTab = 'chat' | 'people'
 
 function formatTime(timestamp: number): string {
   const date = new Date(timestamp)
@@ -34,7 +28,6 @@ function formatTime(timestamp: number): string {
 export function SessionHub() {
   const {
     partyStatus,
-    partyQueue,
     partyChat,
     partyHostCode,
     partyWanAvailable,
@@ -47,9 +40,6 @@ export function SessionHub() {
     hostParty,
     joinParty,
     leaveParty,
-    voteQueue,
-    removeFromQueue,
-    requestPartyPlay,
     setPartyMemberControl,
     sendPartyChat,
     pushNotification
@@ -202,23 +192,20 @@ export function SessionHub() {
             {(
               [
                 ['chat', 'Chat'],
-                ['queue', `Queue${partyQueue.length ? ` ${partyQueue.length}` : ''}`],
                 ['people', `People ${memberCount}`]
               ] as const
-            )
-              .filter(([key]) => key !== 'queue' || QUEUE_TAB_ENABLED)
-              .map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  className={tab === key ? styles.tabActive : styles.tab}
-                  onClick={() => setTab(key)}
-                  role="tab"
-                  aria-selected={tab === key}
-                >
-                  {label}
-                </button>
-              ))}
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                className={tab === key ? styles.tabActive : styles.tab}
+                onClick={() => setTab(key)}
+                role="tab"
+                aria-selected={tab === key}
+              >
+                {label}
+              </button>
+            ))}
           </div>
 
           {tab === 'chat' && (
@@ -266,66 +253,6 @@ export function SessionHub() {
                   <Icon name="chevron" size={15} />
                 </button>
               </form>
-            </section>
-          )}
-
-          {QUEUE_TAB_ENABLED && tab === 'queue' && (
-            <section className={styles.queuePanel} aria-label="Shared queue">
-              {partyQueue.length === 0 ? (
-                <p className={styles.emptyCopy}>
-                  Suggestions from title pages appear here for everyone.
-                </p>
-              ) : (
-                <ul className={styles.queueList}>
-                  {partyQueue.map((entry) => {
-                    const score = Object.values(entry.votes).reduce(
-                      (total, vote) => total + vote,
-                      0
-                    )
-                    return (
-                      <li key={entry.queueId} className={styles.queueItem}>
-                        <div>
-                          <strong>{entry.item.title}</strong>
-                          <span>Suggested by {entry.suggestedBy}</span>
-                        </div>
-                        <div className={styles.queueActions}>
-                          <button
-                            type="button"
-                            onClick={() => requestPartyPlay(entry.item)}
-                            aria-label={`Play ${entry.item.title}`}
-                          >
-                            <Icon name="play" size={12} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => voteQueue(entry.queueId, 1)}
-                            aria-label="Vote up"
-                          >
-                            <Icon name="thumbs-up" size={12} />
-                          </button>
-                          <span>{score}</span>
-                          <button
-                            type="button"
-                            onClick={() => voteQueue(entry.queueId, -1)}
-                            aria-label="Vote down"
-                          >
-                            <Icon name="thumbs-down" size={12} />
-                          </button>
-                          {isHost && (
-                            <button
-                              type="button"
-                              onClick={() => removeFromQueue(entry.queueId)}
-                              aria-label="Remove suggestion"
-                            >
-                              <Icon name="x" size={12} />
-                            </button>
-                          )}
-                        </div>
-                      </li>
-                    )
-                  })}
-                </ul>
-              )}
             </section>
           )}
 

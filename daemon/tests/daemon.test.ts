@@ -581,11 +581,17 @@ async function main(): Promise<void> {
       // The queue's reason survives the wire, and only the two real values
       // do. It is rendered as a label on the caching page, so an arbitrary
       // string reaching the record would be a caller writing UI text.
+      // Queueing needs the caller's own TorBox key on the server.
+      await credentials.setTokenForDevice(deviceIdForToken(token), 'test-torbox-token')
+      let reasonHashSeed = 0
       const queueWith = async (key: string, reason: unknown): Promise<string | undefined> => {
+        // A hash per key: two film keys naming one hash are the same file
+        // and would join one job (jobs.sameFile).
+        const infoHash = (++reasonHashSeed).toString(16).padStart(40, 'e')
         await fetch(`${base}/api/jobs`, {
           method: 'POST',
           headers: { ...auth, 'content-type': 'application/json' },
-          body: JSON.stringify({ contentKey: key, infoHash: 'e'.repeat(40), title: 'T', reason })
+          body: JSON.stringify({ contentKey: key, infoHash, title: 'T', reason })
         })
         return jobs.list().find((job) => job.contentKey === key)?.reason
       }
@@ -1945,9 +1951,12 @@ async function jobOwnershipTest(): Promise<void> {
       const jobs = createJobStore(root)
       const ownerOf = (key: string): string | undefined =>
         jobs.list().find((job) => job.contentKey === key)?.ownerDeviceId
+      // A hash per key, so each key is its own file (jobs.sameFile would
+      // otherwise join film keys that name one hash).
+      const hashFor = (key: string): string => key.replace(/\D/g, '').padStart(40, 'e')
       const queue = (key: string, owner: string | undefined, canFetch?: string[]): void => {
         jobs.enqueue(
-          { contentKey: key, infoHash: hash, title: key, ownerDeviceId: owner },
+          { contentKey: key, infoHash: hashFor(key), title: key, ownerDeviceId: owner },
           canFetch ? { canFetch: (id) => canFetch.includes(id) } : undefined
         )
       }

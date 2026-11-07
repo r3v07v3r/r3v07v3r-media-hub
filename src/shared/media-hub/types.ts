@@ -116,14 +116,16 @@ export interface CatalogItem {
    * 'movie', 'ova', 'ona', 'special' or 'music'. Absent when Kitsu gave none,
    * and on anything cached before it was read.
    *
-   * Only a TV entry is merged into a show as one of its seasons (see
-   * groupAnimeCatalog). A film or an OVA is a title of its own, listed on
+   * A TV entry is merged into a show as one of its seasons, and so is an ONA
+   * TheTVDB numbers as a season of the same series (see groupAnimeCatalog
+   * and seasonEntriesOf). A film or an OVA is a title of its own, listed on
    * the show's page beside the seasons it falls between (groupedExtras).
    */
   subtype?: string
   /**
-   * Anime only, on a merged show — the films, OVAs, ONAs, specials and music
-   * entries the grouping found linked to its seasons, by Kitsu id. They are
+   * Anime only, on a merged show — the films, OVAs, ONAs that are not
+   * seasons, specials and music entries the grouping found linked to its
+   * seasons, by Kitsu id. They are
    * not seasons and not in groupedIds: each stays a title of its own, and the
    * show's page lists them between the seasons they came out between.
    */
@@ -469,8 +471,11 @@ export interface LibraryChangedEvent {
  */
 export type LanCacheAppEvent =
   | { kind: 'asked'; serverName: string }
-  | { kind: 'joined'; serverName: string }
-  | { kind: 'approved'; serverName: string }
+  | { kind: 'joined'; serverName: string; keySaved?: boolean }
+  | { kind: 'approved'; serverName: string; keySaved?: boolean }
+  /** A download was refused because the cache holds no TorBox key for this
+   *  device. Raised once per run. */
+  | { kind: 'key-required'; serverName: string }
   | { kind: 'moved'; serverName: string; url: string }
   | { kind: 'join-request'; id: string; deviceName: string; serverName: string }
 
@@ -932,6 +937,21 @@ export interface TitleWatchState {
   tracked: boolean
   /** Every watched row for the title. Both null for a film. */
   watched: Array<{ season: number | null; episode: number | null }>
+}
+
+/** A service a season of an anime can fail to reach (UnsentAnimeSeason). */
+export type UnsentService = 'simkl' | 'mal'
+
+/**
+ * A season of a merged anime that is not sent to a connected service: no
+ * member of the show can be shown to be that season of its page
+ * (animeSeasonMembers in serviceIds.ts), so there is no entry there to send
+ * it to. The answer of tracking:unsent-seasons; see animeSeasons.ts's
+ * unsentAnimeSeasons for when it is empty.
+ */
+export interface UnsentAnimeSeason {
+  season: number
+  services: UnsentService[]
 }
 
 export interface DislikedListResult {
@@ -1763,13 +1783,6 @@ export interface PartyMemberSummary {
   watching?: boolean
 }
 
-export interface PartyQueueEntry {
-  queueId: string
-  item: { id: string; type: string; title: string; poster?: string; year?: string }
-  suggestedBy: string
-  votes: Record<string, 1 | -1>
-}
-
 /** A short-lived message in the current watch room. Messages deliberately live
  *  with the room rather than the user profile: closing a room clears the
  *  conversation, and the relay carries the same encrypted envelope as the
@@ -1835,11 +1848,9 @@ export type PartyEventPayload =
       allowMemberControl?: boolean
       nowPlaying?: PartyNowPlayingSummary | null
     }
-  | { type: 'queue-sync'; queue: PartyQueueEntry[] }
   | { type: 'chat'; chat: PartyChatMessage }
   | { type: 'message'; from: string; message: unknown }
   | { type: 'host-disconnected' }
-  | { type: 'play-request'; item: { id: string; type: string; title: string; poster?: string } }
 
 /** Sent by the host the moment someone picks a title, BEFORE the host has
  *  resolved a stream for it.

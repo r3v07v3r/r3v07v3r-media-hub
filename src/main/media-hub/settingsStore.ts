@@ -50,9 +50,13 @@ export interface MediaHubRawSettings {
    * (scrobble start, pause and stop). Absent means OFF: the history add at
    * 80% is the record either way, and every scrobble is a request against
    * Simkl's daily allowance, which a linked phone shares. See
-   * preferences.ts's scrobblingEnabled.
+   * preferences.ts's scrobblingEnabled. Installs that had Simkl or Trakt
+   * connected when that default arrived were switched on once.
    */
   scrobbleEnabled?: boolean
+  /** Whether this install has had the one-time scrobble upgrade: see
+   *  preferences.ts's upgradeScrobbleDefault. Kept through a sign-out. */
+  scrobbleDefaultMigrated?: boolean
   onboardingVersion?: number
   /** Whether the first-run welcome flow (name, playback source, storage,
    *  cache tuning) has been completed or skipped. Absent only before the
@@ -176,6 +180,7 @@ export interface MediaHubRawSettings {
    *  the next start, exactly as Ollama's Disconnect would (see
    *  ollamaAutoDetect). Asking to join by hand turns it back on. */
   lanCacheAutoJoin?: boolean
+  lanCacheKeySyncPending?: boolean
   /** Bound on the in-memory buffer, in MB. Clamped by
    *  streamCache.ts's memoryCacheMaxBytes; ignored on disk. */
   memoryCacheMaxMb?: number
@@ -486,14 +491,10 @@ export interface LanCacheConnection {
    */
   pending?: boolean
   /**
-   * The TorBox opt-in made when this device asked to join, held until
-   * approval can act on it.
-   *
-   * The choice is made at the moment of asking and cannot be honoured then:
-   * a pending token authorises nothing, so posting the credential would be
-   * refused. Without somewhere to keep the answer it was simply discarded,
-   * and the person who ticked the box stayed unlinked with no control
-   * anywhere to try again.
+   * The TorBox opt-in made when this device asked to join. It lasts for the
+   * connection: a pending token authorises nothing, so the key is sent once
+   * approval arrives, and a key saved, changed or removed later follows it
+   * to the cache (syncTorBoxKeyToLanCache) while this stays set.
    */
   shareTorbox?: boolean
 }
@@ -547,6 +548,25 @@ export function clearLanCacheConnection(): void {
   delete settings.lanCacheToken
   delete settings.lanCachePending
   delete settings.lanCacheShareTorbox
+  delete settings.lanCacheKeySyncPending
+  writeSettings(settings)
+}
+
+/**
+ * Whether a TorBox key change (or removal) has still to reach the cache
+ * server: set when the sync failed because the server was away, cleared
+ * once it lands. Kept beside the connection, not in it, so every rewrite of
+ * the connection (approval, a moved address) leaves it as it was.
+ */
+export function isLanCacheKeySyncPending(): boolean {
+  return readSettings().lanCacheKeySyncPending === true
+}
+
+export function setLanCacheKeySyncPending(pending: boolean): void {
+  const settings = readSettings()
+  if (pending === (settings.lanCacheKeySyncPending === true)) return
+  if (pending) settings.lanCacheKeySyncPending = true
+  else delete settings.lanCacheKeySyncPending
   writeSettings(settings)
 }
 

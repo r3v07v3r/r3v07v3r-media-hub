@@ -52,6 +52,10 @@ export const MEDIA_HUB_CHANNELS = {
   lanCachePairStatus: 'mediahub:lancache:pair-status',
   /** Take Super Admin of an unclaimed cache server. */
   lanCacheClaim: 'mediahub:lancache:claim',
+  /** Admin only: end a --claim-admin reopening without handing the role on. */
+  lanCacheCloseClaim: 'mediahub:lancache:close-claim',
+  /** Save this device's TorBox key on the cache server. */
+  lanCacheShareKey: 'mediahub:lancache:share-key',
   /** Admin only: the device list, one device's approve/deny/revoke/quota,
    *  and the server-wide join and allocation settings. */
   lanCacheDevices: 'mediahub:lancache:devices',
@@ -184,6 +188,9 @@ export const MEDIA_HUB_CHANNELS = {
   /** Whether one title is on the list and which of it has been watched,
    *  from the database alone — see TitleWatchState. */
   trackingTitleState: 'mediahub:tracking:title-state',
+  /** The seasons of one merged anime that are not sent to a connected
+   *  Simkl or MyAnimeList — see UnsentAnimeSeason. */
+  trackingUnsentSeasons: 'mediahub:tracking:unsent-seasons',
   trackingMarkWatched: 'mediahub:tracking:mark-watched',
   trackingUnmarkWatched: 'mediahub:tracking:unmark-watched',
   trackingMarkSeasonWatched: 'mediahub:tracking:mark-season-watched',
@@ -364,15 +371,10 @@ export const MEDIA_HUB_CHANNELS = {
   partyJoin: 'mediahub:party:join',
   partyLeave: 'mediahub:party:leave',
   partyStatus: 'mediahub:party:status',
-  partySuggest: 'mediahub:party:suggest',
-  partyRemove: 'mediahub:party:remove',
-  partyVote: 'mediahub:party:vote',
-  partyQueue: 'mediahub:party:queue',
   partyPreparing: 'mediahub:party:preparing',
   partyNowPlaying: 'mediahub:party:now-playing',
   partyPlaybackAction: 'mediahub:party:playback-action',
   partySetMemberControl: 'mediahub:party:set-member-control',
-  partyRequestPlay: 'mediahub:party:request-play',
   partyChat: 'mediahub:party:chat',
   roomsStatus: 'mediahub:rooms:status',
   roomsCreate: 'mediahub:rooms:create',

@@ -65,7 +65,8 @@ import {
   findLanCacheCandidate,
   isLanCacheConnected,
   lanCacheFingerprint,
-  lanCacheStreamUrl
+  lanCacheStreamUrl,
+  syncTorBoxKeyToLanCache
 } from './lanCache'
 import {
   activeStreamUrl,
@@ -109,6 +110,8 @@ async function torboxFetch<T = unknown>(url: string | URL, options?: RequestInit
   } catch (error) {
     if ((error as HttpError).status === 401) {
       clearTorBoxToken()
+      // A key TorBox refuses is no use to the LAN cache either.
+      void syncTorBoxKeyToLanCache()
     }
     throw error
   }
@@ -510,13 +513,19 @@ export function registerTorBoxIpc(): void {
       return { ok: false, message: 'Enter the API token shown in TorBox Settings.' }
     }
     try {
-      const result = await torboxFetch<RawApiPayload>(`${TORBOX}/user/me`, {
+      // fetchJson, not torboxFetch: this checks a CANDIDATE key, and a 401
+      // for a mistyped one must not clear the stored key that still works
+      // (or remove it from the LAN cache).
+      const result = await fetchJson<RawApiPayload>(`${TORBOX}/user/me`, {
         headers: { Authorization: `Bearer ${value}` }
       })
       const s = readSettings()
       s.torboxToken = encrypt(value)
       s.onboardingVersion = 2
       writeSettings(s)
+      // The LAN cache fetches with each person's own key, so a new or
+      // changed key follows it there (when this person agreed to that).
+      void syncTorBoxKeyToLanCache()
       return { ok: true, user: result.data || {}, message: 'TorBox connected.' }
     } catch (error) {
       return { ok: false, message: (error as Error).message }
@@ -527,6 +536,9 @@ export function registerTorBoxIpc(): void {
     const s = readSettings()
     delete s.torboxToken
     writeSettings(s)
+    // And from the LAN cache, which must not keep fetching with a key the
+    // person has taken out of the app.
+    void syncTorBoxKeyToLanCache()
     return { ok: true }
   })
 

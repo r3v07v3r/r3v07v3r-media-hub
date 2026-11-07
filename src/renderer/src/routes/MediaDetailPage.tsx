@@ -26,7 +26,8 @@ import type {
   Episode,
   EpisodePlaybackPosition,
   HistoryEntry,
-  MediaKind
+  MediaKind,
+  UnsentService
 } from '@shared/media-hub/types'
 import type { MediaItem } from '@renderer/types'
 import { ContextBackButton } from '@renderer/components/detail/ContextBackButton'
@@ -387,6 +388,35 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     const set = new Set(episodes.map((e) => e.season))
     return Array.from(set).sort((a, b) => a - b)
   }, [episodes])
+
+  // An anime's seasons that no entry at a connected Simkl or MyAnimeList
+  // can be shown to be, so they are not sent there (tracking:unsent-seasons).
+  // Asked of the id the page was built for, the show's.
+  const [unsentSeasons, setUnsentSeasons] = useState<ReadonlyMap<number, UnsentService[]>>(
+    () => new Map()
+  )
+  const showId = catalogItem?.id ?? ''
+  const seasonsKey = seasons.join(',')
+  useEffect(() => {
+    let cancelled = false
+    const api = window.api?.mediaHub
+    if (kind !== 'anime' || !showId || !seasonsKey || !api?.tracking.unsentSeasons) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- nothing to ask for this page
+      setUnsentSeasons(new Map())
+      return
+    }
+    api.tracking
+      .unsentSeasons(showId, seasonsKey.split(',').map(Number))
+      .then((list) => {
+        if (!cancelled) setUnsentSeasons(new Map(list.map((s) => [s.season, s.services])))
+      })
+      .catch(() => {
+        if (!cancelled) setUnsentSeasons(new Map())
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [kind, showId, seasonsKey])
 
   // Real per-episode watched state from tracking history — a strictly
   // more accurate source than assuming "the first N in order" the way
@@ -807,6 +837,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
               onMarkMany={handleMarkManyWatched}
               onMarkSeason={handleMarkSeasonWatched}
               watchedLoading={!historyReady}
+              unsentSeasons={unsentSeasons}
               status={metaStatus}
             />
             <SimilarPanel

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import type { Episode } from '@shared/media-hub/types'
+import type { Episode, UnsentService } from '@shared/media-hub/types'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
@@ -68,6 +68,10 @@ interface EpisodesSectionProps {
   /** The title's watched rows haven't arrived yet: every tile reads as
    *  unwatched for now, so say so rather than let that look like the answer. */
   watchedLoading?: boolean
+  /** An anime's seasons that are not sent to a connected Simkl or
+   *  MyAnimeList, with the services they miss (tracking:unsent-seasons).
+   *  Each gets a dot on its pill, and the open one a line beneath. */
+  unsentSeasons?: ReadonlyMap<number, readonly UnsentService[]>
   status: 'loading' | 'ready' | 'error'
 }
 
@@ -115,6 +119,13 @@ function seasonLabel(season: number): string {
   return season === 0 ? 'Specials' : `Season ${season}`
 }
 
+const SERVICE_NAMES: Record<UnsentService, string> = { simkl: 'Simkl', mal: 'MyAnimeList' }
+
+/** "Not sent to Simkl", "Not sent to Simkl or MyAnimeList". */
+function unsentLabel(services: readonly UnsentService[]): string {
+  return `Not sent to ${services.map((s) => SERVICE_NAMES[s]).join(' or ')}`
+}
+
 /** "E97" for a normal episode, "SP4" for a specials-season entry — the
  *  short code the reference design leads every card title with. The season
  *  isn't in it: the grid only ever shows one season at a time, and the
@@ -140,6 +151,7 @@ export function EpisodesSection({
   onMarkMany,
   onMarkSeason,
   watchedLoading = false,
+  unsentSeasons,
   status
 }: EpisodesSectionProps) {
   const { resolvingMedia } = useAppState()
@@ -371,6 +383,7 @@ export function EpisodesSection({
         <div className={`${styles.seasonRow} thin-scroll`} role="tablist" aria-label="Season">
           {seasons.map((s) => {
             const isActive = s === selectedSeason
+            const unsent = s >= 1 ? unsentSeasons?.get(s) : undefined
             const menuOpen = openMenu?.kind === 'season' && openMenu.season === s
             // A season made up entirely of disambiguateVideos' synthetic
             // Specials entries (see core.ts) has nothing "Mark season
@@ -401,8 +414,16 @@ export function EpisodesSection({
                   aria-selected={isActive}
                   className={`${styles.seasonPill} ${isActive ? styles.seasonPillActive : ''}`}
                   onClick={() => onSelectSeason(s)}
+                  title={unsent?.length ? unsentLabel(unsent) : undefined}
                 >
                   {seasonLabel(s)}
+                  {unsent?.length ? (
+                    <span
+                      className={styles.unsentDot}
+                      role="img"
+                      aria-label={unsentLabel(unsent)}
+                    />
+                  ) : null}
                 </button>
                 {isActive && hasSeasonActions && (
                   <button
@@ -421,6 +442,9 @@ export function EpisodesSection({
           })}
         </div>
       )}
+      {selectedSeason != null && unsentSeasons?.get(selectedSeason)?.length ? (
+        <p className={styles.unsentLine}>{unsentLabel(unsentSeasons.get(selectedSeason) ?? [])}</p>
+      ) : null}
       {watchedLoading && (
         <p className={styles.watchedLoading} role="status">
           <span className={styles.watchedLoadingDot} aria-hidden="true" />

@@ -55,7 +55,11 @@ import {
   type PendingHistoryPushes
 } from '../src/main/media-hub/historyRetry'
 import { withWatchedAt } from '../src/main/media-hub/episodeSync'
-import { scrobblingEnabled } from '../src/main/media-hub/preferences'
+import {
+  logoutSettings,
+  scrobblingEnabled,
+  upgradeScrobbleDefault
+} from '../src/main/media-hub/preferences'
 import {
   animeRowAwaitsGrouping,
   historyPayload,
@@ -90,6 +94,51 @@ check('only an explicit yes turns them on', () => {
   // A hand-edited file is not a yes.
   assert.equal(scrobblingEnabled({ scrobbleEnabled: 'true' }), false)
   assert.equal(scrobblingEnabled({ scrobbleEnabled: 1 }), false)
+})
+
+// --- the one-time scrobble upgrade -----------------------------------------
+
+check('an install with a service connected and no stored choice is switched on once', () => {
+  const upgraded = upgradeScrobbleDefault({ theme: 'dark' }, true)
+  assert.deepEqual(upgraded, {
+    theme: 'dark',
+    scrobbleDefaultMigrated: true,
+    scrobbleEnabled: true
+  })
+  assert.equal(scrobblingEnabled(upgraded!), true)
+})
+
+check('a fresh install, with nothing connected, only gets the marker and stays off', () => {
+  const upgraded = upgradeScrobbleDefault({}, false)
+  assert.deepEqual(upgraded, { scrobbleDefaultMigrated: true })
+  assert.equal(scrobblingEnabled(upgraded!), false)
+})
+
+check('a stored choice is kept either way', () => {
+  assert.deepEqual(upgradeScrobbleDefault({ scrobbleEnabled: false }, true), {
+    scrobbleEnabled: false,
+    scrobbleDefaultMigrated: true
+  })
+  assert.deepEqual(upgradeScrobbleDefault({ scrobbleEnabled: true }, false), {
+    scrobbleEnabled: true,
+    scrobbleDefaultMigrated: true
+  })
+})
+
+check(
+  'it runs once: switched off afterwards stays off, connecting later does not turn it on',
+  () => {
+    const first = upgradeScrobbleDefault({}, true)!
+    assert.equal(upgradeScrobbleDefault(first, true), null)
+    assert.equal(upgradeScrobbleDefault({ ...first, scrobbleEnabled: false }, true), null)
+    const fresh = upgradeScrobbleDefault({}, false)!
+    assert.equal(upgradeScrobbleDefault(fresh, true), null)
+  }
+)
+
+check('the marker survives a sign-out', () => {
+  assert.equal(logoutSettings({ scrobbleDefaultMigrated: true }).scrobbleDefaultMigrated, true)
+  assert.equal('scrobbleDefaultMigrated' in logoutSettings({}), false)
 })
 
 // --- history pushes that failed ---------------------------------------------

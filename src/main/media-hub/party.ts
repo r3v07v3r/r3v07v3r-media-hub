@@ -1,6 +1,6 @@
 // Ported from r3v07v3r-media-hub's src/party.cjs. This is the Watch Party
 // encryption/validation layer (AES-256-GCM message crypto, LAN/WAN and
-// relay endpoint validation, share-code encode/decode, queue voting) —
+// relay endpoint validation, share-code encode/decode) —
 // every validation branch (ip regex, roomId UUID regex, https-only relay
 // check, base64url encode/decode, AES-256-GCM iv/tag handling) is
 // preserved EXACTLY from the original. Do not "simplify" or restructure
@@ -8,7 +8,6 @@
 // elegance in this file.
 
 import crypto from 'node:crypto'
-import type { PartyQueueEntry } from '../../shared/media-hub/types'
 import { idOfRawPub } from './roomIdentity'
 
 export interface PartyLanEndpoint {
@@ -70,12 +69,6 @@ export interface ShareCodePayloadV5 {
 
 export type ShareCodePayload =
   ShareCodePayloadV1 | ShareCodePayloadV2 | ShareCodePayloadV4 | ShareCodePayloadV5
-
-export type PartyQueueEvent =
-  | { type: 'suggest'; queueId: string; item: PartyQueueEntry['item']; suggestedBy?: string }
-  | { type: 'remove'; queueId: string }
-  | { type: 'vote'; queueId: string; voterId: string; direction: number }
-  | { type: 'queue-sync'; queue: PartyQueueEntry[] }
 
 function isValidEndpoint(endpoint: unknown): endpoint is PartyLanEndpoint {
   const e = endpoint as { ip?: unknown; port?: unknown } | null | undefined
@@ -502,47 +495,4 @@ export function createMemberId(
   randomBytes: typeof crypto.randomBytes = crypto.randomBytes
 ): string {
   return (randomBytes(8) as Buffer).toString('hex')
-}
-
-function queueScore(entry: PartyQueueEntry): number {
-  return Object.values(entry?.votes || {}).reduce((sum: number, v) => sum + v, 0)
-}
-
-function sortQueue(list: PartyQueueEntry[]): PartyQueueEntry[] {
-  return list
-    .map((entry, index) => ({ entry, index }))
-    .sort((a, b) => queueScore(b.entry) - queueScore(a.entry) || a.index - b.index)
-    .map((x) => x.entry)
-}
-
-export function applyQueueEvent(
-  queue: PartyQueueEntry[] | unknown,
-  event: PartyQueueEvent
-): PartyQueueEntry[] {
-  const list: PartyQueueEntry[] = Array.isArray(queue) ? (queue as PartyQueueEntry[]) : []
-  if (event?.type === 'suggest') {
-    if (!event.item || !event.item.id) return list
-    if (list.some((x) => String(x.item?.id) === String(event.item.id))) return list
-    return [
-      ...list,
-      { queueId: event.queueId, item: event.item, suggestedBy: event.suggestedBy || '', votes: {} }
-    ]
-  }
-  if (event?.type === 'remove') return list.filter((x) => x.queueId !== event.queueId)
-  if (event?.type === 'vote') {
-    const direction = Number(event.direction)
-    const voterId = String(event.voterId || '')
-    if ((direction !== 1 && direction !== -1) || !voterId) return list
-    return sortQueue(
-      list.map((entry) => {
-        if (entry.queueId !== event.queueId) return entry
-        const votes: Record<string, 1 | -1> = { ...(entry.votes || {}) }
-        if (votes[voterId] === direction) delete votes[voterId]
-        else votes[voterId] = direction as 1 | -1
-        return { ...entry, votes }
-      })
-    )
-  }
-  if (event?.type === 'queue-sync') return Array.isArray(event.queue) ? event.queue : list
-  return list
 }

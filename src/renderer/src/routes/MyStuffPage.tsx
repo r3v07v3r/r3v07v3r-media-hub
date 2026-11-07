@@ -22,7 +22,7 @@ import type { MediaItem } from '@renderer/types'
 import type { CustomListItem, PlayRecord, ViewingStats } from '@shared/media-hub/types'
 import styles from './MyStuff.module.css'
 import { MediaGrid } from '@renderer/components/category/MediaGrid'
-import type { PlannedSyncReport, RemoteList } from '@shared/media-hub/types'
+import type { RemoteList } from '@shared/media-hub/types'
 import { PlannedFilters } from '@renderer/components/mystuff/PlannedFilters'
 import { UpcomingPlanned } from '@renderer/components/mystuff/UpcomingPlanned'
 import {
@@ -31,16 +31,17 @@ import {
   type PlannedFilterState
 } from '@renderer/components/mystuff/plannedFilterRules'
 
-type TabId = 'planned' | 'progress' | 'watched' | 'list' | 'rated' | 'history' | 'stats' | 'dropped'
+type TabId = 'planned' | 'watched' | 'list' | 'rated' | 'history' | 'stats' | 'dropped'
 
 // Planned first and on its own: it is a STATUS (the same one Simkl and
 // Trakt call plan to watch), not a list somebody built, and it used to be
-// a chip inside Lists beside the named ones — with its own sync button,
-// upcoming banner and filters crammed into a tab about something else.
+// a chip inside Lists beside the named ones, with its upcoming banner and
+// filters crammed into a tab about something else.
 // Lists holds the named lists, here and on the services.
+// No In progress tab: Home's Continue watching panel and each library
+// page's shelf already show that same row.
 const TABS: { id: TabId; label: string }[] = [
   { id: 'planned', label: 'Planned' },
-  { id: 'progress', label: 'In progress' },
   { id: 'watched', label: 'Watched' },
   { id: 'list', label: 'Lists' },
   { id: 'rated', label: 'Rated' },
@@ -272,18 +273,6 @@ function StatsView() {
  * several. The custom lists beside it are arbitrary and belong to nobody but
  * the person who made them.
  */
-/** How long ago the lists were last pulled. Coarse on purpose — the
- *  question is whether this is current, not the exact minute. */
-function syncWhen(at: number): string {
-  const minutes = Math.max(0, Math.round((Date.now() - at) / 60000))
-  if (minutes < 1) return 'just now'
-  if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} ago`
-  const hours = Math.round(minutes / 60)
-  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`
-  const days = Math.round(hours / 24)
-  return `${days} day${days === 1 ? '' : 's'} ago`
-}
-
 function ListsView({
   watchlist,
   mode
@@ -296,35 +285,9 @@ function ListsView({
     useAppState()
   const indexRevision = `${catalogKindStates.movie}:${catalogKindStates.series}:${catalogKindStates.anime}`
   const [filters, setFilters] = useState<PlannedFilterState>(EMPTY_PLANNED_FILTERS)
-  const [report, setReport] = useState<PlannedSyncReport | null>(null)
-  const [syncing, setSyncing] = useState(false)
 
-  // The same button and the same figure as the Settings panel, because
-  // this is where somebody is actually looking at the list and noticing
-  // it is out of date. Making them go to Settings to refresh what is on
-  // screen is the sort of errand a settings page should not be for.
-  useEffect(() => {
-    const api = window.api?.mediaHub?.tracking
-    if (!api?.plannedReport) return
-    void api
-      .plannedReport()
-      .then(setReport)
-      .catch(() => {
-        // No report yet is an ordinary state, not an error to announce.
-      })
-  }, [])
-
-  const runSync = (): void => {
-    const api = window.api?.mediaHub?.tracking
-    if (!api?.syncPlanned) return
-    setSyncing(true)
-    void api
-      .syncPlanned()
-      .then(setReport)
-      .catch(() => {})
-      .finally(() => setSyncing(false))
-  }
-
+  // No sync button here: Sync now on the Watchlists panel runs the same pull and
+  // shows when it last ran and what each service reported.
   const filtered = useMemo(
     () => applyPlannedFilters(watchlist, filters, plannedSources),
     [watchlist, filters, plannedSources]
@@ -553,29 +516,6 @@ function ListsView({
         </>
       ) : mode === 'planned' ? (
         <>
-          {/* Where the list stands and how to refresh it, above the list
-              itself. The time matters as much as the button: "planned"
-              pulled from three services is only as true as its last
-              pull, and a list with no timestamp invites the assumption
-              that it is live. */}
-          <div className={styles.syncRow}>
-            <button
-              type="button"
-              className={styles.syncButton}
-              onClick={runSync}
-              disabled={syncing}
-            >
-              <Icon name="refresh" size={13} />
-              {syncing ? 'Syncing…' : 'Sync lists'}
-            </button>
-            <span className={styles.syncMeta}>
-              {report ? `Last refreshed ${syncWhen(report.at)}` : 'Not synced yet'}
-              {report?.services.some((service) => service.error)
-                ? ' · a service reported a problem, see Settings'
-                : ''}
-            </span>
-          </div>
-
           {/* Above the filters: what is on the list but not out yet.
               It answers a different question from the rest of the
               page — "what am I waiting for" rather than "what can I
@@ -718,7 +658,6 @@ function ListsView({
 export default function MyStuffPage() {
   const {
     myList,
-    continueWatching,
     dislikedIds,
     ratings,
     mediaHubSettings,
@@ -761,14 +700,6 @@ export default function MyStuffPage() {
     [listRows, hideFilters]
   )
 
-  // Straight off the Continue Watching row rather than re-derived from the
-  // catalog: that row is already the authority on what is part-watched, and
-  // it carries titles the browse catalog may not currently hold.
-  const progressItems = useMemo(
-    () => continueWatching.map((entry) => entry.media),
-    [continueWatching]
-  )
-
   // The watched/completed flags are baked in at adaptation (adapters.ts);
   // the id set decides WHAT to fetch, the adapter decides what it means.
   const { items: watchedRows } = useCatalogByIds(watchedIds, adaptCatalogItems, indexRevision)
@@ -809,14 +740,6 @@ export default function MyStuffPage() {
 
       {tab === 'planned' && <ListsView watchlist={listItems} mode="planned" />}
       {tab === 'list' && <ListsView watchlist={listItems} mode="lists" />}
-
-      {tab === 'progress' && (
-        <MediaGrid
-          items={progressItems}
-          emptyTitle="Nothing started"
-          emptyMessage="Anything you leave part-way through waits here."
-        />
-      )}
 
       {tab === 'watched' && (
         <MediaGrid

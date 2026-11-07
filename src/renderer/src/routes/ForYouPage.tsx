@@ -2,12 +2,13 @@
 //
 // Home shows one row of suggestions and cannot scroll (see
 // HomeDashboard.module.css: the composition is a fixed grid). Everything
-// the ranking had to say beyond that row — the rest of the served list,
-// and the same list shelved by the evidence behind it ("Because you
-// watched Dune", "With Zendaya", "More Sci-Fi") — is here, the way a
+// the ranking had to say beyond that row, the list shelved by the
+// evidence behind it ("Because you watched Dune", "With Zendaya", "More
+// Sci-Fi"), is here, the way a
 // streaming service's front page is a stack of shelves rather than one
 // row. The shelves come from main (see groupRecommendationRails in
-// catalog-logic.ts) so the page and the row are the same ranking.
+// catalog-logic.ts) so the page and the row are the same ranking. The
+// unfiltered list itself is not repeated here: it is Home's row.
 
 import { useAppState } from '@renderer/context/AppStateContext'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
@@ -29,7 +30,8 @@ export default function ForYouPage() {
     <div className={`${page.wrap} ${styles.page}`}>
       <h1 className={page.heading}>For You</h1>
       <p className={styles.description}>
-        Everything this app would suggest, shelved by why. The row on Home is the top of this list.
+        Everything this app would suggest, shelved by why. The top picks, in order, are the row on
+        Home.
       </p>
 
       {empty && !homeFeedLoading ? (
@@ -49,26 +51,6 @@ export default function ForYouPage() {
         </p>
       ) : (
         <div className={styles.rails}>
-          {picks.length > 0 && (
-            <section className={`${rail.section} ${styles.rail}`} aria-label="Recommended for you">
-              <h2 className={rail.heading}>
-                <Icon name="sparkle" />
-                Recommended For You
-              </h2>
-              <div className={rail.scrollerWrap}>
-                <ul className={`${rail.scroller} thin-scroll`} data-rail-id="for-you:all">
-                  {picks.map((rec) => (
-                    <MediaCard
-                      key={rec.media.id}
-                      media={rec.media}
-                      reason={rec.reasons[0]}
-                      showKind
-                    />
-                  ))}
-                </ul>
-              </div>
-            </section>
-          )}
           {recommendationRails.map((shelf) => (
             <section
               key={shelf.id}
@@ -89,12 +71,12 @@ export default function ForYouPage() {
             </section>
           ))}
           {/* Reasons come from the background rebuild's credits pass, so a
-              fresh install has the row before it has the shelves. Say so
-              rather than leave a page that is one row long unexplained. */}
+              fresh install has Home's row before it has the shelves. Say so
+              rather than leave an empty page unexplained. */}
           {recommendationRails.length === 0 && picks.length > 0 && (
             <p className={styles.note}>
-              Shelves by reason appear once this app has learned what you keep coming back to —
-              usually within a few minutes of watching.
+              Shelves by reason appear once this app has learned what you keep coming back to,
+              usually within a few minutes of watching. Until then, the top picks are on Home.
             </p>
           )}
         </div>

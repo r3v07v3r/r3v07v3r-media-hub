@@ -61,7 +61,9 @@ export interface JobStore {
   /** Adds or refreshes a job. An existing ready/fetching entry for the same
    *  content is left alone — queueing is idempotent from the feeder's view.
    *  A queued one keeps its owner unless that owner cannot fetch it and the
-   *  new requester can (see the ownership rule inside). */
+   *  new requester can (see the ownership rule inside). A queued/fetching
+   *  job for the same file under another contentKey (sameFile) is returned
+   *  instead of starting a second download of it. */
   enqueue(
     job: Omit<JobRecord, 'state' | 'queuedAt' | 'attempts'>,
     options?: EnqueueOptions
@@ -73,6 +75,49 @@ export interface JobStore {
   /** Drops ready/expired records that no longer need remembering. */
   prune(now?: number): void
   load(): Promise<void>
+}
+
+/** The season:episode tail of a contentKey, or '' for a film key. */
+function episodeTail(contentKey: string): string {
+  const parts = contentKey.split(':')
+  if (parts.length < 3) return ''
+  const season = parts.at(-2) ?? ''
+  const episode = parts.at(-1) ?? ''
+  return /^\d+$/.test(season) && /^\d+$/.test(episode) ? `${season}:${episode}` : ''
+}
+
+/**
+ * Whether two jobs would download the same file. The same infoHash is not
+ * enough on its own: a season pack is one torrent holding many episodes,
+ * each a job of its own. So the file index has to match when either side
+ * names one, and with no index on either side the episode named by the key
+ * has to match (two film keys match, a film and an episode do not).
+ */
+export function sameFile(
+  a: Pick<JobRecord, 'infoHash' | 'fileIdx' | 'contentKey'>,
+  b: Pick<JobRecord, 'infoHash' | 'fileIdx' | 'contentKey'>
+): boolean {
+  if (a.infoHash !== b.infoHash) return false
+  if (a.fileIdx !== undefined || b.fileIdx !== undefined) return a.fileIdx === b.fileIdx
+  return episodeTail(a.contentKey) === episodeTail(b.contentKey)
+}
+
+/**
+ * Whether a stored item is the file a request asks for. Stricter about the
+ * index than sameFile only where it has to be: both sides naming an index
+ * must agree, and otherwise (an item written before the index was
+ * recorded, or a request without one) the episode named by the keys
+ * decides, so one episode of a season pack is never answered with another.
+ */
+export function heldIsSameFile(
+  held: Pick<JobRecord, 'infoHash' | 'fileIdx' | 'contentKey'>,
+  asked: Pick<JobRecord, 'infoHash' | 'fileIdx' | 'contentKey'>
+): boolean {
+  if (held.infoHash !== asked.infoHash) return false
+  if (held.fileIdx !== undefined && asked.fileIdx !== undefined) {
+    return held.fileIdx === asked.fileIdx
+  }
+  return episodeTail(held.contentKey) === episodeTail(asked.contentKey)
 }
 
 export function createJobStore(dataDir: string): JobStore {
@@ -164,6 +209,44 @@ export function createJobStore(dataDir: string): JobStore {
           return existing
         }
         jobs = jobs.filter((job) => job !== existing)
+      }
+      // THE SAME FILE UNDER ANOTHER NAME joins the download already under
+      // way. Storage is keyed by infoHash, so two jobs for one release (the
+      // same film asked for as tt and as kitsu, say) would both fetch into
+      // the same folder, and the second would rewrite meta.json and drop
+      // the first owner's entitlement. The existing job keeps its owner,
+      // exactly as a second requester for the same contentKey does above.
+      const sameRelease = jobs.find(
+        (job) =>
+          job.contentKey !== input.contentKey &&
+          (job.state === 'queued' || job.state === 'fetching') &&
+          sameFile(job, input)
+      )
+      if (sameRelease) {
+        // The same healing as above: a queued job whose owner cannot fetch
+        // it (their key was removed) goes to a joiner who can, or it would
+        // park forever with the joiner's request inside it.
+        const adopter = input.ownerDeviceId
+        if (
+          sameRelease.state === 'queued' &&
+          adopter &&
+          adopter !== sameRelease.ownerDeviceId &&
+          options?.canFetch &&
+          !options.canFetch(sameRelease.ownerDeviceId ?? '') &&
+          options.canFetch(adopter)
+        ) {
+          sameRelease.ownerDeviceId = adopter
+          schedulePersist()
+        }
+        if (
+          sameRelease.state === 'queued' &&
+          input.reason === 'watching' &&
+          sameRelease.reason !== 'watching'
+        ) {
+          sameRelease.reason = 'watching'
+          schedulePersist()
+        }
+        return sameRelease
       }
       const record: JobRecord = {
         ...input,

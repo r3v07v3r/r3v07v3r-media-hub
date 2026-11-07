@@ -33,8 +33,10 @@ import {
   getLanCacheConnection,
   getTorBoxToken,
   isLanCacheAutoJoinOn,
+  isLanCacheKeySyncPending,
   setLanCacheAutoJoin,
-  setLanCacheConnection
+  setLanCacheConnection,
+  setLanCacheKeySyncPending
 } from './settingsStore'
 import { findLanCaches, type DiscoveredLanCache } from './lanCacheDiscovery'
 
@@ -57,8 +59,22 @@ const UPDATE_NOW_TIMEOUT_MS = 3 * 60 * 1000
  *  only after the lookup had queued behind them. */
 export const LAN_LOOKUP_TIMEOUT_MS = 3_000
 
-function request<T>(pathname: string, init: RequestInit = {}, timeoutMs?: number): Promise<T> {
-  const connection = getLanCacheConnection()
+type LanCacheConnection = NonNullable<ReturnType<typeof getLanCacheConnection>>
+
+/** Whether two stored connections are the same server and the same pairing. */
+function sameConnection(a: LanCacheConnection, b: LanCacheConnection | undefined): boolean {
+  return Boolean(b && a.token === b.token && a.url === b.url)
+}
+
+/** A request to the paired cache server, or to `at` when a call that spans
+ *  several awaits must keep talking to the server it started with. */
+function request<T>(
+  pathname: string,
+  init: RequestInit = {},
+  timeoutMs?: number,
+  at?: LanCacheConnection
+): Promise<T> {
+  const connection = at ?? getLanCacheConnection()
   if (!connection) throw new Error('No cache server is paired.')
   return fetchJson<T>(
     `${connection.url}${pathname}`,
@@ -162,6 +178,11 @@ export function lanCacheStreamUrl(candidate: StreamCandidate): string | null {
   return `${connection.url}/stream/${candidate.infoHash}?token=${encodeURIComponent(connection.token)}`
 }
 
+/** The connection token a key-required refusal was last raised for, so the
+ *  person is told once per run rather than once per title the feeder asks
+ *  about. Cleared when a key is pushed. */
+let keyRequiredRaisedFor: string | null = null
+
 export async function queueLanCacheJob(payload: LanCacheJobPayload): Promise<boolean> {
   try {
     await request('/api/jobs', {
@@ -171,9 +192,111 @@ export async function queueLanCacheJob(payload: LanCacheJobPayload): Promise<boo
     })
     return true
   } catch (error) {
+    // 403 is the one refusal POST /api/jobs makes for who is asking: this
+    // device has no TorBox key saved on the cache, so it cannot fetch for
+    // us. The caller falls back to its other tiers as for any refusal.
+    if ((error as HttpError).status === 403) {
+      const connection = getLanCacheConnection()
+      if (connection && keyRequiredRaisedFor !== connection.token) {
+        keyRequiredRaisedFor = connection.token
+        logError('lancache:queue', error)
+        emit({ kind: 'key-required', serverName: connection.name || 'The cache server' })
+      }
+      return false
+    }
+    // 409 other-file-held: the server keeps one file per torrent and holds
+    // another episode of this pack. Not a fault, and it would repeat on
+    // every feeder pass, so it is not logged.
+    if ((error as HttpError).status === 409) return false
     logError('lancache:queue', error)
     return false
   }
+}
+
+/**
+ * Keeps this person's TorBox key on the cache in step with the app: saved
+ * on join and whenever the key changes, removed when it is removed. The
+ * daemon fetches each device's requests with that device's own key and
+ * never anyone else's, so this is what lets the cache fetch for us.
+ *
+ * Sent only when the person agreed to it (the consent on the connection,
+ * on by default, and always on for a join the app made by itself), or when
+ * the cache already holds a key from this device, which is the same
+ * agreement given before the consent was remembered. A removal is always
+ * sent. Best-effort: a cache that is away gets the key on the next join.
+ * Returns whether the cache now holds a key for this device.
+ *
+ * Syncs run one at a time, in the order they were asked for, and each
+ * reads the key again just before sending it: the TorBox handlers start
+ * them without waiting, so a removal that came in while an older sync was
+ * still asking the cache for its status must win, not be undone by that
+ * older sync sending the key it read first. A sync is bound to the
+ * connection it started with: one that is left, or replaced by another
+ * cache, while the sync waits sends nothing to the newcomer.
+ */
+export function syncTorBoxKeyToLanCache(): Promise<boolean> {
+  const run = keySyncChain.then(syncTorBoxKeyNow, syncTorBoxKeyNow)
+  keySyncChain = run.catch(() => false)
+  return run
+}
+
+let keySyncChain: Promise<boolean> = Promise.resolve(false)
+
+async function syncTorBoxKeyNow(): Promise<boolean> {
+  const connection = getLanCacheConnection()
+  if (!connection || connection.pending) return false
+  try {
+    if (getTorBoxToken() && !connection.shareTorbox) {
+      const status = await request<LanCacheStatusResponse>('/api/status', {}, undefined, connection)
+      if (!sameConnection(connection, getLanCacheConnection())) return false
+      if (!status.torboxLinked) {
+        setLanCacheKeySyncPending(false)
+        return false
+      }
+    }
+    // Read again after the wait above: what the app holds now is what the
+    // cache must hold, a removal made meanwhile included.
+    const torboxToken = getTorBoxToken()
+    const answer = await request<{ torboxLinked?: boolean }>(
+      '/api/credentials',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ torboxToken })
+      },
+      undefined,
+      connection
+    )
+    if (!sameConnection(connection, getLanCacheConnection())) return answer.torboxLinked === true
+    setLanCacheKeySyncPending(false)
+    if (answer.torboxLinked) keyRequiredRaisedFor = null
+    return answer.torboxLinked === true
+  } catch (error) {
+    // The server was away (or refused). Remembered, so the change, a
+    // removal included, is sent the next time the server answers
+    // (retryLanCacheKeySync) rather than lost with this one attempt.
+    if (sameConnection(connection, getLanCacheConnection())) setLanCacheKeySyncPending(true)
+    logError('lancache:credentials', error)
+    return false
+  }
+}
+
+/** Set once this run has synced the key at least once, so the launch pass
+ *  sends it again (it is idempotent) even with nothing marked pending. */
+let keySyncedThisRun = false
+
+/**
+ * Sends a key change that has not reached the cache yet, or, once per run,
+ * the key itself when the person agreed to keep it there. Called whenever
+ * the stored connection has just been found answering.
+ */
+async function retryLanCacheKeySync(): Promise<void> {
+  const connection = getLanCacheConnection()
+  if (!connection || connection.pending) return
+  const due = isLanCacheKeySyncPending() || (!keySyncedThisRun && connection.shareTorbox === true)
+  if (!due) return
+  keySyncedThisRun = true
+  await syncTorBoxKeyToLanCache()
 }
 
 /**
@@ -266,33 +389,26 @@ export async function promoteIfApproved(): Promise<'none' | 'pending' | 'approve
   )
   if (answer.status !== 'approved') return 'pending'
 
+  // The consent made when this device asked stays on the connection, so a
+  // key saved or changed later is kept in step (syncTorBoxKeyToLanCache).
   setLanCacheConnection({
     url: connection.url,
     name: answer.serverName ?? connection.name,
-    token: connection.token
+    token: connection.token,
+    ...(connection.shareTorbox ? { shareTorbox: true } : {})
   })
   // Approval is what actually grants the player access to this LAN host, so
   // the trusted-host list is refreshed HERE — the moment that now carries
   // the authority pairing used to.
   refreshTrustedHostsRef?.()
+
+  // And the key, which could not be sent while pending because a pending
+  // token authorises nothing. Sent before the toast so the toast can say
+  // whether it is saved.
+  const keySaved = await syncTorBoxKeyToLanCache()
   // Said out loud: the request may have been made by the launch-time search
   // hours ago, with no panel open to see the answer arrive.
-  emit({ kind: 'approved', serverName: answer.serverName ?? connection.name })
-
-  // And the opt-in the person made when they asked, which could not be
-  // honoured then because a pending token authorises nothing. Sent once;
-  // the flag is already gone from the connection written above, so a later
-  // call cannot re-send it.
-  if (connection.shareTorbox) {
-    const torboxToken = getTorBoxToken()
-    if (torboxToken) {
-      await request('/api/credentials', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ torboxToken })
-      }).catch((error) => logError('lancache:credentials', error))
-    }
-  }
+  emit({ kind: 'approved', serverName: answer.serverName ?? connection.name, keySaved })
   return 'approved'
 }
 
@@ -335,6 +451,8 @@ export interface JoinResult {
   message: string
   pending?: boolean
   serverName?: string
+  /** Whether the cache now holds this person's TorBox key. */
+  keySaved?: boolean
 }
 
 /**
@@ -368,9 +486,11 @@ export async function cancelLanCacheRequest(): Promise<boolean> {
 export async function askToJoin(
   rawUrl: string,
   options: {
-    /** The explicit opt-in: copy the TorBox token to the daemon so it can
-     *  fetch overnight with no app running. Never implied, so the launch
-     *  search never sets it. */
+    /** The consent to keep this person's TorBox key on the cache, which
+     *  fetches their requests with it (and only theirs). The Join panel's
+     *  checkbox, on by default; the launch search always sets it, because
+     *  the cache cannot fetch for a device without its key. Remembered on
+     *  the connection so a changed key is kept in step. */
     shareTorboxToken?: boolean
     /** For the launch search: whether the join is still wanted. Asked
      *  before each request and again once the server has answered, since a
@@ -437,11 +557,11 @@ export async function askToJoin(
       name: serverName,
       token: paired.token,
       ...(pending ? { pending: true } : {}),
-      // The opt-in is KEPT rather than acted on while pending: a pending
+      // The consent is KEPT, and while pending not acted on: a pending
       // token authorises nothing, so posting the credential now would
-      // simply be refused. promoteIfApproved sends it the moment
-      // approval lands.
-      ...(pending && options.shareTorboxToken ? { shareTorbox: true } : {})
+      // simply be refused. promoteIfApproved sends it the moment approval
+      // lands, and a later key change is sent because it is remembered.
+      ...(options.shareTorboxToken ? { shareTorbox: true } : {})
     })
     if (pending) {
       // Nothing is granted yet — not the trusted-host entry, and not the
@@ -459,17 +579,13 @@ export async function askToJoin(
     // Pairing is what grants the player access to this LAN host.
     refreshTrustedHostsRef?.()
 
-    if (options.shareTorboxToken) {
-      const torboxToken = getTorBoxToken()
-      if (torboxToken) {
-        await request('/api/credentials', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ torboxToken })
-        }).catch((error) => logError('lancache:credentials', error))
-      }
+    const keySaved = options.shareTorboxToken ? await syncTorBoxKeyToLanCache() : false
+    return {
+      ok: true,
+      serverName,
+      keySaved,
+      message: `Paired with ${serverName ?? 'the cache server'}.`
     }
-    return { ok: true, serverName, message: `Paired with ${serverName ?? 'the cache server'}.` }
   } catch (error) {
     return { ok: false, message: (error as Error).message }
   }
@@ -558,7 +674,11 @@ export async function keepLanCacheAddressCurrent(
 ): Promise<AddressCheck> {
   const connection = getLanCacheConnection()
   if (!connection) return 'none'
-  if ((await checkToken(connection.url, connection.token)) === 'known') return 'current'
+  if ((await checkToken(connection.url, connection.token)) === 'known') {
+    // Answering again: a key change made while it was away goes now.
+    await retryLanCacheKeySync()
+    return 'current'
+  }
 
   const found = await discover()
   for (const server of found) {
@@ -572,6 +692,7 @@ export async function keepLanCacheAddressCurrent(
     setLanCacheConnection({ ...latest, url: server.url })
     refreshTrustedHostsRef?.()
     emit({ kind: 'moved', serverName: latest.name || server.name, url: server.url })
+    await retryLanCacheKeySync()
     return 'moved'
   }
   return 'lost'
@@ -589,12 +710,19 @@ export async function runLanCacheAutoConnect(
   const found = await discover()
   for (const server of found) {
     const result = await askToJoin(server.url, {
+      // The cache fetches each person's requests with their own key, so a
+      // join it cannot fetch for is no use; the joining toast says so.
+      shareTorboxToken: true,
       // Re-asked after the search: Leave may have been pressed meanwhile.
       stillWanted: () => !getLanCacheConnection() && isLanCacheAutoJoinOn()
     })
     if (!result.ok) continue
     const serverName = result.serverName || server.name
-    emit({ kind: result.pending ? 'asked' : 'joined', serverName })
+    emit(
+      result.pending
+        ? { kind: 'asked', serverName }
+        : { kind: 'joined', serverName, keySaved: result.keySaved === true }
+    )
     return result.pending ? 'asked' : 'joined'
   }
   return 'nothing-found'
@@ -783,6 +911,8 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
     if (!isLanCacheConnected()) return { connected: false as const }
     try {
       const status = await request<LanCacheStatusResponse>('/api/status')
+      // It answers, so a key change that missed it earlier can go now.
+      if (isLanCacheKeySyncPending()) void syncTorBoxKeyToLanCache()
       return { connected: true as const, status }
     } catch (error) {
       return { connected: true as const, error: (error as Error).message }
@@ -823,10 +953,56 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
       await request('/api/admin/claim', { method: 'POST' })
       // Administrator now: start looking for join requests at once.
       notAdmin = null
+      // A claim by the device that already administers the server does not
+      // spend a --claim-admin reopening, so the window would stay open and
+      // keep letting every device in. Pressing the button here means "this
+      // is mine", so it is closed now. Harmless when nothing is reopened.
+      // Only here, never from the join-request poll: that would shut a
+      // window the owner opened to hand the role to another device.
+      await request('/api/admin/close-claim', { method: 'POST' }).catch((error) =>
+        logError('lancache:close-claim', error)
+      )
       return { ok: true, message: 'You administer this cache server.' }
     } catch (error) {
       return { ok: false, message: (error as Error).message }
     }
+  })
+
+  handle<void, { ok: boolean; message: string }>(
+    MEDIA_HUB_CHANNELS.lanCacheCloseClaim,
+    async () => {
+      if (!isLanCacheConnected()) return { ok: false, message: 'No cache server is paired.' }
+      try {
+        await request('/api/admin/close-claim', { method: 'POST' })
+        return {
+          ok: true,
+          message: 'Claiming is closed.'
+        }
+      } catch (error) {
+        return { ok: false, message: (error as Error).message }
+      }
+    }
+  )
+
+  handle<void, { ok: boolean; message: string }>(MEDIA_HUB_CHANNELS.lanCacheShareKey, async () => {
+    const connection = getLanCacheConnection()
+    if (!connection || connection.pending) {
+      return { ok: false, message: 'No cache server is paired.' }
+    }
+    if (!getTorBoxToken()) {
+      return {
+        ok: false,
+        message: 'Add your TorBox key under Control centre → Media servers first.'
+      }
+    }
+    setLanCacheConnection({ ...connection, shareTorbox: true })
+    const saved = await syncTorBoxKeyToLanCache()
+    return saved
+      ? {
+          ok: true,
+          message: 'Your TorBox key is saved on the cache and used only for your own requests.'
+        }
+      : { ok: false, message: 'The cache server did not take the key. Try again shortly.' }
   })
 
   handle(MEDIA_HUB_CHANNELS.lanCacheDevices, async () => {
