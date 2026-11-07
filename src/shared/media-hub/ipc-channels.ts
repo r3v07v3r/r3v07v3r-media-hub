@@ -246,6 +246,8 @@ export const MEDIA_HUB_CHANNELS = {
   streamResolve: 'mediahub:stream:resolve',
   playStream: 'mediahub:play:stream',
   streamRejectCurrent: 'mediahub:stream:reject-current',
+  streamRejectedCount: 'mediahub:stream:rejected-count',
+  streamRejectedForget: 'mediahub:stream:rejected-forget',
   playbackStop: 'mediahub:playback:stop',
   playbackLanguageSettle: 'mediahub:playback:language-settle',
   playbackPrepareProgress: 'mediahub:playback:prepare-progress', // push event
