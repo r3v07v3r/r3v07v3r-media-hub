@@ -854,7 +854,13 @@ export function createApi(transport: ApiTransport) {
          *  episode again, and stop it. `ok` is false when nothing that can be
          *  identified is playing. */
         rejectCurrent: (): Promise<{ ok: boolean }> =>
-          transport.invoke(MEDIA_HUB_CHANNELS.streamRejectCurrent)
+          transport.invoke(MEDIA_HUB_CHANNELS.streamRejectCurrent),
+        /** How many episodes have a copy marked wrong, and forgetting every
+         *  such mark — the Caching section's way back from a misclick. */
+        rejectedCount: (): Promise<{ episodes: number }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.streamRejectedCount),
+        forgetRejected: (): Promise<{ ok: true; episodes: number }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.streamRejectedForget)
       },
 
       /** What the central work manager is doing — see taskScheduler.ts. */

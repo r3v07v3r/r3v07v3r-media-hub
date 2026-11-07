@@ -923,6 +923,12 @@ export interface MediaHubDatabase {
    *  stale fallback — this is for a payload that has become WRONG rather
    *  than merely old, and must not be served again. */
   deleteCache(key: string): void
+  /** The live rows whose key starts with `prefix`, counted; and every row
+   *  so keyed removed, expired or not, with the number removed. For a
+   *  family of marks the person takes back as a whole — the wrong-copy
+   *  rejections (torbox.ts), which the Caching section forgets at once. */
+  countCacheByPrefix(prefix: string): number
+  deleteCacheByPrefix(prefix: string): number
   /**
    * Reclaims cache rows nothing has refreshed for a month past their expiry,
    * and reports how many went. See the implementation for why the grace
@@ -1145,6 +1151,8 @@ interface PreparedQueries {
   putCache: StatementSync
   getCache: StatementSync
   deleteCache: StatementSync
+  countCacheByPrefix: StatementSync
+  deleteCacheByPrefix: StatementSync
   indexPut: StatementSync
   indexClearGenres: StatementSync
   indexPutGenre: StatementSync
@@ -1171,6 +1179,13 @@ interface PreparedQueries {
  * here so this module stays free of the settings/profile machinery, and so a
  * test can open a database without either.
  */
+/** A LIKE pattern matching keys that start with `prefix` literally: the
+ *  pattern characters a key may hold are escaped (the statements name a
+ *  ESCAPE '\\'), so a `_` in a prefix matches only itself. */
+function likePrefix(prefix: string): string {
+  return prefix.replace(/[\\%_]/g, (c) => `\\${c}`) + '%'
+}
+
 export function createDatabase(filename: string, defaultProfileId: string): MediaHubDatabase {
   const sql = new DatabaseSync(filename)
   sql.exec('PRAGMA journal_mode = WAL')
@@ -1687,6 +1702,12 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     ),
     getCache: sql.prepare('SELECT payload_json,expires_at FROM catalog_cache WHERE cache_key=?'),
     deleteCache: sql.prepare('DELETE FROM catalog_cache WHERE cache_key=?'),
+    countCacheByPrefix: sql.prepare(
+      "SELECT COUNT(*) AS n FROM catalog_cache WHERE cache_key LIKE ? ESCAPE '\\' AND expires_at > ?"
+    ),
+    deleteCacheByPrefix: sql.prepare(
+      "DELETE FROM catalog_cache WHERE cache_key LIKE ? ESCAPE '\\'"
+    ),
     // `first_seen` is absent from the DO UPDATE SET on purpose — it is the
     // one column a re-crawl must never touch.
     //
@@ -3047,6 +3068,24 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       } catch {
         // Best-effort, same convention as every other cache operation in
         // this file — a failed delete must not surface to callers.
+      }
+    },
+
+    countCacheByPrefix(prefix: string): number {
+      try {
+        const row = q.countCacheByPrefix.get(likePrefix(prefix), Date.now()) as
+          { n: number } | undefined
+        return Number(row?.n ?? 0)
+      } catch {
+        return 0
+      }
+    },
+
+    deleteCacheByPrefix(prefix: string): number {
+      try {
+        return Number(q.deleteCacheByPrefix.run(likePrefix(prefix)).changes)
+      } catch {
+        return 0
       }
     },
 

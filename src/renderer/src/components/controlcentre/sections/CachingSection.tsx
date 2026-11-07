@@ -101,6 +101,7 @@ export function CachingSection() {
    *  find out why a disk was full. */
   const [localItems, setLocalItems] = useState<StreamCacheEntry[]>([])
   const [localUsage, setLocalUsage] = useState<StreamCacheUsage | null>(null)
+  const [rejectedEpisodes, setRejectedEpisodes] = useState(0)
   /**
    * Separate from `busy` because this one is SLOW — the server checks its
    * release feed and stages a bundle before answering — and the button
@@ -142,12 +143,14 @@ export function CachingSection() {
   const refreshLocal = useCallback(async () => {
     const media = window.api?.mediaHub
     if (!media) return
-    const [entries, space] = await Promise.all([
+    const [entries, space, rejected] = await Promise.all([
       media.streamCache.list().catch(() => [] as StreamCacheEntry[]),
-      media.streamCache.usage().catch(() => null)
+      media.streamCache.usage().catch(() => null),
+      media.stream.rejectedCount().catch(() => ({ episodes: 0 }))
     ])
     setLocalItems(entries ?? [])
     setLocalUsage(space)
+    setRejectedEpisodes(rejected.episodes)
   }, [])
 
   // Independent of the cache server entirely: this device has a cache
@@ -164,6 +167,13 @@ export function CachingSection() {
     setLocalItems((prev) => prev.filter((entry) => entry.token !== token))
     window.api?.mediaHub?.streamCache.delete(token).catch(() => {
       // Best-effort, and the poll above re-syncs from disk either way.
+    })
+  }
+
+  const handleForgetRejected = (): void => {
+    setRejectedEpisodes(0)
+    window.api?.mediaHub?.stream.forgetRejected().catch(() => {
+      // Best-effort; the poll above puts the count back if nothing went.
     })
   }
 
@@ -503,6 +513,22 @@ export function CachingSection() {
               </li>
             ))}
           </ul>
+        )}
+        {/* Taking back "Wrong copy? Find another". The mark keeps that copy
+            away from that episode for a year — right for a recap filed under
+            an episode's name, wrong for a misclick. Offered only while there
+            is something to forget, and for every mark at once: they are per
+            episode and this page has no view of them one by one. */}
+        {rejectedEpisodes > 0 && (
+          <div className={styles.updateRow}>
+            <p className={styles.note}>
+              {rejectedEpisodes === 1 ? 'One episode has' : `${rejectedEpisodes} episodes have`} a
+              copy marked as the wrong one, which is not offered again for a year.
+            </p>
+            <button type="button" className={styles.ghostButton} onClick={handleForgetRejected}>
+              Forget wrong-copy marks
+            </button>
+          </div>
         )}
       </section>
 

@@ -483,8 +483,10 @@ function lastStreamKey(type: string, id: string): string {
  *  release: a season pack that put the wrong file under episode 1 may still
  *  be right for episode 2. Kept as long as anything else remembered about a
  *  copy, so a replay weeks later does not hand the same one back. */
+const REJECTED_COPY_PREFIX = 'rejected:v1:'
+
 function rejectedCopiesKey(type: string, id: string): string {
-  return `rejected:v1:${type}:${id}`
+  return `${REJECTED_COPY_PREFIX}${type}:${id}`
 }
 
 function rejectedCopies(type: string, id: string): Set<string> {
@@ -1027,6 +1029,19 @@ export function registerTorBoxIpc(): void {
     await stopPlayback(true)
     return { ok: true }
   })
+
+  // The way back from a misclick on "Wrong copy? Find another", which
+  // would otherwise keep a good copy away from its episode for a year. All
+  // marks at once: they are kept per episode, the Caching section has no
+  // view of them one by one, a wrong mark is rare, and forgetting a right
+  // one costs one more click on the same menu item.
+  handle<undefined, { episodes: number }>(MEDIA_HUB_CHANNELS.streamRejectedCount, async () => ({
+    episodes: getDatabase().countCacheByPrefix(REJECTED_COPY_PREFIX)
+  }))
+  handle<undefined, { ok: true; episodes: number }>(
+    MEDIA_HUB_CHANNELS.streamRejectedForget,
+    async () => ({ ok: true, episodes: getDatabase().deleteCacheByPrefix(REJECTED_COPY_PREFIX) })
+  )
 }
 
 /** How long a rejected copy stays rejected — long enough that it is never
