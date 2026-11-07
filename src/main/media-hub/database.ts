@@ -1180,8 +1180,8 @@ interface PreparedQueries {
  * test can open a database without either.
  */
 /** A LIKE pattern matching keys that start with `prefix` literally: the
- *  pattern characters a key may hold are escaped (the statements name a
- *  ESCAPE '\\'), so a `_` in a prefix matches only itself. */
+ *  pattern characters a key may hold are escaped (the statements declare
+ *  a backslash ESCAPE), so a `_` in a prefix matches only itself. */
 function likePrefix(prefix: string): string {
   return prefix.replace(/[\\%_]/g, (c) => `\\${c}`) + '%'
 }
