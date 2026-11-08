@@ -22,6 +22,10 @@ import {
   UIActivityState,
   HomeRail
 } from '@renderer/types'
+import {
+  DEFAULT_CONTROL_CENTRE_SECTION,
+  type ControlCentreSectionId
+} from '@renderer/components/controlcentre/sections'
 import { USER_PROFILES } from '@renderer/data/constants'
 import type {
   CatalogItem,
@@ -290,6 +294,20 @@ interface AppStateValue {
    *  only to deep-link into this. */
   controlCentreOpen: boolean
   setControlCentreOpen: Dispatch<SetStateAction<boolean>>
+  /** The rail entry the control centre shows. Kept here, not in the face,
+   *  so a control anywhere in the app can open the centre AT a section:
+   *  the "Set up Simkl" button under a control that needs Simkl
+   *  (components/layout/RequiresSetup.tsx). Survives closing, so coming
+   *  back lands where you were. */
+  controlCentreSection: ControlCentreSectionId
+  setControlCentreSection: Dispatch<SetStateAction<ControlCentreSectionId>>
+  /** Opens the centre at `section`, scrolled to the heading `anchor`
+   *  (an element id, see lib/setupPlaces.ts) once it is showing. */
+  openControlCentre: (section: ControlCentreSectionId, anchor?: string) => void
+  /** The anchor the face still has to scroll to, and its acknowledgement;
+   *  read by ControlCentreFace only. */
+  controlCentreAnchor: string | null
+  clearControlCentreAnchor: () => void
   resolveSyncDiscrepancy: (
     discrepancy: WatchStatusDiscrepancy,
     resolution: ReconcileResolution
@@ -1349,6 +1367,16 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [syncShows, setSyncShows] = useState<ShowSyncRow[]>([])
   const [syncReviewOpen, setSyncReviewOpen] = useState(false)
   const [controlCentreOpen, setControlCentreOpen] = useState(false)
+  const [controlCentreSection, setControlCentreSection] = useState<ControlCentreSectionId>(
+    DEFAULT_CONTROL_CENTRE_SECTION
+  )
+  const [controlCentreAnchor, setControlCentreAnchor] = useState<string | null>(null)
+  const openControlCentre = useCallback((section: ControlCentreSectionId, anchor?: string) => {
+    setControlCentreSection(section)
+    setControlCentreAnchor(anchor ?? null)
+    setControlCentreOpen(true)
+  }, [])
+  const clearControlCentreAnchor = useCallback(() => setControlCentreAnchor(null), [])
 
   // Discarded when the library underneath them changes — a profile switch, or
   // a restore. A discrepancy is a claim about ONE profile's history against
@@ -3368,6 +3396,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       controlCentreOpen,
       setSyncReviewOpen,
       setControlCentreOpen,
+      controlCentreSection,
+      setControlCentreSection,
+      openControlCentre,
+      controlCentreAnchor,
+      clearControlCentreAnchor,
       resolveSyncDiscrepancy,
       syncShows,
       decideSyncShow
@@ -3463,6 +3496,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       syncDiscrepancies,
       syncReviewOpen,
       controlCentreOpen,
+      controlCentreSection,
+      openControlCentre,
+      controlCentreAnchor,
+      clearControlCentreAnchor,
       resolveSyncDiscrepancy,
       syncShows,
       decideSyncShow

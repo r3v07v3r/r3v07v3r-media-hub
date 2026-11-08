@@ -18,7 +18,7 @@
 // The settings sections are HOSTED, not rewritten — they render exactly as
 // they do on the old page.
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import SettingsPage, { type SettingsCategory } from '@renderer/routes/SettingsPage'
 import styles from './ControlCentre.module.css'
@@ -29,12 +29,7 @@ import { UpdatesSection } from './sections/UpdatesSection'
 import { ControlCentreNav } from './ControlCentreNav'
 import { PanelVisibleContext } from './panelVisibility'
 import { MatrixRain } from './MatrixRain'
-import {
-  CONTROL_CENTRE_SECTIONS,
-  DEFAULT_CONTROL_CENTRE_SECTION,
-  SETTINGS_CATEGORY_FOR,
-  type ControlCentreSectionId
-} from './sections'
+import { CONTROL_CENTRE_SECTIONS, SETTINGS_CATEGORY_FOR } from './sections'
 
 /** Everything focusable, for the tab trap. Excludes anything explicitly
  *  removed from the tab order so a disabled control cannot swallow focus. */
@@ -42,18 +37,49 @@ const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
 export function ControlCentreFace() {
-  const { controlCentreOpen, setControlCentreOpen } = useAppState()
+  const {
+    controlCentreOpen,
+    setControlCentreOpen,
+    controlCentreSection: section,
+    setControlCentreSection: setSection,
+    controlCentreAnchor,
+    clearControlCentreAnchor
+  } = useAppState()
   const panelRef = useRef<HTMLDivElement | null>(null)
-  // Kept across opens on purpose. Coming back to the section you were last
-  // in is what a control centre does; resetting to the front page every
-  // time the cube turns would make a two-step task a four-step one.
-  const [section, setSection] = useState<ControlCentreSectionId>(DEFAULT_CONTROL_CENTRE_SECTION)
+  // The section lives in AppStateContext, kept across opens on purpose:
+  // coming back to the section you were last in is what a control centre
+  // does, and a "Set up Simkl" button elsewhere in the app opens the centre
+  // at its section (openControlCentre).
   /** What had focus before this face turned toward the viewer, so turning
    *  away can hand it back rather than dumping the caret at the top of the
    *  document. */
   const returnFocusRef = useRef<HTMLElement | null>(null)
 
   const close = useCallback(() => setControlCentreOpen(false), [setControlCentreOpen])
+
+  // Opened AT a heading: scroll it into view once its panel is the one
+  // showing, and put focus there so a screen reader lands on the service
+  // asked for rather than the panel. Two frames: the first lets the
+  // hidden attribute flip, the second lets layout settle before scrolling.
+  useEffect(() => {
+    if (!controlCentreOpen || !controlCentreAnchor) return
+    let second = 0
+    const first = window.requestAnimationFrame(() => {
+      second = window.requestAnimationFrame(() => {
+        const target = document.getElementById(controlCentreAnchor)
+        if (target) {
+          if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1')
+          target.scrollIntoView({ block: 'start', behavior: 'smooth' })
+          target.focus({ preventScroll: true })
+        }
+        clearControlCentreAnchor()
+      })
+    })
+    return () => {
+      window.cancelAnimationFrame(first)
+      window.cancelAnimationFrame(second)
+    }
+  }, [controlCentreOpen, controlCentreAnchor, section, clearControlCentreAnchor])
 
   useEffect(() => {
     if (!controlCentreOpen) return
