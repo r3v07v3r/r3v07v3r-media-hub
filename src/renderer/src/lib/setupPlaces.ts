@@ -8,7 +8,8 @@
 // section that moves in the control centre is corrected in one place.
 //
 // Anchors are the heading ids the settings sections already carry
-// (MediaHubSettingsSections.tsx: `settings-simkl` and so on). The control
+// (MediaHubSettingsSections.tsx: `settings-simkl` and so on; the subtitle
+// providers sit under Accounts, with the other keys). The control
 // centre scrolls the named heading into view once the section is showing.
 
 import type { ControlCentreSectionId } from '@renderer/components/controlcentre/sections'
@@ -48,10 +49,10 @@ export const SETUP_PLACES: Record<SetupService, SetupPlace> = {
   mal: { name: 'MyAnimeList', section: 'accounts', anchor: 'settings-mal' },
   tmdb: { name: 'a TMDB key', section: 'accounts', anchor: 'settings-tmdb' },
   omdb: { name: 'an OMDb key', section: 'accounts', anchor: 'settings-omdb' },
-  subdl: { name: 'SubDL', section: 'playback', anchor: 'settings-subdl' },
-  opensubtitles: { name: 'OpenSubtitles', section: 'playback', anchor: 'settings-opensubtitles' },
+  subdl: { name: 'SubDL', section: 'accounts', anchor: 'settings-subdl' },
+  opensubtitles: { name: 'OpenSubtitles', section: 'accounts', anchor: 'settings-opensubtitles' },
   /** Either subtitle provider; the button lands on the first of the two. */
-  subtitles: { name: 'a subtitle provider', section: 'playback', anchor: 'settings-subdl' },
+  subtitles: { name: 'a subtitle provider', section: 'accounts', anchor: 'settings-subdl' },
   ollama: { name: 'Ollama', section: 'ai', anchor: 'settings-ollama' },
   relay: { name: 'the party relay', section: 'community', anchor: 'settings-party-sync' },
   lanCache: { name: 'a cache server', section: 'caching' }
