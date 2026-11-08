@@ -99,3 +99,22 @@ html.video-under .nav-chrome {
   border-radius: 999px;
   background: rgb(0 0 0 / 55%);
 }
+
+/* The player that never reported a duration: the note sits where Loading…
+   was, readable over whatever is (or is not) under the page. */
+.player-screen__stalled {
+  align-self: center;
+  max-width: calc(100% - 2rem);
+  padding: 0.25rem 1rem;
+  border-radius: var(--radius-small, 12px);
+  background: rgb(0 0 0 / 70%);
+}
+
+.player-screen__stalled .status-note__action {
+  min-height: 44px;
+  padding: 0 1rem;
+  border: 1px solid rgb(255 255 255 / 25%);
+  border-radius: 999px;
+  color: #fff;
+  background: rgb(0 0 0 / 45%);
+}

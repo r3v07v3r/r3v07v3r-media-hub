@@ -15,6 +15,7 @@ import { releaseCountdown, type ReleaseCountdown } from '../lib/releaseCountdown
 import { timelineExtrasToPosterItems, type PosterItem } from '../lib/posterItem'
 import LoadingNote from '../components/LoadingNote'
 import PosterRow from '../components/PosterRow'
+import RequiresSetup from '../components/RequiresSetup'
 import Spinner from '../components/Spinner'
 import StatusNote from '../components/StatusNote'
 import './Title.css'
@@ -283,6 +284,19 @@ export default function Title() {
     return list.map((episode) => ({ episode, aired: hasAired(episode) }))
   }, [seasons, activeSeason])
 
+  // Which play sources are set up, read once. With neither TorBox nor a
+  // media server only a copy already held (on this device or a paired cache
+  // server) can play, so the page says what is missing before Play is
+  // pressed — and Play stays, for that held copy. Null until it answers, and
+  // on a failed read, which then shows nothing rather than a guess.
+  const sources = useAsync(() => {
+    const mediaHub = api()
+    if (!mediaHub) return Promise.reject(new Error('Not connected to a backend.'))
+    return mediaHub.settings.get()
+  }, [])
+  const noPlaybackSource =
+    sources.data !== null && !sources.data.torboxConnected && !sources.data.mediaServerConnected
+
   const [playStatus, setPlayStatus] = useState<PlayStatus>({ stage: 'idle' })
   const playRequestRef = useRef(0)
   // Leaving the title (or moving to another one) abandons a request still
@@ -302,7 +316,7 @@ export default function Title() {
       if (!mediaHub) {
         setPlayStatus({
           stage: 'error',
-          message: 'Playback is not available outside the desktop app.'
+          message: 'Not connected to a backend.'
         })
         return
       }
@@ -586,6 +600,13 @@ export default function Title() {
         )}
 
         <div className="title-screen__actions">
+          {noPlaybackSource && playStatus.stage !== 'error' && (
+            <RequiresSetup
+              what="Playing"
+              services={['TorBox', 'a media server']}
+              detail="Connect TorBox in Settings, or link your computer to bring its TorBox over."
+            />
+          )}
           <div className="title-screen__actions-row">
             <button
               type="button"
@@ -630,7 +651,19 @@ export default function Title() {
           {playStatus.stage === 'starting' && <StatusNote>Starting playback…</StatusNote>}
           {playStatus.stage === 'found' && <StatusNote>{playStatus.message}</StatusNote>}
           {playStatus.stage === 'error' && (
-            <StatusNote tone="error">{playStatus.message}</StatusNote>
+            <StatusNote
+              tone="error"
+              action={
+                // The backend's no-source refusal (streamTierRules.ts) names
+                // the setup it wants; with nothing set up, any failure is
+                // most likely that one.
+                noPlaybackSource || /TorBox or a media server/i.test(playStatus.message)
+                  ? { label: 'Open Settings', onClick: () => navigate('/settings') }
+                  : undefined
+              }
+            >
+              {playStatus.message}
+            </StatusNote>
           )}
         </div>
 

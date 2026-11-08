@@ -3,6 +3,7 @@ import { api, useAsync } from '../lib/api'
 import Spinner from '../components/Spinner'
 import StatusNote from '../components/StatusNote'
 import LinkComputer from '../components/LinkComputer'
+import { useCatchUp } from '../lib/librarySync'
 import './Settings.css'
 
 export default function Settings() {
@@ -20,6 +21,13 @@ export default function Settings() {
   const [token, setToken] = useState('')
   const [connecting, setConnecting] = useState(false)
   const [connectMessage, setConnectMessage] = useState<string | null>(null)
+  const [disconnectError, setDisconnectError] = useState<string | null>(null)
+  // The phone holds no Simkl status of its own; the newest catch-up report
+  // is what knows. On a phone the only tracking service is Simkl (linking
+  // brings no other), so "connected" there is Simkl. A report with no `at`
+  // knows nothing, so it is read as no answer yet.
+  const catchUpReport = useCatchUp().report
+  const trackingReport = catchUpReport && catchUpReport.at > 0 ? catchUpReport : null
 
   const onConnect = (event: FormEvent) => {
     event.preventDefault()
@@ -49,10 +57,13 @@ export default function Settings() {
   const onDisconnect = () => {
     const mediaHub = api()
     if (!mediaHub) return
+    setDisconnectError(null)
     mediaHub.torbox
       .disconnect()
       .then(() => settings.reload())
-      .catch(() => {})
+      .catch((error: unknown) => {
+        setDisconnectError(error instanceof Error ? error.message : 'Could not disconnect TorBox.')
+      })
   }
 
   const activeProfile = profiles.data?.profiles.find((p) => p.id === profiles.data?.activeProfileId)
@@ -81,6 +92,24 @@ export default function Settings() {
             profiles.reload()
           }}
         />
+        <p className="settings-status">
+          {trackingReport?.signedOut
+            ? 'Simkl: signed out. Reconnect Simkl on your computer, then link this device again.'
+            : trackingReport?.connected
+              ? 'Simkl: linked from your computer'
+              : 'Simkl lists arrive when you link your computer.'}
+        </p>
+        {/* A media server is not in what linking brings over
+            (devicePairingCore.ts's PairingBundle), and this app has nowhere
+            to set one up, so the line says so rather than promising a link
+            will fix it. */}
+        {settings.data && (
+          <p className="settings-status">
+            {settings.data.mediaServerConnected
+              ? 'Media server: connected'
+              : 'Media server: not set up. Linking your computer does not bring one over, and this device cannot set one up yet.'}
+          </p>
+        )}
       </section>
 
       <section className="settings-section">
@@ -95,7 +124,6 @@ export default function Settings() {
         {settings.data && (
           <p className="settings-status">
             {settings.data.torboxConnected ? 'Connected' : 'Not connected'}
-            {settings.data.mediaServerConnected ? ' · Media server connected' : ''}
           </p>
         )}
         {settings.data?.torboxConnected ? (
@@ -124,6 +152,7 @@ export default function Settings() {
           </form>
         )}
         {connectMessage && <StatusNote>{connectMessage}</StatusNote>}
+        {disconnectError && <StatusNote tone="error">{disconnectError}</StatusNote>}
       </section>
 
       {settings.data?.appVersion && (
