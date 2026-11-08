@@ -99,7 +99,7 @@ check("the host's hint offers the relay's setup place and no port", () => {
   // place is Control centre -> Community, lib/setupPlaces.ts).
   assert.match(
     hub,
-    /<RequiresSetup compact services=\{\['relay'\]\} what="Guests outside your network" \/>/
+    /<RequiresSetup compact services=\{\['relay'\]\} what="Guests outside your network" plural \/>/
   )
 })
 
