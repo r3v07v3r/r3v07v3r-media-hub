@@ -6,9 +6,14 @@
 // the *search* step instead (2000 requests/day on the free API key) and
 // serves the subtitle files themselves from dl.subdl.com as plain public
 // URLs — no key, no login, no per-account download quota. Verified against
-// a live link: an unauthenticated GET returns 200 with the zip. SubDL Pro's
-// "API downloads" feature adds *key-authenticated* downloads (tracked, with
-// their own 2000/day quota); it is not required to fetch a file.
+// a live link (again on 2026-11-08): an unauthenticated GET returns 200 with
+// the zip, and so does one with a wrong key. SubDL Pro's "API downloads"
+// feature adds *key-authenticated* downloads (tracked, with their own
+// 2000/day quota); it is not required to fetch a file. Since late 2026 the
+// search response writes the caller's own key onto every row's `url`
+// (`/subtitle/<id>-<id>.zip?api_key=subdl_…`); normalizeSubdlResult strips
+// that, both because the SSRF boundary below accepts only a bare path and
+// because a result row travels to the renderer and must not carry the key.
 //
 // The trade-off SubDL brings instead is packaging: every subtitle is
 // delivered as a ZIP archive, not raw SRT text. Hence readSrtFromZip below.
@@ -103,7 +108,12 @@ export function buildSubdlSearchParams(
  */
 export function normalizeSubdlResult(entry: unknown): SubtitleResult {
   const raw = (entry ?? {}) as SubdlRawEntry
-  const path = String(raw.url || '')
+  // Path only: SubDL appends "?api_key=<the caller's key>" to every row's
+  // url now, which resolveSubdlDownloadUrl rightly refuses (every row used
+  // to be dropped here, and the menu read "No results" for a film SubDL had
+  // thirty English subtitles for), and which must not leave the main
+  // process inside a row.
+  const path = String(raw.url || '').replace(/[?#].*$/, '')
   return {
     id: `subdl:${path}`,
     provider: 'subdl',
