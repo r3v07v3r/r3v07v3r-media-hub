@@ -56,8 +56,11 @@ export default function Player() {
 
   // Set by a timer, never in the effect's own body: once a duration
   // arrives the note goes (`notStarted` below), and a later loss of one
-  // starts the wait over.
+  // starts the wait over. "Keep waiting" bumps the round, which does the
+  // same. A stream mpv never reports a duration for (a growing file) still
+  // moves timePos, so progress also counts as started.
   const [startTimedOut, setStartTimedOut] = useState(false)
+  const [waitRound, setWaitRound] = useState(0)
   useEffect(() => {
     if (duration) return
     const timer = window.setTimeout(() => setStartTimedOut(true), START_TIMEOUT_MS)
@@ -65,8 +68,8 @@ export default function Player() {
       window.clearTimeout(timer)
       setStartTimedOut(false)
     }
-  }, [duration])
-  const notStarted = startTimedOut && !duration
+  }, [duration, waitRound])
+  const notStarted = startTimedOut && !duration && timePos === 0
 
   const command = useCallback(
     (next: PlayerCommand) => {
@@ -217,7 +220,11 @@ export default function Player() {
 
       {notStarted ? (
         <div className="player-screen__stalled">
-          <StatusNote tone="error" action={{ label: 'Back', onClick: () => navigate(-1) }}>
+          <StatusNote
+            tone="error"
+            action={{ label: 'Back', onClick: () => navigate(-1) }}
+            secondaryAction={{ label: 'Keep waiting', onClick: () => setWaitRound((n) => n + 1) }}
+          >
             The player did not start. Go back and try again.
           </StatusNote>
         </div>

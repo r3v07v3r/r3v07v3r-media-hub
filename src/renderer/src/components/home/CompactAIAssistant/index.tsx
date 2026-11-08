@@ -49,8 +49,9 @@ export function CompactAIAssistant({ kinds }: CompactAIAssistantProps = {}) {
           services={['ollama']}
           what="Recommendations"
           plural
-          // Saved but not answering: the settings are there, the server is not.
-          detail={ready.ollama ? 'Ollama is saved but is not answering right now.' : undefined}
+          // Saved but not answering: the settings are there, the server is
+          // not, so "requires Ollama to be set up" would be untrue.
+          sentence={ready.ollama ? 'Ollama is saved but is not answering right now.' : undefined}
         />
       </div>
     )

@@ -14,7 +14,7 @@
 // a notice that flashes for the first frame and vanishes is worse than a
 // control that appears a moment late.
 
-import { useEffect, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import type { SetupService } from '@renderer/lib/setupPlaces'
 
@@ -120,10 +120,19 @@ export function useServiceReadiness(): ServiceReadiness {
   // First reader asks; later readers reuse the answer while it is fresh.
   // The snapshot changes when a service is connected or disconnected, and
   // the trackers are re-read on the same cue, since a sign-in refreshes it.
+  // Two effects: on mount the answer is reused while fresh; a snapshot that
+  // changes while mounted (not the one it mounted with) asks again at once.
+  // In-flight asks are shared, so many readers make one request.
   useEffect(() => {
-    if (!trackerState.loaded || Date.now() - fetchedAt > STALE_MS || mediaHubSettings) {
+    if (!trackerState.loaded || Date.now() - fetchedAt > STALE_MS) {
       void refreshServiceReadiness()
     }
+  }, [])
+  const mountedSettings = useRef(mediaHubSettings)
+  useEffect(() => {
+    if (mountedSettings.current === mediaHubSettings) return
+    mountedSettings.current = mediaHubSettings
+    void refreshServiceReadiness()
   }, [mediaHubSettings])
 
   const s = mediaHubSettings

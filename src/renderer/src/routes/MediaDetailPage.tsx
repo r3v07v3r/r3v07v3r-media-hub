@@ -812,7 +812,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
                 Next-to-Play panel that used to sit beside it lives in the
                 hero (see DetailHero's next-up card), so the synopsis, cast
                 and story tags get the whole width instead of ~60% of it. */}
-            <AboutPanel media={media} config={config} />
+            <AboutPanel media={media} config={config} metaLoaded={metaStatus !== 'loading'} />
             {/* Genres stays ahead of the episode grid: a long-running
                 series can have hundreds of episode cards below it, and a
                 genre chip is a navigation control, not something to read
@@ -849,7 +849,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
           </>
         ) : (
           <>
-            <AboutPanel media={media} config={config} />
+            <AboutPanel media={media} config={config} metaLoaded={metaStatus !== 'loading'} />
             <GenresPanel genres={media.genres} onSelectGenre={handleGenreSelect} />
             <SimilarPanel
               status={relatedStatus}

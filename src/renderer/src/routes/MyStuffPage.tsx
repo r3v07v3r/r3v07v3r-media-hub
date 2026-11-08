@@ -552,7 +552,7 @@ function ListsView({
             <RequiresSetup
               compact
               services={['simkl', 'trakt', 'mal']}
-              what="Lists from Simkl, Trakt and MyAnimeList"
+              what="Lists from a tracker"
               plural
             />
           )}

@@ -1384,6 +1384,8 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
               {!householdPaired && ready.loaded && !ready.lanCache && (
                 <span
                   className={styles.householdSetup}
+                  // The line is cut to fit; the whole sentence on hover.
+                  title="The household index requires a cache server to be set up."
                   onClick={(event) => event.stopPropagation()}
                 >
                   <RequiresSetup compact services={['lanCache']} what="The household index" />

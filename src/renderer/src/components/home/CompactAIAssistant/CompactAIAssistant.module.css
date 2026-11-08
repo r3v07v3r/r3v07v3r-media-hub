@@ -219,6 +219,23 @@
     margin: 0 0 18px 24px;
   }
 }
+/* Above 1079px tall the hero is a fixed 520px (FeaturedHero.module.css)
+   at the top of a cell that can be taller, so "end" of the cell would be
+   below the hero, over bare background. Pinned to the hero's own bottom
+   instead: 520px down, then lifted by its own height plus the inset. */
+@media (min-width: 1100px) and (min-height: 1080px) {
+  .notice {
+    align-self: start;
+    margin-top: 520px;
+    margin-bottom: 0;
+    transform: translateY(calc(-100% - 24px));
+  }
+}
+@media (min-width: 1100px) and (max-width: 1439px) and (min-height: 1080px) {
+  .notice {
+    transform: translateY(calc(-100% - 18px));
+  }
+}
 @media (max-width: 1099px), (min-width: 1100px) and (max-height: 940px) {
   .notice {
     grid-area: assistant;

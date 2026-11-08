@@ -245,6 +245,7 @@ function SegmentedRow({
             role="radio"
             aria-checked={value === option.value}
             disabled={disabledValues?.includes(option.value)}
+            aria-disabled={disabledValues?.includes(option.value) || undefined}
             className={`${styles.segmentButton} ${value === option.value ? styles.segmentButtonActive : ''}`}
             onClick={() => onChange(option.value)}
           >
@@ -817,7 +818,7 @@ export default function SettingsPage({
   // the notice is drawn once, under the switch above it.
   const subtitleLanguageDescription = `Language to search for, both automatically and in the Subtitles menu.${
     subtitlesMissing.length > 0
-      ? ' Online search needs a subtitle provider; subtitles inside the file follow it either way.'
+      ? ' Online search needs a subtitle provider; subtitles inside the file follow the language either way.'
       : ''
   }`
   // null = no form open, 'new' = create form, otherwise the id of the
@@ -1614,11 +1615,7 @@ export default function SettingsPage({
                   // why it has nothing to prefer yet.
                   disabledValues={mediaServerMissing.length > 0 ? ['prefer-local'] : undefined}
                   notice={
-                    <RequiresSetup
-                      compact
-                      services={mediaServerMissing}
-                      what="Playing from a media server"
-                    />
+                    <RequiresSetup compact services={mediaServerMissing} what="This choice" />
                   }
                 />
                 <div className={styles.row}>

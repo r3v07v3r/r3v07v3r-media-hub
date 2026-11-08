@@ -250,7 +250,6 @@ function PlayerControls() {
   // Absent until main has applied it once per session; the control is not
   // drawn at all until then, and not at all when the pack is off in Settings.
   const anime4k = state.anime4k
-  const anime4kAvailable = anime4k?.available === true
   const anime4kActive = anime4k?.active === true
 
   // --- What is set up ---------------------------------------------------------
@@ -263,11 +262,18 @@ function PlayerControls() {
   }, [])
   useEffect(() => {
     let current = true
-    void fetchOverlayReadiness().then((next) => {
-      if (current && next) setReadiness(next)
-    })
+    const read = (): void => {
+      void fetchOverlayReadiness().then((next) => {
+        if (current && next) setReadiness(next)
+      })
+    }
+    read()
+    // Back from the main window's Settings (a pack removed, a key added):
+    // the controls follow what was changed there.
+    window.addEventListener('focus', read)
     return () => {
       current = false
+      window.removeEventListener('focus', read)
     }
   }, [])
   useEffect(() => {
@@ -300,6 +306,11 @@ function PlayerControls() {
   // pack is on disk.
   const anime4kMissing =
     media?.kind === 'anime' && readiness !== null && !readiness.anime4kInstalled
+  // The player's own state says the pack was applied this session; the
+  // latest settings read can say it has since been removed (Settings →
+  // Remove), and then the toggle would switch on files that are gone.
+  const anime4kAvailable =
+    anime4k?.available === true && (readiness === null || readiness.anime4kInstalled)
   const pictureSettings = {
     brightness: state.brightness ?? DEFAULT_VIDEO_PICTURE.brightness,
     contrast: state.contrast ?? DEFAULT_VIDEO_PICTURE.contrast,

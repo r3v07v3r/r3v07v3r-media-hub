@@ -994,8 +994,8 @@ export function CachingSection() {
                   ) : (
                     <div className={styles.actions}>
                       <p className={styles.note}>
-                        The LAN cache needs your TorBox key before it can fetch for you. Add one
-                        under Control centre &rarr; Media servers, or wait for the cache to have it.
+                        The LAN cache needs your TorBox key before it can fetch for you. Save my key
+                        here, or wait for the cache to have it.
                       </p>
                       <button
                         type="button"

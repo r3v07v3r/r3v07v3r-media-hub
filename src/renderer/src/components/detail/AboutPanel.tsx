@@ -65,7 +65,17 @@ function useContentRating(media: MediaItem): { rating: string; region: string } 
   return result.value.rating ? result.value : null
 }
 
-export function AboutPanel({ media, config }: { media: MediaItem; config: DetailAdapterConfig }) {
+export function AboutPanel({
+  media,
+  config,
+  metaLoaded = true
+}: {
+  media: MediaItem
+  config: DetailAdapterConfig
+  /** False while the detail page is still fetching the full record: the
+   *  card's seed item has no cast yet, and the fetch may bring some. */
+  metaLoaded?: boolean
+}) {
   const certificate = useContentRating(media)
   const [expanded, setExpanded] = useState(false)
   const description = media.description ?? ''
@@ -80,6 +90,7 @@ export function AboutPanel({ media, config }: { media: MediaItem; config: Detail
   // any source, so it is not told to set TMDB up for them.
   const kind = media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie')
   const needsTmdb =
+    metaLoaded &&
     ready.loaded &&
     !ready.tmdb &&
     kind !== 'anime' &&

@@ -36,6 +36,8 @@ export interface SetupPlace {
   section: ControlCentreSectionId
   /** The heading id to scroll to; none means the section's top. */
   anchor?: string
+  /** The button's whole label, where "Set up <name>" would read awkwardly. */
+  button?: string
 }
 
 export const SETUP_PLACES: Record<SetupService, SetupPlace> = {
@@ -43,22 +45,54 @@ export const SETUP_PLACES: Record<SetupService, SetupPlace> = {
   mediaServer: {
     name: 'a media server',
     section: 'media-services',
-    anchor: 'settings-services-title'
+    anchor: 'settings-services-title',
+    button: 'Set up a media server'
   },
   simkl: { name: 'Simkl', section: 'accounts', anchor: 'settings-simkl' },
   trakt: { name: 'Trakt', section: 'accounts', anchor: 'settings-trakt' },
   mal: { name: 'MyAnimeList', section: 'accounts', anchor: 'settings-mal' },
-  tmdb: { name: 'a TMDB key', section: 'accounts', anchor: 'settings-tmdb' },
-  omdb: { name: 'an OMDb key', section: 'accounts', anchor: 'settings-omdb' },
+  tmdb: { name: 'a TMDB key', section: 'accounts', anchor: 'settings-tmdb', button: 'Set up TMDB' },
+  omdb: {
+    name: 'an OMDb key',
+    section: 'accounts',
+    anchor: 'settings-omdb',
+    button: 'Set up OMDb'
+  },
   subdl: { name: 'SubDL', section: 'accounts', anchor: 'settings-subdl' },
   opensubtitles: { name: 'OpenSubtitles', section: 'accounts', anchor: 'settings-opensubtitles' },
   /** Either subtitle provider; the button lands on the first of the two. */
-  subtitles: { name: 'a subtitle provider', section: 'accounts', anchor: 'settings-subdl' },
+  subtitles: {
+    name: 'a subtitle provider',
+    section: 'accounts',
+    anchor: 'settings-subdl',
+    button: 'Set up SubDL'
+  },
   ollama: { name: 'Ollama', section: 'ai', anchor: 'settings-ollama' },
-  relay: { name: 'the party relay', section: 'community', anchor: 'settings-party-sync' },
-  lanCache: { name: 'a cache server', section: 'caching', anchor: 'settings-caching' },
+  relay: {
+    name: 'the party relay',
+    section: 'community',
+    anchor: 'settings-party-sync',
+    button: 'Set up the relay'
+  },
+  lanCache: {
+    name: 'a cache server',
+    section: 'caching',
+    anchor: 'settings-caching',
+    button: 'Open Caching'
+  },
   /** Not a service: the shader pack download in General. */
-  anime4k: { name: 'the Anime4K shader pack', section: 'general', anchor: 'settings-anime4k' }
+  anime4k: {
+    name: 'the Anime4K shader pack',
+    section: 'general',
+    anchor: 'settings-anime4k',
+    button: 'Get Anime4K'
+  }
+}
+
+/** The label on a service's Set up button. */
+export function setupButtonLabel(service: SetupService): string {
+  const place = SETUP_PLACES[service]
+  return place.button ?? `Set up ${place.name.replace(/^(a|an|the) /, '')}`
 }
 
 /** "Simkl", "Simkl or Trakt", "Simkl, Trakt or MyAnimeList". */

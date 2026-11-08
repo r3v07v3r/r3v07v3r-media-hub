@@ -178,16 +178,16 @@ export function AIResponsePanel() {
               <span className={styles.skeletonLine} style={{ width: '55%' }} />
             </div>
           ) : (
-            <>
-              {assistantResponse}
-              {/* The search half needs no model; the "what the model makes
-                  of it" half does, and says so with the way to set it up. */}
-              {assistantNeedsModel && (
-                <RequiresSetup compact services={['ollama']} what="Asking R3" />
-              )}
-            </>
+            assistantResponse
           )}
         </div>
+        {/* The search half needs no model; the "what the model makes of it"
+            half does, and says so with the way to set it up. Outside the
+            live region above: the notice is a status of its own, and inside
+            it some readers would announce the sentence twice. */}
+        {!thinking && assistantNeedsModel && (
+          <RequiresSetup compact services={['ollama']} what="Asking R3" />
+        )}
 
         {assistantSimilar.length > 0 && (
           <section className={styles.aiSection}>

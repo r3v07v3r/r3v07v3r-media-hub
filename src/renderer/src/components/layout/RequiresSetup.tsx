@@ -10,7 +10,12 @@
 // not fit: one line, one button.
 
 import { useAppState } from '@renderer/context/AppStateContext'
-import { SETUP_PLACES, nameServices, type SetupService } from '@renderer/lib/setupPlaces'
+import {
+  SETUP_PLACES,
+  nameServices,
+  setupButtonLabel,
+  type SetupService
+} from '@renderer/lib/setupPlaces'
 import styles from './RequiresSetup.module.css'
 
 interface Props {
@@ -24,12 +29,25 @@ interface Props {
   compact?: boolean
   /** `what` is plural ("Age ratings require"), so the verb agrees. */
   plural?: boolean
+  /** Replaces the generated sentence, for a case the rule's wording does not
+   *  fit (a service that is set up but not answering, or a list too long
+   *  for one button each). `detail` still follows it. */
+  sentence?: string
 }
 
-export function RequiresSetup({ services, what, detail, compact = false, plural = false }: Props) {
+export function RequiresSetup({
+  services,
+  what,
+  detail,
+  compact = false,
+  plural = false,
+  sentence: sentenceOverride
+}: Props) {
   const { openControlCentre } = useAppState()
   if (services.length === 0) return null
-  const sentence = `${what ?? 'This'} ${plural ? 'require' : 'requires'} ${nameServices(services)} to be set up.`
+  const sentence =
+    sentenceOverride ??
+    `${what ?? 'This'} ${plural ? 'require' : 'requires'} ${nameServices(services)} to be set up.`
   return (
     <div
       className={`${styles.wrap} ${compact ? styles.compact : 'glass-panel'}`}
@@ -50,7 +68,7 @@ export function RequiresSetup({ services, what, detail, compact = false, plural 
               className={styles.button}
               onClick={() => openControlCentre(place.section, place.anchor)}
             >
-              Set up {place.name.replace(/^(a|an|the) /, '')}
+              {setupButtonLabel(service)}
             </button>
           )
         })}

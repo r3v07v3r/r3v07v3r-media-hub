@@ -36,6 +36,19 @@ import { CONTROL_CENTRE_SECTIONS, SETTINGS_CATEGORY_FOR } from './sections'
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
+/** How far `el` sits below the top of `scroller`'s content, from the
+ *  untransformed layout (offsetTop chains), less a little air. */
+function offsetWithin(el: HTMLElement, scroller: HTMLElement): number {
+  const top = (node: HTMLElement): number => {
+    let sum = 0
+    for (let at: HTMLElement | null = node; at; at = at.offsetParent as HTMLElement | null) {
+      sum += at.offsetTop
+    }
+    return sum
+  }
+  return Math.max(0, top(el) - top(scroller) - scroller.clientTop - 12)
+}
+
 export function ControlCentreFace() {
   const {
     controlCentreOpen,
@@ -46,6 +59,7 @@ export function ControlCentreFace() {
     clearControlCentreAnchor
   } = useAppState()
   const panelRef = useRef<HTMLDivElement | null>(null)
+  const bodyRef = useRef<HTMLDivElement | null>(null)
   // The section lives in AppStateContext, kept across opens on purpose:
   // coming back to the section you were last in is what a control centre
   // does, and a "Set up Simkl" button elsewhere in the app opens the centre
@@ -61,6 +75,10 @@ export function ControlCentreFace() {
   // showing, and put focus there so a screen reader lands on the service
   // asked for rather than the panel. Two frames: the first lets the
   // hidden attribute flip, the second lets layout settle before scrolling.
+  // The panel's own scroller is moved, instantly, rather than
+  // scrollIntoView: that runs during the cube's turn and would also scroll
+  // the cube's clipped containers, measured from rotated rects. offsetTop
+  // ignores the transform, so the distance is the flat one.
   useEffect(() => {
     if (!controlCentreOpen || !controlCentreAnchor) return
     let second = 0
@@ -69,7 +87,10 @@ export function ControlCentreFace() {
         const target = document.getElementById(controlCentreAnchor)
         if (target) {
           if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1')
-          target.scrollIntoView({ block: 'start', behavior: 'smooth' })
+          const body = bodyRef.current
+          if (body && body.contains(target)) {
+            body.scrollTo({ top: offsetWithin(target, body), behavior: 'auto' })
+          }
           target.focus({ preventScroll: true })
         }
         clearControlCentreAnchor()
@@ -160,7 +181,7 @@ export function ControlCentreFace() {
       <MatrixRain active={controlCentreOpen} />
       <div className={styles.layout}>
         <ControlCentreNav active={section} onSelect={setSection} />
-        <div className={styles.body}>
+        <div className={styles.body} ref={bodyRef}>
           {CONTROL_CENTRE_SECTIONS.map((entry) => (
             <div
               key={entry.id}

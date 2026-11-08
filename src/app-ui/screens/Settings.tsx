@@ -26,8 +26,13 @@ export default function Settings() {
   // is what knows. On a phone the only tracking service is Simkl (linking
   // brings no other), so "connected" there is Simkl. A report with no `at`
   // knows nothing, so it is read as no answer yet.
-  const catchUpReport = useCatchUp().report
+  const catchUp = useCatchUp()
+  const catchUpReport = catchUp.report
   const trackingReport = catchUpReport && catchUpReport.at > 0 ? catchUpReport : null
+  // Before the first real report the phone cannot tell linked from not, so
+  // it says nothing it may have to take back. A no-pass answer (`at` 0)
+  // still carries whether any account is held, which is enough for the line.
+  const simklKnown = trackingReport ?? catchUpReport
 
   const onConnect = (event: FormEvent) => {
     event.preventDefault()
@@ -92,13 +97,17 @@ export default function Settings() {
             profiles.reload()
           }}
         />
-        <p className="settings-status">
-          {trackingReport?.signedOut
-            ? 'Simkl: signed out. Reconnect Simkl on your computer, then link this device again.'
-            : trackingReport?.connected
-              ? 'Simkl: linked from your computer'
-              : 'Simkl lists arrive when you link your computer.'}
-        </p>
+        {simklKnown ? (
+          <p className="settings-status">
+            {simklKnown.signedOut
+              ? 'Simkl: signed out. Reconnect Simkl on your computer, then link this device again.'
+              : simklKnown.connected
+                ? 'Simkl: linked from your computer'
+                : 'Simkl lists arrive when you link your computer.'}
+          </p>
+        ) : (
+          catchUp.inFlight && <p className="settings-status">Checking Simkl…</p>
+        )}
         {/* A media server is not in what linking brings over
             (devicePairingCore.ts's PairingBundle), and this app has nowhere
             to set one up, so the line says so rather than promising a link

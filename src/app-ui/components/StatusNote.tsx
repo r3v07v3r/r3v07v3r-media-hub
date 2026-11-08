@@ -13,10 +13,13 @@ export interface StatusNoteAction {
 export default function StatusNote({
   tone,
   action,
+  secondaryAction,
   children
 }: {
   tone?: 'error'
   action?: StatusNoteAction
+  /** A second way out, after `action` (only drawn alongside one). */
+  secondaryAction?: StatusNoteAction
   children: ReactNode
 }) {
   const className = [
@@ -32,6 +35,11 @@ export default function StatusNote({
       {action && (
         <button type="button" className="status-note__action" onClick={action.onClick}>
           {action.label}
+        </button>
+      )}
+      {action && secondaryAction && (
+        <button type="button" className="status-note__action" onClick={secondaryAction.onClick}>
+          {secondaryAction.label}
         </button>
       )}
     </p>

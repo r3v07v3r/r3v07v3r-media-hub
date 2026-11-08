@@ -182,7 +182,7 @@ export function SessionHub() {
           )}
 
           {/* Local network only: with no relay set up, the notice and its
-              button say how to reach guests outside it; with one set up
+              button say how to reach guests outside your network; with one set up
               that did not answer, the plain line says so. */}
           {isHost &&
             partyWanAvailable === false &&
@@ -203,7 +203,7 @@ export function SessionHub() {
               >
                 {partyWanAvailable
                   ? 'Invite works across the internet.'
-                  : 'Local network only. The party relay did not answer, so guests outside it cannot join yet.'}
+                  : 'Local network only. The party relay did not answer, so guests outside your network cannot join yet.'}
               </p>
             )}
 

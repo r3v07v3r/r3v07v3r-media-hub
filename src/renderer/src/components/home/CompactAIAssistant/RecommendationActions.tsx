@@ -219,7 +219,11 @@ export function RecommendationActions({ kinds = ['movie', 'series'] }: Recommend
       if (!mountedRef.current) return
       pushNotification({
         tone: 'error',
-        message: error instanceof Error ? error.message : 'The model could not be reached.'
+        message: error instanceof Error ? error.message : 'The model could not be reached.',
+        action: {
+          label: 'Set up Ollama',
+          run: () => openControlCentre('ai', 'settings-ollama')
+        }
       })
     } finally {
       if (pendingRequestId.current === requestId) pendingRequestId.current = null

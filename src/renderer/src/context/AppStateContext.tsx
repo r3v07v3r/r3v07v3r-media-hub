@@ -1305,7 +1305,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     DEFAULT_CONTROL_CENTRE_SECTION
   )
   const [controlCentreAnchor, setControlCentreAnchor] = useState<string | null>(null)
+  // The party panel and the assistant panel paint above the cube, so a Set
+  // up button inside either would open the centre underneath it. Both close
+  // first. closeAssistant is declared further down, hence the ref.
+  const closeAssistantRef = useRef<() => void>(() => {})
   const openControlCentre = useCallback((section: ControlCentreSectionId, anchor?: string) => {
+    closeAssistantRef.current()
+    setPartyPanelOpen(false)
     setControlCentreSection(section)
     setControlCentreAnchor(anchor ?? null)
     setControlCentreOpen(true)
@@ -1354,7 +1360,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         pushNotification({
           tone: 'info',
           message:
-            'The LAN cache needs your TorBox key before it can fetch for you. Add one under Control centre → Media servers, or wait for the cache to have it.',
+            'The LAN cache needs your TorBox key before it can fetch for you. Set up TorBox, or wait for the cache to have it.',
           action: {
             label: 'Set up TorBox',
             run: () => openControlCentre('media-services', 'settings-torbox')
@@ -1503,10 +1509,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             // Main refuses a keep-local pick outright when there is no Simkl
             // token to deliver it with (tracking.ts), and "try again" could
             // never succeed then. Asked rather than inferred from the answer,
-            // which is the same for an id Simkl cannot be told about.
+            // which is the same for an id Simkl cannot be told about. Token
+            // presence, not simkl.status(): that answers "not connected" for
+            // an offline Simkl too, and offline is not "not set up".
             void (async () => {
-              const simkl = await window.api?.mediaHub?.simkl.status().catch(() => null)
-              if (simkl && !simkl.connected) {
+              const accounts = await window.api?.mediaHub?.tracking.accounts().catch(() => null)
+              if (accounts && !accounts.simkl) {
                 pushNotification({
                   tone: 'error',
                   message: `Keeping your choice for "${discrepancy.title}" requires Simkl to be set up. Nothing was changed.`,
@@ -1519,6 +1527,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
               }
               pushNotification({
                 tone: 'error',
+                // With a token, main queues the pick without asking Simkl
+                // (the queue retries delivery itself), so a refusal here is
+                // a title Simkl cannot be told about or a failed disk write,
+                // never Simkl being offline.
                 message: `Could not keep your choice for "${discrepancy.title}". Nothing was changed — try again.`
               })
             })()
@@ -1806,6 +1818,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setAssistantNeedsModel(false)
     setAssistantFindings({ results: [], similar: [], similarSource: null, searching: false })
   }, [abandonAssistantRequest])
+  useEffect(() => {
+    closeAssistantRef.current = closeAssistant
+  }, [closeAssistant])
 
   // Centralized here (every "open a title" call site — card, hero,
   // continue-watching row, context menu — already just calls

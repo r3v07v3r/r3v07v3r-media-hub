@@ -159,8 +159,10 @@ export function DevicePairingSection() {
       ) : nothingToSend ? (
         <RequiresSetup
           services={['torbox']}
-          what="Linking a phone"
-          detail="The code carries your TorBox key and other service keys to the phone; without any there is nothing to send."
+          // Any one of six makes a code worth sending (bundleContents); one
+          // button rather than six, the sentence names them all.
+          sentence="Linking a phone requires TorBox, Simkl, SubDL, OpenSubtitles, a TMDB key or an OMDb key to be set up."
+          detail="The code carries whichever of these this computer has."
         />
       ) : (
         <div className={styles.serviceActions}>

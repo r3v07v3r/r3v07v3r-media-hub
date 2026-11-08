@@ -134,7 +134,8 @@ async function main(): Promise<void> {
       component,
       /onClick=\{\(\) => openControlCentre\(place\.section, place\.anchor\)\}/
     )
-    assert.match(component, />\s*Set up \{place\.name/)
+    assert.match(component, /\{setupButtonLabel\(service\)\}/)
+    assert.match(places, /place\.button \?\? `Set up \$\{place\.name/)
   })
 
   await check('scrobbling, two-way sync and Sync now each carry their notice', () => {
