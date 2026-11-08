@@ -74,6 +74,10 @@ import { SETUP_PLACES, nameServices, type SetupService } from '@renderer/lib/set
 import styles from './PlayerOverlayWindow.module.css'
 
 const CONTROLS_IDLE_MS = 3200
+/** Online subtitle rows shown before "Show N more". The merge puts exact
+ *  matches and the free providers first, so the top five are the ones
+ *  worth a click; the rest are a press away. */
+const ONLINE_SUBTITLE_ROWS = 5
 // A stable reference for "no chapters", rather than a fresh `[]` literal each
 // render — `chapters` (below) feeds chapterSkipTimes's useMemo, and a new
 // array identity every render (even one holding nothing) would invalidate
@@ -199,6 +203,10 @@ function PlayerControls() {
   const [subtitleSearchError, setSubtitleSearchError] = useState<string | null>(null)
   const [readiness, setReadiness] = useState<OverlayReadiness | null>(null)
   const [pendingSubtitleId, setPendingSubtitleId] = useState<string | null>(null)
+  // The online list shows a handful of rows until asked for the rest: twenty
+  // release names in a popover is a wall. Keyed to the title, like the
+  // results, so the next episode opens folded again.
+  const [subtitleListExpandedFor, setSubtitleListExpandedFor] = useState<string | null>(null)
   const [subtitleDelay, setSubtitleDelay] = useState(0)
   // The bottom bar's size and its inset from the window's bottom edge, as
   // measured, from which the subtitles' clearance is worked out at render.
@@ -1220,6 +1228,13 @@ function PlayerControls() {
   // Null while a search for THIS title has not landed, which is what makes the
   // menu say "Searching…" rather than showing the last episode's list.
   const currentSubtitleResults = subtitleResults?.key === mediaKey ? subtitleResults.results : null
+  const subtitleListExpanded = subtitleListExpandedFor === mediaKey
+  const shownSubtitleResults =
+    currentSubtitleResults && !subtitleListExpanded
+      ? currentSubtitleResults.slice(0, ONLINE_SUBTITLE_ROWS)
+      : currentSubtitleResults
+  const hiddenSubtitleRows =
+    (currentSubtitleResults?.length ?? 0) - (shownSubtitleResults?.length ?? 0)
 
   // Anime reads the Aniskip fetch above; everything else reads the
   // chapter-derived memo — see both sources' own comments for why they are
@@ -2043,7 +2058,7 @@ function PlayerControls() {
                 {!subtitleSearchError && currentSubtitleResults?.length === 0 && (
                   <span className={styles.menuNote}>No results</span>
                 )}
-                {currentSubtitleResults?.map((subtitle) => (
+                {shownSubtitleResults?.map((subtitle) => (
                   <button
                     key={subtitle.id}
                     type="button"
@@ -2067,6 +2082,15 @@ function PlayerControls() {
                         } · ${subtitleProviderName(subtitle.provider)}`}
                   </button>
                 ))}
+                {hiddenSubtitleRows > 0 && (
+                  <button
+                    type="button"
+                    className={`${styles.menuItem} ${styles.menuItemMore}`}
+                    onClick={() => setSubtitleListExpandedFor(mediaKey)}
+                  >
+                    Show {hiddenSubtitleRows} more
+                  </button>
+                )}
               </div>
             )}
           </div>

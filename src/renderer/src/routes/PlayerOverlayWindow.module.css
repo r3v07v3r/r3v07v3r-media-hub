@@ -833,3 +833,10 @@
   white-space: nowrap;
   pointer-events: none;
 }
+
+/* "Show N more" under the online subtitle rows: a row that reads as an
+   action on the list, not as another subtitle. */
+.menuItemMore {
+  color: var(--accent, #4da3ff);
+  font-weight: 600;
+}
