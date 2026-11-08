@@ -178,7 +178,15 @@
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
   display: flex;
   flex-direction: column;
-  max-height: 320px;
+  /* Tall enough for the Subtitles menu (embedded tracks, timing, appearance
+     and the online list) and the Playback menu to show most of themselves
+     at once; the online subtitle rows used to sit under the fold of a
+     320px box. Bounded by the window so the menu never grows past the top. */
+  max-height: min(72vh, 600px);
+  /* Release names in the online rows run long; the menu grows to a point
+     and the row then ends in an ellipsis rather than the menu leaving the
+     window. */
+  max-width: min(620px, 90vw);
   overflow-y: auto;
 }
 
@@ -194,6 +202,11 @@
   border-radius: 6px;
   cursor: pointer;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* A row is one of many; the hand needs a clear line between neighbours
+     when the list is long, which the hover tint alone does not give. */
+  min-height: 34px;
 }
 
 .menuItem:hover {
