@@ -183,6 +183,30 @@ check('leaves a file that opens with dialogue alone, a repeated line included', 
   assert.equal(stripLeadingCredits(srt), srt)
 })
 
+check('short opening lines that merely look like a stamp are kept', () => {
+  // Codex's two cases: "I…" has no two letters, and "No." is a prefix of
+  // "No. Stop!" — the shape of a typed-out stamp with none of its marks.
+  for (const lines of [
+    ['I...', 'Where is he?'],
+    ['No.', 'No. Stop!', 'Please.'],
+    ['...', '- Go.', '- Go. Go!']
+  ]) {
+    const srt = lines
+      .map((text, i) => cue(i + 1, `00:0${i + 1},000`, `00:0${i + 1},800`, text))
+      .join('\n\n')
+    assert.equal(stripLeadingCredits(srt), srt, lines.join(' | '))
+  }
+})
+
+check('a wordless run with a web address in it is a stamp', () => {
+  const stamp = [
+    cue(1, '00:01,000', '00:03,000', '- - -'),
+    cue(2, '00:03,000', '00:06,000', 'Downloaded from www.example.com')
+  ]
+  const film = [cue(3, '00:30,000', '00:31,000', 'Where is he?')]
+  assert.equal(stripLeadingCredits([...stamp, ...film].join('\n\n')), film.join('\n\n'))
+})
+
 check('a stamp that starts after the window is not touched', () => {
   const srt = [
     cue(1, '00:30,000', '00:31,000', '©'),

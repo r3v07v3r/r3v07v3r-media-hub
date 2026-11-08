@@ -292,8 +292,15 @@ async function tsdbSearch(
   playback: OpenSubtitlesSearchPlayback & { language: string },
   infoHash: string | undefined
 ): Promise<SubtitleResult[]> {
+  // No hash lookup for an episode: a season or complete-series torrent
+  // has one hash for every episode in it, and SubtitleDB answers with the
+  // whole torrent's files, so a row marked as the exact match could be
+  // another episode's, and the automatic fetch prefers exact matches.
+  // The id lookup carries the season and episode; that is the one to trust.
+  const episodic =
+    item.type !== 'movie' && Number.isFinite(playback.season) && Number.isFinite(playback.episode)
   const paths = [
-    buildTsdbInfohashPath(infoHash, playback.language),
+    episodic ? '' : buildTsdbInfohashPath(infoHash, playback.language),
     buildTsdbLookupPath(item, playback)
   ].filter(Boolean)
   if (!paths.length) return []

@@ -160,6 +160,12 @@ const CREDIT_STAMP_WINDOW_S = 20
 /** How many leading cues are examined at most. A typewriter stamp is a
  *  few dozen cues; this bounds the work on a hostile file. */
 const CREDIT_STAMP_MAX_CUES = 80
+/** What makes a run of opening cues a credit stamp rather than dialogue:
+ *  a copyright or trademark mark, a web or e-mail address, a phone number,
+ *  or the words such stamps are made of. Without one of these somewhere in
+ *  the run, nothing is removed, however short the lines. */
+const CREDIT_STAMP_EVIDENCE =
+  /[©®™]|https?:|www\.|\.(?:com|net|org|co|tv|io)\b|\S+@\S+\.\S+|\+?\d[\d\s-]{7,}\d|\b(?:downloaded|subtitles?|subs|sync(?:ed|hronized)?|corrected|translat(?:ed|ion)|encoded|ripped|uploaded)\b/iu
 
 /**
  * Drops the credit stamp a crawled file often opens with, where the
@@ -167,10 +173,13 @@ const CREDIT_STAMP_MAX_CUES = 80
  * a run of leading cues inside the first seconds that carry no word, or
  * that type a credit out letter by letter, each cue's text a prefix of
  * the next ("©", "© P", "© P@rM…"), hold the typed credit for a few cues,
- * and add a line to it. Anything else, the file as it was:
- * the first cue with a real word that is not part of such a run ends the
- * stamp, and a file whose first cue is dialogue loses nothing. Cue
- * numbers are left as they were; players do not read them.
+ * and add a line to it — and that, somewhere, carries the mark of a credit
+ * (CREDIT_STAMP_EVIDENCE). The shape alone is not enough: "No." followed
+ * by "No. Stop!" has it too, and an opening "I…" has no two letters.
+ * Anything else, the file as it was: the first cue with a real word that
+ * is not part of such a run ends the stamp, and a file whose first cue is
+ * dialogue loses nothing. Cue numbers are left as they were; players do
+ * not read them.
  */
 export function stripLeadingCredits(srt: string): string {
   const blocks = srt.split(/\r?\n\r?\n/)
@@ -205,9 +214,12 @@ export function stripLeadingCredits(srt: string): string {
     // twice is never taken for a stamp.
     const continuesPrevious =
       previous !== undefined && previous.length > 0 && text.startsWith(previous)
-    if (!wordless && !typesNext && !continuesPrevious) break
+    // A credit line proper ("Downloaded from …") is part of the stamp too.
+    const credit = CREDIT_STAMP_EVIDENCE.test(text)
+    if (!wordless && !typesNext && !continuesPrevious && !credit) break
     drop++
   }
   if (!drop) return srt
+  if (!texts.slice(0, drop).some((text) => CREDIT_STAMP_EVIDENCE.test(text))) return srt
   return blocks.slice(drop).join('\n\n')
 }
