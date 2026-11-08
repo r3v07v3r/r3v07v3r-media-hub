@@ -320,6 +320,11 @@ export type PlayerCommand =
    *  four are one visual decision and applying them separately makes the
    *  subtitle flicker through intermediate states. */
   | { type: 'set-subtitle-style'; style: SubtitleStyle }
+  /** The overlay's bottom bar is open and its top edge is at `percent` of
+   *  the window height (null when the bar has faded): subtitles that would
+   *  sit under the bar move up to clear it for as long as it is open, and go
+   *  back when it fades. Not stored — see effectiveSubtitlePosition. */
+  | { type: 'set-subtitle-clearance'; percent: number | null }
   /** Evens out a mix with quiet dialogue and a loud score — see
    *  NIGHT_MODE_AUDIO_FILTER. Stored, because somebody who needs it once
    *  needs it for everything they watch on that setup. */

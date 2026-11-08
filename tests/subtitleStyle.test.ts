@@ -12,6 +12,7 @@ import assert from 'node:assert/strict'
 
 import {
   DEFAULT_SUBTITLE_STYLE,
+  effectiveSubtitlePosition,
   isSubtitleStyleDefault,
   normalizeSubtitleStyle,
   subtitleStyleProperties,
@@ -105,3 +106,17 @@ assert.equal(isSubtitleStyleDefault({ ...DEFAULT_SUBTITLE_STYLE, color: 'yellow'
 }
 
 console.log('subtitle style tests passed')
+
+// ---------------------------------------------------------------------
+// The lift clear of the bottom bar: never below the stored position,
+// never above the minimum, and the stored position itself when there is
+// no bar.
+// ---------------------------------------------------------------------
+assert.equal(effectiveSubtitlePosition(100, null), 100)
+assert.equal(effectiveSubtitlePosition(100, 86), 86, 'lifted to the bar top')
+assert.equal(effectiveSubtitlePosition(80, 86), 80, 'already clear of the bar: unchanged')
+assert.equal(effectiveSubtitlePosition(120, 86.9), 86, 'whole percents only')
+assert.equal(effectiveSubtitlePosition(100, 10), SUBTITLE_POSITION_MIN, 'never above the minimum')
+assert.equal(effectiveSubtitlePosition(100, Number.NaN), 100, 'nonsense reads as no bar')
+
+console.log('subtitleStyle: ok')
