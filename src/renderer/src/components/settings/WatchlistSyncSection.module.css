@@ -1,0 +1,10 @@
+/* A "Not connected" report line with its Set up button beside it. */
+.reportAction {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.setupButton {
+  padding: 3px 10px;
+}

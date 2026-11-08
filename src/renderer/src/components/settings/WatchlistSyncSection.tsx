@@ -20,8 +20,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { PlannedServiceReport, PlannedSyncReport } from '@shared/media-hub/types'
 import { Icon } from '@renderer/components/icons/Icon'
+import { RequiresSetup } from '@renderer/components/layout/RequiresSetup'
 import { useAppState } from '@renderer/context/AppStateContext'
+import { missingServices, useServiceReadiness } from '@renderer/hooks/useServiceReadiness'
+import { SETUP_PLACES } from '@renderer/lib/setupPlaces'
 import styles from '@renderer/routes/Settings.module.css'
+import own from './WatchlistSyncSection.module.css'
 
 const SERVICE_LABELS: Record<PlannedServiceReport['service'], string> = {
   simkl: 'Simkl',
@@ -82,7 +86,12 @@ function line(report: PlannedServiceReport): string {
 }
 
 export function WatchlistSyncSection() {
-  const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
+  const { mediaHubSettings, refreshMediaHubSettings, openControlCentre } = useAppState()
+  const ready = useServiceReadiness()
+  // Empty until readiness has loaded, so nothing below flashes a notice on
+  // the first frame; the controls draw as they always did until then.
+  const noTracker = missingServices(ready, ['simkl', 'trakt', 'mal'])
+  const noScrobbler = missingServices(ready, ['simkl', 'trakt'])
   const [report, setReport] = useState<PlannedSyncReport | null>(null)
   const [busy, setBusy] = useState(false)
   const twoWay = mediaHubSettings?.watchlistTwoWay !== false
@@ -143,9 +152,13 @@ export function WatchlistSyncSection() {
             own in the background; this is for when you have just added things on the web.
           </span>
         </div>
-        <button type="button" className={styles.testButton} onClick={run} disabled={busy}>
-          {busy ? 'Syncing…' : 'Sync now'}
-        </button>
+        {noTracker.length > 0 ? (
+          <RequiresSetup compact services={noTracker} what="Syncing watchlists" />
+        ) : (
+          <button type="button" className={styles.testButton} onClick={run} disabled={busy}>
+            {busy ? 'Syncing…' : 'Sync now'}
+          </button>
+        )}
       </div>
 
       {/* THE ONE CONTROL THAT CAN DELETE SOMETHING, and it says so.
@@ -168,15 +181,21 @@ export function WatchlistSyncSection() {
             services.
           </span>
         </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={twoWay}
-          className={styles.testButton}
-          onClick={() => setTwoWay(!twoWay)}
-        >
-          {twoWay ? 'On' : 'Off'}
-        </button>
+        {/* With no service there is nothing to keep in sync, so the switch
+            is not drawn reading On. The stored value is left as it is. */}
+        {noTracker.length > 0 ? (
+          <RequiresSetup compact services={noTracker} what="Keeping watchlists in sync" />
+        ) : (
+          <button
+            type="button"
+            role="switch"
+            aria-checked={twoWay}
+            className={styles.testButton}
+            onClick={() => setTwoWay(!twoWay)}
+          >
+            {twoWay ? 'On' : 'Off'}
+          </button>
+        )}
       </div>
 
       {/* Off on a new install, switched on once where a service was already connected. The watched mark at 80% reaches the services
@@ -194,15 +213,19 @@ export function WatchlistSyncSection() {
             a phone linked to this computer, and every scrobble counts against it.
           </span>
         </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={scrobble}
-          className={styles.testButton}
-          onClick={() => setScrobble(!scrobble)}
-        >
-          {scrobble ? 'On' : 'Off'}
-        </button>
+        {noScrobbler.length > 0 ? (
+          <RequiresSetup compact services={noScrobbler} what="Scrobbling" />
+        ) : (
+          <button
+            type="button"
+            role="switch"
+            aria-checked={scrobble}
+            className={styles.testButton}
+            onClick={() => setScrobble(!scrobble)}
+          >
+            {scrobble ? 'On' : 'Off'}
+          </button>
+        )}
       </div>
 
       {report && (
@@ -211,7 +234,25 @@ export function WatchlistSyncSection() {
             {report.services.map((service) => (
               <li key={service.service} className={service.error ? styles.reportError : undefined}>
                 <span>{SERVICE_LABELS[service.service]}</span>
-                <span>{line(service)}</span>
+                {service.connected ? (
+                  <span>{line(service)}</span>
+                ) : (
+                  <span className={own.reportAction}>
+                    {line(service)}
+                    <button
+                      type="button"
+                      className={`${styles.testButton} ${own.setupButton}`}
+                      onClick={() =>
+                        openControlCentre(
+                          SETUP_PLACES[service.service].section,
+                          SETUP_PLACES[service.service].anchor
+                        )
+                      }
+                    >
+                      Set up {SERVICE_LABELS[service.service]}
+                    </button>
+                  </span>
+                )}
               </li>
             ))}
           </ul>
