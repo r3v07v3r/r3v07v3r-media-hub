@@ -78,7 +78,7 @@ export default function ForYouPage() {
               rather than leave an empty page unexplained. */}
           {recommendationRails.length === 0 && picks.length > 0 && ready.loaded && !ready.tmdb && (
             <>
-              <RequiresSetup services={['tmdb']} what="Shelves built from cast and crew" />
+              <RequiresSetup services={['tmdb']} what="Shelves built from cast and crew" plural />
               <p className={styles.note}>In the meantime, the top picks are on Home.</p>
             </>
           )}

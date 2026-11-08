@@ -165,7 +165,9 @@ export function AboutPanel({ media, config }: { media: MediaItem; config: Detail
           </div>
         ) : null}
       </dl>
-      {needsTmdb && <RequiresSetup compact services={['tmdb']} what="Cast, crew and age ratings" />}
+      {needsTmdb && (
+        <RequiresSetup compact services={['tmdb']} what="Cast, crew and age ratings" plural />
+      )}
       {media.cast?.length ? (
         <div className={styles.people}>
           <h3 className={styles.subheading}>Cast</h3>

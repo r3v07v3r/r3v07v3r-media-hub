@@ -22,12 +22,14 @@ interface Props {
   /** A further sentence, when the plain rule is not enough on its own. */
   detail?: string
   compact?: boolean
+  /** `what` is plural ("Age ratings require"), so the verb agrees. */
+  plural?: boolean
 }
 
-export function RequiresSetup({ services, what, detail, compact = false }: Props) {
+export function RequiresSetup({ services, what, detail, compact = false, plural = false }: Props) {
   const { openControlCentre } = useAppState()
   if (services.length === 0) return null
-  const sentence = `${what ?? 'This'} requires ${nameServices(services)} to be set up.`
+  const sentence = `${what ?? 'This'} ${plural ? 'require' : 'requires'} ${nameServices(services)} to be set up.`
   return (
     <div
       className={`${styles.wrap} ${compact ? styles.compact : 'glass-panel'}`}

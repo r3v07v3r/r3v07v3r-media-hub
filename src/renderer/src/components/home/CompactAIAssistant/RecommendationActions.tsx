@@ -65,7 +65,14 @@ interface RecommendationActionsProps {
 }
 
 export function RecommendationActions({ kinds = ['movie', 'series'] }: RecommendationActionsProps) {
-  const { openDetail, pushNotification, catalog, recommendations, homeFeedLive } = useAppState()
+  const {
+    openDetail,
+    pushNotification,
+    catalog,
+    recommendations,
+    homeFeedLive,
+    openControlCentre
+  } = useAppState()
   const [loading, setLoading] = useState<CategoryKind | null>(null)
 
   // A recommendation ends by NAVIGATING (openDetail), which makes a stale
@@ -134,7 +141,10 @@ export function RecommendationActions({ kinds = ['movie', 'series'] }: Recommend
       tone: 'info',
       message: modelDeclined
         ? `Picked "${pick.title}" at random — the model didn't choose from the list.`
-        : `Picked "${pick.title}" at random. Connect a local model in Settings → AI for a real recommendation.`
+        : `Picked "${pick.title}" at random. A real recommendation requires Ollama to be set up.`,
+      ...(modelDeclined
+        ? {}
+        : { action: { label: 'Set up Ollama', run: () => openControlCentre('ai', 'settings-ollama') } })
     })
     openDetail(pick)
   }

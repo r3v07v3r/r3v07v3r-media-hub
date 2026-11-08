@@ -38,6 +38,8 @@ interface CompactAIAssistantProps {
 export function CompactAIAssistant({ kinds }: CompactAIAssistantProps = {}) {
   const available = useOllamaAvailable()
   const ready = useServiceReadiness()
+  // Not asked yet: draw nothing rather than a notice to take back.
+  if (available === null) return null
   if (!available) {
     if (!ready.loaded) return null
     return (
@@ -46,6 +48,7 @@ export function CompactAIAssistant({ kinds }: CompactAIAssistantProps = {}) {
           compact
           services={['ollama']}
           what="Recommendations"
+          plural
           // Saved but not answering: the settings are there, the server is not.
           detail={ready.ollama ? 'Ollama is saved but is not answering right now.' : undefined}
         />

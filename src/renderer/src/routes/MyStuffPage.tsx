@@ -553,6 +553,7 @@ function ListsView({
               compact
               services={['simkl', 'trakt', 'mal']}
               what="Lists from Simkl, Trakt and MyAnimeList"
+              plural
             />
           )}
           {watchlist.length > 0 && (

@@ -57,11 +57,14 @@ export function HomeDashboard() {
   // there (CompactAIAssistant's notice); .assistantNotice lays that out.
   const assistant = useOllamaAvailable()
   const { loaded } = useServiceReadiness()
-  const layout = assistant ? '' : loaded ? styles.assistantNotice : styles.noAssistant
+  // null = the probe has not answered: the hero keeps the column, and the
+  // notice waits, so nothing is drawn that the first answer would remove.
+  const decided = assistant !== null && loaded
+  const layout = assistant ? '' : decided ? styles.assistantNotice : styles.noAssistant
 
   return (
     <div className={`${styles.dashboard} ${layout}`}>
-      {(assistant || loaded) && <CompactAIAssistant />}
+      {(assistant || decided) && <CompactAIAssistant />}
       <FeaturedHero />
       <ContinueWatchingPanel />
       {/* Both rails — Planned and Recommended — live in this one cell,

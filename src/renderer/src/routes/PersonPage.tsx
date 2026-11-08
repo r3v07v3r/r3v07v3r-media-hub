@@ -94,7 +94,7 @@ export default function PersonPage() {
       {nothing && ready.loaded && !ready.tmdb && (
         <>
           <p className={styles.empty}>Nothing else of theirs here yet.</p>
-          <RequiresSetup services={['tmdb']} what="Cast and crew pages" />
+          <RequiresSetup services={['tmdb']} what="Cast and crew pages" plural />
         </>
       )}
 

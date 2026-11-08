@@ -24,14 +24,14 @@ const RECHECK_MIN_GAP_MS = 15_000
  *  address that black-holes, main's own timeout bounds it. */
 const HEARTBEAT_MS = 60_000
 
-let available = false
+let available: boolean | null = null
 let lastAsked = 0
 let inFlight: Promise<void> | null = null
 let heartbeat: number | null = null
 let unsubscribeChanged: (() => void) | null = null
 const listeners = new Set<() => void>()
 
-function publish(next: boolean): void {
+function publish(next: boolean | null): void {
   if (next === available) return
   available = next
   for (const listener of listeners) listener()
@@ -85,10 +85,11 @@ function stop(): void {
 
 /**
  * True while an Ollama with a model is reachable at the address the AI
- * features use. False until the first probe answers — a surface that waits
- * for a yes draws nothing it would have to take back.
+ * features use; null until the first probe answers, so a surface can draw
+ * nothing rather than a "requires Ollama" notice it would have to take
+ * back a moment later; false once a probe has said no.
  */
-export function useOllamaAvailable(): boolean {
+export function useOllamaAvailable(): boolean | null {
   return useSyncExternalStore(subscribe, read)
 }
 
@@ -101,6 +102,6 @@ function subscribe(listener: () => void): () => void {
   }
 }
 
-function read(): boolean {
+function read(): boolean | null {
   return available
 }

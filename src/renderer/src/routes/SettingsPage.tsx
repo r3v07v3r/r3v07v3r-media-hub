@@ -811,7 +811,7 @@ export default function SettingsPage({
   const mediaServerMissing = missingServices(ready, ['mediaServer'])
   const autoSubtitlesRequires =
     subtitlesMissing.length > 0 ? (
-      <RequiresSetup compact services={subtitlesMissing} what="Automatic subtitles" />
+      <RequiresSetup compact services={subtitlesMissing} what="Automatic subtitles" plural />
     ) : undefined
   // Embedded tracks still follow the language, so the field stays usable;
   // the notice is drawn once, under the switch above it.
@@ -1514,7 +1514,7 @@ export default function SettingsPage({
                       series shows the rating for this region. Leave it blank to follow this
                       computer&apos;s own region.
                     </span>
-                    <RequiresSetup compact services={tmdbMissing} what="Age ratings" />
+                    <RequiresSetup compact services={tmdbMissing} what="Age ratings" plural />
                   </div>
                   <span className={styles.field} style={{ flex: '0 0 88px' }}>
                     <input

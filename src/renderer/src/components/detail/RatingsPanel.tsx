@@ -130,7 +130,7 @@ export function RatingsPanel({ media }: { media: MediaItem }) {
             </div>
           )}
           {needsOmdb && (
-            <RequiresSetup compact services={['omdb']} what="Rotten Tomatoes ratings" />
+            <RequiresSetup compact services={['omdb']} what="Rotten Tomatoes ratings" plural />
           )}
         </>
       )}
