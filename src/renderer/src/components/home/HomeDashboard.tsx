@@ -1,5 +1,6 @@
 import { CompactAIAssistant } from './CompactAIAssistant'
 import { useOllamaAvailable } from '@renderer/lib/mediaHub/useOllamaAvailable'
+import { useServiceReadiness } from '@renderer/hooks/useServiceReadiness'
 import { FeaturedHero } from './FeaturedHero/FeaturedHero'
 import { ContinueWatchingPanel } from './ContinueWatchingPanel'
 import { RecommendationCarousel } from './RecommendationCarousel'
@@ -52,11 +53,15 @@ export function HomeDashboard() {
   // has a named area for them, and an empty 258px track beside the hero is
   // the kind of hole a person notices (HomeDashboard.module.css's
   // .noAssistant hands that width to the hero instead).
+  // Once the settings are read, the buttons' place says why they are not
+  // there (CompactAIAssistant's notice); .assistantNotice lays that out.
   const assistant = useOllamaAvailable()
+  const { loaded } = useServiceReadiness()
+  const layout = assistant ? '' : loaded ? styles.assistantNotice : styles.noAssistant
 
   return (
-    <div className={`${styles.dashboard} ${assistant ? '' : styles.noAssistant}`}>
-      {assistant && <CompactAIAssistant />}
+    <div className={`${styles.dashboard} ${layout}`}>
+      {(assistant || loaded) && <CompactAIAssistant />}
       <FeaturedHero />
       <ContinueWatchingPanel />
       {/* Both rails — Planned and Recommended — live in this one cell,

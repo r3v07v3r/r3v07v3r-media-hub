@@ -16,6 +16,8 @@ import { useNavigate, useParams } from 'react-router-dom'
 
 import { MediaGrid } from '@renderer/components/category/MediaGrid'
 import { useAppState } from '@renderer/context/AppStateContext'
+import { RequiresSetup } from '@renderer/components/layout/RequiresSetup'
+import { useServiceReadiness } from '@renderer/hooks/useServiceReadiness'
 import { catalogItemToMediaItem } from '@renderer/lib/mediaHub/adapters'
 import type { MediaItem } from '@renderer/types'
 import type { PersonCreditsResult } from '@shared/media-hub/types'
@@ -79,6 +81,9 @@ export default function PersonPage() {
   const cast = result ? toItems(result.cast) : []
   const creators = result ? toItems(result.creators) : []
   const nothing = loaded && cast.length === 0 && creators.length === 0
+  // Cast and crew come from TMDB. Without a key the background pass has
+  // nothing to fill in, so "over several sessions" would never come true.
+  const ready = useServiceReadiness()
 
   return (
     <div className={styles.wrap}>
@@ -86,7 +91,14 @@ export default function PersonPage() {
 
       {!loaded && <p className={styles.empty}>Looking through your catalog…</p>}
 
-      {nothing && (
+      {nothing && ready.loaded && !ready.tmdb && (
+        <>
+          <p className={styles.empty}>Nothing else of theirs here yet.</p>
+          <RequiresSetup services={['tmdb']} what="Cast and crew pages" />
+        </>
+      )}
+
+      {nothing && ready.loaded && ready.tmdb && (
         <p className={styles.empty}>
           Nothing else of theirs here yet. Cast and crew are filled in over several sessions in the
           background, so a title you opened recently may not have been covered.

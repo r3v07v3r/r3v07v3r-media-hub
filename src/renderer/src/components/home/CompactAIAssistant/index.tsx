@@ -2,6 +2,8 @@
 
 import type { CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
 import { useOllamaAvailable } from '@renderer/lib/mediaHub/useOllamaAvailable'
+import { useServiceReadiness } from '@renderer/hooks/useServiceReadiness'
+import { RequiresSetup } from '@renderer/components/layout/RequiresSetup'
 import { RecommendationActions } from './RecommendationActions'
 import styles from './CompactAIAssistant.module.css'
 
@@ -24,14 +26,32 @@ interface CompactAIAssistantProps {
  * mirror useDashboardLayoutMode's STACKED_QUERY/COMPACT_QUERY), so there
  * is no JS layout-mode branching left to do here.
  *
- * Drawn only while a local model is actually reachable (useOllamaAvailable):
- * the buttons ask Ollama, and two buttons whose only possible outcome is
- * "couldn't reach the server" are not an offer. The dashboard asks the same
- * question to hand the hero this column — see HomeDashboard.
+ * The buttons are drawn only while a local model is actually reachable
+ * (useOllamaAvailable): they ask Ollama, and two buttons whose only possible
+ * outcome is "couldn't reach the server" are not an offer. In their place,
+ * once the settings have been read, a one-line notice with the way to set
+ * Ollama up, so the feature is not simply missing. Nothing at all before
+ * then, so the notice does not flash on a machine where Ollama answers.
+ * The dashboard asks the same questions to lay the column out — see
+ * HomeDashboard.
  */
 export function CompactAIAssistant({ kinds }: CompactAIAssistantProps = {}) {
   const available = useOllamaAvailable()
-  if (!available) return null
+  const ready = useServiceReadiness()
+  if (!available) {
+    if (!ready.loaded) return null
+    return (
+      <div className={styles.notice}>
+        <RequiresSetup
+          compact
+          services={['ollama']}
+          what="Recommendations"
+          // Saved but not answering: the settings are there, the server is not.
+          detail={ready.ollama ? 'Ollama is saved but is not answering right now.' : undefined}
+        />
+      </div>
+    )
+  }
   return (
     <div className={styles.panel} aria-label="Discover something to watch">
       <RecommendationActions kinds={kinds} />

@@ -11,6 +11,8 @@
 // unfiltered list itself is not repeated here: it is Home's row.
 
 import { useAppState } from '@renderer/context/AppStateContext'
+import { RequiresSetup } from '@renderer/components/layout/RequiresSetup'
+import { useServiceReadiness } from '@renderer/hooks/useServiceReadiness'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
 import { Icon } from '@renderer/components/icons/Icon'
 import { MediaCard } from '@renderer/components/home/RecommendationCarousel/MediaCard'
@@ -25,6 +27,7 @@ export default function ForYouPage() {
     useAppState()
   const picks = recommendations
   const empty = picks.length === 0 && recommendationRails.length === 0
+  const ready = useServiceReadiness()
 
   return (
     <div className={`${page.wrap} ${styles.page}`}>
@@ -73,7 +76,13 @@ export default function ForYouPage() {
           {/* Reasons come from the background rebuild's credits pass, so a
               fresh install has Home's row before it has the shelves. Say so
               rather than leave an empty page unexplained. */}
-          {recommendationRails.length === 0 && picks.length > 0 && (
+          {recommendationRails.length === 0 && picks.length > 0 && ready.loaded && !ready.tmdb && (
+            <>
+              <RequiresSetup services={['tmdb']} what="Shelves built from cast and crew" />
+              <p className={styles.note}>In the meantime, the top picks are on Home.</p>
+            </>
+          )}
+          {recommendationRails.length === 0 && picks.length > 0 && ready.loaded && ready.tmdb && (
             <p className={styles.note}>
               Shelves by reason appear once this app has learned what you keep coming back to,
               usually within a few minutes of watching. Until then, the top picks are on Home.

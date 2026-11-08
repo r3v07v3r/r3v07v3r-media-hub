@@ -14,6 +14,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
+import { RequiresSetup } from '@renderer/components/layout/RequiresSetup'
 import { Icon } from '@renderer/components/icons/Icon'
 import { MediaCard } from '@renderer/components/home/RecommendationCarousel/MediaCard'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
@@ -315,13 +316,13 @@ export default function CollectionsPage() {
         Whole universes in order — every film and series, with how far through each you are.
       </p>
       {collections.loaded && !collections.traktReady && window.api?.mediaHub?.collections && (
-        <p className={styles.orderNote}>
-          To add more collections from Trakt, save a Trakt app key under{' '}
-          <Link to="/settings" className={styles.inlineLink}>
-            Settings → Accounts → Tracking
-          </Link>
-          .
-        </p>
+        // The page's own traktReady, not readiness's trakt flag: browsing
+        // needs only the app key, and readiness's flag means signed in.
+        <RequiresSetup
+          services={['trakt']}
+          what="Browsing Trakt lists"
+          detail="A Trakt app key is enough; signing in is not needed."
+        />
       )}
       {browsing && <CollectionBrowser collections={collections} />}
       <ul className={styles.tiles}>

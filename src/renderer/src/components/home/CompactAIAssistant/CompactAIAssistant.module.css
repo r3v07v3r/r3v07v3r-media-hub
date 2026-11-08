@@ -191,3 +191,41 @@
       0 0 12px -6px var(--action-glow);
   }
 }
+
+/* ---------- No local model reachable ----------
+   The notice in place of the two cards (see index.tsx). On the wide
+   layouts the dashboard hands this column to the hero (.assistantNotice
+   in HomeDashboard.module.css), so the notice floats over the hero's
+   lower-left corner, inset by the hero's own padding, on a glass pill so
+   it reads over any artwork. Where the assistant is a full-width strip
+   (the same queries as the block above) it sits in that strip instead. */
+.notice {
+  grid-area: hero;
+  align-self: end;
+  justify-self: start;
+  z-index: 6;
+  max-width: min(560px, calc(100% - 64px));
+  margin: 0 0 24px 32px;
+  padding: 4px 6px 4px 16px;
+  border-radius: var(--radius-pill);
+  background: rgba(6, 10, 18, 0.62);
+  border: 1px solid var(--border-subtle);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+@media (max-width: 1439px) {
+  .notice {
+    max-width: min(520px, calc(100% - 48px));
+    margin: 0 0 18px 24px;
+  }
+}
+@media (max-width: 1099px), (min-width: 1100px) and (max-height: 940px) {
+  .notice {
+    grid-area: assistant;
+    align-self: stretch;
+    justify-self: stretch;
+    max-width: none;
+    margin: 0;
+    border-radius: var(--radius-medium);
+  }
+}
