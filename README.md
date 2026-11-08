@@ -500,7 +500,7 @@ The phone and TV app take in only what Simkl holds and have no such panel. The r
 **Your library** (Control centre → General) holds imports and backups:
 
 - **Bring an existing history in**: IMDb's ratings export (needs nothing) and a Letterboxd "Export
-  Your Data" zip (needs TMDB connected, to match titles; without it the row offers **Set up TMDB**). Both only fill in what is missing.
+  Your Data" zip (needs TMDB connected, to match titles; without it the row offers **Set up TMDB key**). Both only fill in what is missing.
   Imported viewings keep the dates you watched them; imported ratings keep the score but not the
   date.
 - **Trakt history.** A connected Trakt account imports from **Accounts**, or by itself the first

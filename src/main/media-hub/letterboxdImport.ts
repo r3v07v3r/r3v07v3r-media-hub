@@ -183,7 +183,7 @@ export function requireLetterboxdPrerequisites(): void {
   const { apiKey } = tmdbCredentials()
   if (!apiKey) {
     throw new Error(
-      'Importing from Letterboxd requires a TMDB key to be set up. It is under Control centre > Accounts > TMDB.'
+      'Importing from Letterboxd requires a TMDB key to be set up. It is under Control centre → Accounts → TMDB.'
     )
   }
 }

@@ -364,7 +364,7 @@ export async function searchSubtitles(
   const osOn = osConnected()
   if (!subdlOn && !osOn) {
     throw new Error(
-      'Searching for subtitles requires SubDL or OpenSubtitles to be set up. Both are under Control centre > Accounts.'
+      'Searching for subtitles requires SubDL or OpenSubtitles to be set up. Both are under Control centre → Accounts.'
     )
   }
 

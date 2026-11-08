@@ -2347,7 +2347,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         // click, Play next, a party follower's auto-play, Rooms' Watch too
         // and the player's Wrong copy.
         const noSource =
-          /Connect TorBox or a media server/i.test(message) ||
+          /(Connect|requires) TorBox or a media server/i.test(message) ||
           (mediaHubSettings !== null &&
             !mediaHubSettings.torboxConnected &&
             !mediaHubSettings.mediaServerConnected)

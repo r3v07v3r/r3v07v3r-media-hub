@@ -137,14 +137,58 @@ async function main(): Promise<void> {
     assert.match(component, />\s*Set up \{place\.name/)
   })
 
-  await check('scrobbling and two-way sync switches carry the notice', () => {
+  await check('scrobbling, two-way sync and Sync now each carry their notice', () => {
     const section = read('components/settings/WatchlistSyncSection.tsx')
-    const uses = section.match(/<RequiresSetup\b/g)?.length ?? 0
-    assert.ok(uses >= 2, `WatchlistSyncSection.tsx has ${uses} <RequiresSetup>, wants 2`)
+    for (const what of ['Scrobbling', 'Keeping watchlists in sync', 'Syncing watchlists']) {
+      assert.ok(section.includes(`what="${what}"`), `a notice for "${what}"`)
+    }
   })
 
   await check('the automatic subtitles switch carries the notice', () => {
-    assert.match(read('routes/SettingsPage.tsx'), /<RequiresSetup\b/)
+    // Pinned to its own subject: the page has other notices, and any one of
+    // them would otherwise stand in for this switch.
+    assert.match(read('routes/SettingsPage.tsx'), /what="Automatic subtitles"/)
+  })
+
+  await check('every anchored Set up button lands in the section its heading is in', () => {
+    // A heading's section is the settings category its component is rendered
+    // under in SettingsPage (`{shows('accounts') && (` ... up to the next
+    // shows), mapped back to a rail entry by sections.ts.
+    const settingsPage = read('routes/SettingsPage.tsx')
+    const serviceSections = read('routes/MediaHubSettingsSections.tsx')
+    const railFor = new Map<string, string>()
+    const mapText = read('components/controlcentre/sections.ts').split('SETTINGS_CATEGORY_FOR')[1]
+    for (const match of mapText.matchAll(/'?([a-z-]+)'?: '([a-z]+)'/g))
+      railFor.set(match[2], match[1])
+    const blocks: Array<{ category: string; text: string }> = []
+    const starts = [...settingsPage.matchAll(/\{shows\('([a-z]+)'\) && \(/g)]
+    starts.forEach((start, index) => {
+      const end = starts[index + 1]?.index ?? settingsPage.length
+      blocks.push({ category: start[1], text: settingsPage.slice(start.index, end) })
+    })
+    assert.ok(blocks.length >= 6, `found ${blocks.length} settings categories`)
+    // component name -> heading id, from the service sections file.
+    const componentFor = new Map<string, string>()
+    for (const match of serviceSections.matchAll(
+      /export function (\w+)\(\)[\s\S]*?id="(settings-[a-z-]+)"/g
+    )) {
+      componentFor.set(match[2], match[1])
+    }
+    const placeEntries = [...places.matchAll(/section: '([a-z-]+)',\s*anchor: '([a-z-]+)'/g)].map(
+      (match) => ({ section: match[1], anchor: match[2] })
+    )
+    assert.ok(placeEntries.length >= 10, `found ${placeEntries.length} anchored places`)
+    const wrong: string[] = []
+    for (const { section, anchor } of placeEntries) {
+      const component = componentFor.get(anchor)
+      const needle = component ? `<${component} />` : `"${anchor}"`
+      const host = blocks.find((block) => block.text.includes(needle))
+      if (!host) continue // drawn outside SettingsPage (the Caching section)
+      const expected = railFor.get(host.category) ?? host.category
+      if (expected !== section)
+        wrong.push(`${anchor}: setupPlaces says ${section}, drawn in ${expected}`)
+    }
+    assert.deepEqual(wrong, [], wrong.join('; '))
   })
 
   console.log(`\n${pass} passed`)

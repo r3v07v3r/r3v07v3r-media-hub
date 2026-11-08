@@ -294,7 +294,7 @@ function PlayerControls() {
   const sourceMissing = readiness !== null && !readiness.source
   const subtitlesMissing =
     (readiness !== null && !readiness.subtitles) ||
-    /Connect SubDL or OpenSubtitles/i.test(subtitleSearchError ?? '')
+    /(Connect|requires) SubDL or OpenSubtitles/i.test(subtitleSearchError ?? '')
   // Anime4K starts on for anime (anime4kStartsActive), so that is where the
   // missing pack is worth saying; the toggle itself stays undrawn until the
   // pack is on disk.

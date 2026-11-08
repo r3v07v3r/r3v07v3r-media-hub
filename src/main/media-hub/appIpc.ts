@@ -866,7 +866,10 @@ export function registerAppIpc(): void {
       if (!section) throw new Error('Invalid control centre section.')
       const anchor = typeof place?.anchor === 'string' ? place.anchor.slice(0, 128) : undefined
       const mainWindow = getActiveWindow()
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.focus()
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        if (mainWindow.isMinimized()) mainWindow.restore()
+        mainWindow.focus()
+      }
       sendToRenderer(
         MEDIA_HUB_CHANNELS.uiOpenControlCentre,
         anchor ? { section, anchor } : { section }

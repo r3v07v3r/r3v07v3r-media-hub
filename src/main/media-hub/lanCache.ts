@@ -295,13 +295,24 @@ let keySyncedThisRun = false
 async function retryLanCacheKeySync(): Promise<void> {
   const connection = getLanCacheConnection()
   if (!connection || connection.pending) return
-  // A pending change (a removal included) is always sent; the once-a-run
-  // resend needs a key to send.
-  const due =
-    isLanCacheKeySyncPending() ||
-    (!keySyncedThisRun && connection.shareTorbox === true && Boolean(getTorBoxToken()))
+  // A pending change (a removal included) is always sent. The once-a-run
+  // resend sends the key when there is one; with none, it sends only when
+  // the cache still holds a key for this device (a secrets reset, a crash
+  // right after a 401 cleared the token), so that key is taken back and a
+  // keyless launch otherwise sends nothing.
+  const pending = isLanCacheKeySyncPending()
+  const due = pending || (!keySyncedThisRun && connection.shareTorbox === true)
   if (!due) return
   keySyncedThisRun = true
+  if (!pending && !getTorBoxToken()) {
+    const status = await request<LanCacheStatusResponse>(
+      '/api/status',
+      {},
+      undefined,
+      connection
+    ).catch(() => null)
+    if (!status?.torboxLinked || !sameConnection(connection, getLanCacheConnection())) return
+  }
   await syncTorBoxKeyToLanCache()
 }
 
@@ -1006,7 +1017,7 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
       return {
         ok: false,
         message:
-          'Saving your key on the cache server requires TorBox to be set up. It is under Control centre > Media servers > TorBox.'
+          'Saving your key on the cache server requires TorBox to be set up. It is under Control centre → Media servers → TorBox.'
       }
     }
     setLanCacheConnection({ ...connection, shareTorbox: true })

@@ -838,7 +838,7 @@ export function registerRoomsIpc(): void {
       const creds = partySyncCredentials()
       if (!creds.url || !creds.inviteKey) {
         throw new Error(
-          'Creating a room requires the party relay to be set up. It is under Control centre > Community > Watch Party relay.'
+          'Creating a room requires the party relay to be set up. It is under Control centre → Community → Watch Party relay.'
         )
       }
       // membership: true asks the relay for the admission layer a kick
