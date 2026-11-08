@@ -237,9 +237,11 @@ export function RoomsSection() {
                     </button>
                   ) : choosing === key ? (
                     <span className={styles.choiceRow}>
-                      {relayMissing ? (
-                        <RequiresSetup compact services={['relay']} what="Joining them" />
-                      ) : (
+                      {/* Not gated on our relay: the member's party code names
+                          the relay to connect to (watchParty.ts partyJoin), and
+                          roomsJoin by invite needs none either. Only Create,
+                          which mints a room on OUR relay, needs one. */}
+                      {
                         <button
                           type="button"
                           className={styles.joinButton}
@@ -278,7 +280,7 @@ export function RoomsSection() {
                         >
                           Join them
                         </button>
-                      )}
+                      }
                       <button
                         type="button"
                         className={styles.secondaryButton}

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useAppState } from '@renderer/context/AppStateContext'
 import {
   DEFAULT_SERVICE_SETTINGS,
   ServiceConfig,
@@ -163,6 +164,7 @@ function ServiceCard({
  * never silently faking a live connection).
  */
 export function MediaServicesSection() {
+  const { refreshMediaHubSettings } = useAppState()
   const [settings, setSettings] = useState<ServiceSettings>(DEFAULT_SERVICE_SETTINGS)
   const [loaded, setLoaded] = useState(false)
   const [dirty, setDirty] = useState(false)
@@ -205,6 +207,9 @@ export function MediaServicesSection() {
     edited.current.clear()
     setSaving(false)
     setDirty(false)
+    // The snapshot's mediaServerConnected is read at get time, so the
+    // Playback page's Media server choice unlocks as soon as this lands.
+    refreshMediaHubSettings()
   }
 
   if (!loaded) return null

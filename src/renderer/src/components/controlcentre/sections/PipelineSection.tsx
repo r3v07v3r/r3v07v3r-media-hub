@@ -58,7 +58,7 @@ const SECRET_LABEL = {
 } as const
 
 export function PipelineSection({ onNavigate }: { onNavigate?: (section: 'caching') => void }) {
-  const { mediaHubSettings } = useAppState()
+  const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
   const [services, setServices] = useState<ServiceSettings | null>(null)
   /** Which services THIS panel changed, so a save merges them onto the
    *  newest settings rather than replacing the lot. A ref, not state:
@@ -170,6 +170,8 @@ export function PipelineSection({ onNavigate }: { onNavigate?: (section: 'cachin
     edited.current.clear()
     setDirty(false)
     setBusy(false)
+    // A server saved here unlocks the Media server play choice at once.
+    refreshMediaHubSettings()
   }
 
   const runTest = async (): Promise<void> => {
