@@ -375,9 +375,25 @@
     color var(--transition-fast),
     background var(--transition-fast);
 }
+.segmentButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+/* A RequiresSetup notice standing where a row's switch or button was. */
+.rowRequires {
+  flex: 0 1 300px;
+  min-width: 0;
+}
 .segmentButtonActive {
   color: #fff;
   background: linear-gradient(90deg, var(--accent-blue), var(--accent-violet));
+}
+/* A stored choice that cannot act (its service is not set up): an outline
+   where the fill was, so it reads as kept but inert, not as selected. */
+.segmentButtonActive:disabled {
+  color: var(--text-muted);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
 }
 
 .profileGrid {

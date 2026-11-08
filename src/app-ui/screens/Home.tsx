@@ -1,8 +1,9 @@
 import { useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { recommendationRailTitle } from '@shared/media-hub/recommendationReason'
 import type { HomePersonalizedResult } from '@shared/media-hub/types'
 import { api, useAsync } from '../lib/api'
-import { useCatchUp, useLibraryRefresh } from '../lib/librarySync'
+import { requestCatchUp, useCatchUp, useLibraryRefresh } from '../lib/librarySync'
 import { toPosterItem, trackedToPosterItem, type PosterItem } from '../lib/posterItem'
 import { useSlowLoad } from '../lib/useSlowLoad'
 import PosterRow from '../components/PosterRow'
@@ -65,6 +66,8 @@ function buildRails(data: HomePersonalizedResult | null): Rail[] {
 const UPDATING_NOTE_DELAY_MS = 1000
 
 export default function Home() {
+  const navigate = useNavigate()
+  const openSettings = { label: 'Open Settings', onClick: () => navigate('/settings') }
   const { data, error, loading, refresh } = useAsync(() => {
     const mediaHub = api()
     if (!mediaHub) return Promise.reject(new Error('Not connected to a backend.'))
@@ -125,18 +128,28 @@ export default function Home() {
           {/* Linking hands this device the computer's own Simkl sign-in, so
               linking again alone brings back the same refused one. */}
           {report?.signedOut ? (
-            <StatusNote>
+            <StatusNote action={openSettings}>
               Simkl signed this device out. Reconnect Simkl on your computer, then link this device
               again in Settings.
             </StatusNote>
           ) : (
             report?.connected === false &&
             noPersonalRows && (
-              <StatusNote>
+              <StatusNote action={openSettings}>
                 Link your computer in Settings to see what you&apos;re watching and your plan to
                 watch list.
               </StatusNote>
             )
+          )}
+          {/* Said once per report: the retries go on behind it on their own
+              schedule (librarySync.ts), and Try again is one more ask. */}
+          {report?.error && !report.signedOut && !catchUp.inFlight && (
+            <StatusNote
+              tone="error"
+              action={{ label: 'Try again', onClick: () => requestCatchUp() }}
+            >
+              Could not update your lists: {report.error}
+            </StatusNote>
           )}
           <PosterRow title="Continue Watching" items={continueItems} />
           <PosterRow title="Plan to Watch" items={plannedItems} />

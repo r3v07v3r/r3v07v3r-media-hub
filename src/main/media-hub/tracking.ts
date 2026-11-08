@@ -111,6 +111,7 @@ import {
   pushLocalPlanChange,
   plannedSources,
   syncPlannedFromServices,
+  anyWatchlistServiceConnected,
   unplanBecauseWatched,
   type PlannedSyncReport
 } from './watchlists'
@@ -2411,8 +2412,9 @@ export function registerTrackingIpc(): void {
   handle<undefined, PlannedSyncReport>(MEDIA_HUB_CHANNELS.trackingPlannedSync, async () => {
     // The history pushes still owed go first, as at the start of the
     // half-hourly pass: somebody pressing Sync wants the services caught up
-    // in both directions.
-    await retryHistoryPushes('interactive')
+    // in both directions. With no account connected there is nobody to
+    // send them to, and the pull answers at once with each service's line.
+    if (anyWatchlistServiceConnected()) await retryHistoryPushes('interactive')
     const report = await syncPlannedFromServices('interactive')
     return { ...report, historyPending: historyPendingCount(), ...historyPendingSummary() }
   })
@@ -3591,6 +3593,20 @@ export function registerTrackingIpc(): void {
     }
   })
 
+  // Which tracker accounts hold a token, with no request. The renderer's
+  // readiness hook gates controls on this: the status handlers below ask
+  // the service, so with the network down they say "not connected", which
+  // is the wrong answer to "is it set up" and would turn every tracker
+  // control into a Set up notice for as long as the connection is out.
+  handle<undefined, { simkl: boolean; trakt: boolean; mal: boolean }>(
+    MEDIA_HUB_CHANNELS.trackingAccounts,
+    async () => ({
+      simkl: Boolean(simklCredentials().accessToken),
+      trakt: Boolean(traktCredentials().accessToken),
+      mal: Boolean(malCredentials().accessToken)
+    })
+  )
+
   handle<undefined, SimklStatus>(MEDIA_HUB_CHANNELS.simklStatus, async () => {
     const creds = simklCredentials()
     if (!creds.accessToken) return { connected: false, clientId: creds.clientId }
@@ -3689,6 +3705,9 @@ export function registerTrackingIpc(): void {
       // Off unless asked for — see scrobblingEnabled. Nothing goes to either
       // service; the history add at 80% is what records the viewing.
       if (!scrobblingEnabled(readSettings())) return { connected: simklConnected }
+      // Neither service connected: nobody to tell, so the title's push chain
+      // is not even joined.
+      if (!simklConnected && !traktCredentials().accessToken) return { connected: false }
       const progress = Math.min(100, Math.max(0, Number(payload?.progress) || 0))
       // Both services hear the same transitions, independently of each
       // other. This used to sit behind the Simkl-connected check above, so a

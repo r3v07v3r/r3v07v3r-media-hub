@@ -1,6 +1,8 @@
 'use client'
 
 import { useAppState } from '@renderer/context/AppStateContext'
+import { useServiceReadiness } from '@renderer/hooks/useServiceReadiness'
+import { RequiresSetup } from '@renderer/components/layout/RequiresSetup'
 import type { MediaItem } from '@renderer/types'
 import { MAX_RATING, ratingLabel } from '@shared/media-hub/rating'
 import styles from './RatingsPanel.module.css'
@@ -67,6 +69,14 @@ function Gauge({
  */
 export function RatingsPanel({ media }: { media: MediaItem }) {
   const source = ratingSourceFor(media.mediaKind)
+  const ready = useServiceReadiness()
+  // Anime never has a Rotten Tomatoes figure, key or no key, so the notice
+  // is only for films and series.
+  const needsOmdb =
+    ready.loaded &&
+    !ready.omdb &&
+    media.mediaKind !== 'anime' &&
+    media.rottenTomatoesRating === undefined
   const crowd = media.imdbRating ?? media.communityRating
   const gauges: {
     value: number
@@ -109,14 +119,19 @@ export function RatingsPanel({ media }: { media: MediaItem }) {
   // ratings for this" is no reason to withhold the control.
   return (
     <section className={`${styles.panel} glass-panel`} aria-label="Ratings">
-      {gauges.length > 0 && (
+      {(gauges.length > 0 || needsOmdb) && (
         <>
           <h2 className={styles.heading}>Crowd Ratings</h2>
-          <div className={styles.gaugeRow}>
-            {gauges.map((g) => (
-              <Gauge key={g.label} {...g} />
-            ))}
-          </div>
+          {gauges.length > 0 && (
+            <div className={styles.gaugeRow}>
+              {gauges.map((g) => (
+                <Gauge key={g.label} {...g} />
+              ))}
+            </div>
+          )}
+          {needsOmdb && (
+            <RequiresSetup compact services={['omdb']} what="Rotten Tomatoes ratings" plural />
+          )}
         </>
       )}
       <YourRating media={media} />

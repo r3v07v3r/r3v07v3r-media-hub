@@ -74,7 +74,11 @@ import {
   memoryModeEnabled,
   MIN_CACHE_BYTES
 } from './streamCache'
-import { downloadSubtitleText, searchSubtitles } from './subtitlesService'
+import {
+  downloadSubtitleText,
+  searchSubtitles,
+  subtitleProviderConnected
+} from './subtitlesService'
 
 export { mpvPath } from './mpv'
 
@@ -577,6 +581,9 @@ export async function fetchSubtitlesForShortfall(
   since = subtitleChoiceCount()
 ): Promise<void> {
   if (readSettings().autoSubtitlesEnabled === false) return
+  // No provider set up: nothing to ask, and nothing worth logging. The
+  // setting shows a Set up button in its place until one is.
+  if (!subtitleProviderConnected()) return
   const media = getSessionSnapshot()?.media
   // The cache URL, which every session has — a copy played from this disk
   // has no remote link at all, and is as likely to need subtitles as any.

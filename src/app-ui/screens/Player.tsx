@@ -16,6 +16,10 @@ import './Player.css'
 /** How long the controls stay up after the last touch or key while playing. */
 const CONTROLS_IDLE_MS = 4000
 
+/** How long "Loading…" may stand with no duration before the screen says the
+ *  player did not start, rather than leaving it up for good. */
+const START_TIMEOUT_MS = 20_000
+
 function clock(seconds: number): string {
   const total = Math.max(0, Math.floor(seconds))
   const h = Math.floor(total / 3600)
@@ -49,6 +53,23 @@ export default function Player() {
   const paused = state.paused ?? false
   const volume = state.volume ?? 1
   const media = session?.media ?? null
+
+  // Set by a timer, never in the effect's own body: once a duration
+  // arrives the note goes (`notStarted` below), and a later loss of one
+  // starts the wait over. "Keep waiting" bumps the round, which does the
+  // same. A stream mpv never reports a duration for (a growing file) still
+  // moves timePos, so progress also counts as started.
+  const [startTimedOut, setStartTimedOut] = useState(false)
+  const [waitRound, setWaitRound] = useState(0)
+  useEffect(() => {
+    if (duration) return
+    const timer = window.setTimeout(() => setStartTimedOut(true), START_TIMEOUT_MS)
+    return () => {
+      window.clearTimeout(timer)
+      setStartTimedOut(false)
+    }
+  }, [duration, waitRound])
+  const notStarted = startTimedOut && !duration && timePos === 0
 
   const command = useCallback(
     (next: PlayerCommand) => {
@@ -197,10 +218,22 @@ export default function Player() {
         <span className="player-screen__title">{title}</span>
       </div>
 
-      {(state.bufferingForCache || !duration) && (
-        <div className="player-screen__buffering" role="status">
-          Loading…
+      {notStarted ? (
+        <div className="player-screen__stalled">
+          <StatusNote
+            tone="error"
+            action={{ label: 'Back', onClick: () => navigate(-1) }}
+            secondaryAction={{ label: 'Keep waiting', onClick: () => setWaitRound((n) => n + 1) }}
+          >
+            The player did not start. Go back and try again.
+          </StatusNote>
         </div>
+      ) : (
+        (state.bufferingForCache || !duration) && (
+          <div className="player-screen__buffering" role="status">
+            Loading…
+          </div>
+        )
       )}
 
       <div className="player-screen__bottom">

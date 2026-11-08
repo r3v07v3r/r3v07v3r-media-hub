@@ -92,12 +92,14 @@ check('the Watch Party has only Chat and People tabs', () => {
   assert.match(hub, /useState<PartyTab>\('chat'\)/)
 })
 
-check("the host's hint names Control centre, Community and no port", () => {
+check("the host's hint offers the relay's setup place and no port", () => {
   const hub = read('components/party/SessionHub.tsx')
   assert.doesNotMatch(hub, /Forward TCP/)
+  // With no relay set up, the notice and its Set up button (the relay's
+  // place is Control centre -> Community, lib/setupPlaces.ts).
   assert.match(
     hub,
-    /'Local network only\. Connect R3 Party Sync under Control centre → Community for guests outside it\.'/
+    /<RequiresSetup\s+compact\s+services=\{\['relay'\]\}\s+what="Guests outside your network"\s+plural\s+\/>/
   )
 })
 

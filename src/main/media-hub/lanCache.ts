@@ -199,7 +199,9 @@ export async function queueLanCacheJob(payload: LanCacheJobPayload): Promise<boo
       const connection = getLanCacheConnection()
       if (connection && keyRequiredRaisedFor !== connection.token) {
         keyRequiredRaisedFor = connection.token
-        logError('lancache:queue', error)
+        // With no TorBox key in this app the refusal is expected, not a
+        // fault: the key-required notice is the whole story.
+        if (getTorBoxToken()) logError('lancache:queue', error)
         emit({ kind: 'key-required', serverName: connection.name || 'The cache server' })
       }
       return false
@@ -293,9 +295,24 @@ let keySyncedThisRun = false
 async function retryLanCacheKeySync(): Promise<void> {
   const connection = getLanCacheConnection()
   if (!connection || connection.pending) return
-  const due = isLanCacheKeySyncPending() || (!keySyncedThisRun && connection.shareTorbox === true)
+  // A pending change (a removal included) is always sent. The once-a-run
+  // resend sends the key when there is one; with none, it sends only when
+  // the cache still holds a key for this device (a secrets reset, a crash
+  // right after a 401 cleared the token), so that key is taken back and a
+  // keyless launch otherwise sends nothing.
+  const pending = isLanCacheKeySyncPending()
+  const due = pending || (!keySyncedThisRun && connection.shareTorbox === true)
   if (!due) return
   keySyncedThisRun = true
+  if (!pending && !getTorBoxToken()) {
+    const status = await request<LanCacheStatusResponse>(
+      '/api/status',
+      {},
+      undefined,
+      connection
+    ).catch(() => null)
+    if (!status?.torboxLinked || !sameConnection(connection, getLanCacheConnection())) return
+  }
   await syncTorBoxKeyToLanCache()
 }
 
@@ -404,8 +421,9 @@ export async function promoteIfApproved(): Promise<'none' | 'pending' | 'approve
 
   // And the key, which could not be sent while pending because a pending
   // token authorises nothing. Sent before the toast so the toast can say
-  // whether it is saved.
-  const keySaved = await syncTorBoxKeyToLanCache()
+  // whether it is saved. With no TorBox key there is nothing to send: a
+  // device approved just now holds no key on the cache to remove.
+  const keySaved = getTorBoxToken() ? await syncTorBoxKeyToLanCache() : false
   // Said out loud: the request may have been made by the launch-time search
   // hours ago, with no panel open to see the answer arrive.
   emit({ kind: 'approved', serverName: answer.serverName ?? connection.name, keySaved })
@@ -579,7 +597,10 @@ export async function askToJoin(
     // Pairing is what grants the player access to this LAN host.
     refreshTrustedHostsRef?.()
 
-    const keySaved = options.shareTorboxToken ? await syncTorBoxKeyToLanCache() : false
+    // No TorBox key: nothing to send, and a new pairing holds none to remove.
+    // The consent is still remembered above, so a key saved later follows.
+    const keySaved =
+      options.shareTorboxToken && getTorBoxToken() ? await syncTorBoxKeyToLanCache() : false
     return {
       ok: true,
       serverName,
@@ -711,7 +732,10 @@ export async function runLanCacheAutoConnect(
   for (const server of found) {
     const result = await askToJoin(server.url, {
       // The cache fetches each person's requests with their own key, so a
-      // join it cannot fetch for is no use; the joining toast says so.
+      // join it cannot fetch for is no use; the joining toast says so. Kept
+      // with no TorBox key too: nothing is sent until one is saved (askToJoin
+      // and the sync both check), and a key saved after this launch-time
+      // join then reaches the cache without anyone asking again.
       shareTorboxToken: true,
       // Re-asked after the search: Leave may have been pressed meanwhile.
       stillWanted: () => !getLanCacheConnection() && isLanCacheAutoJoinOn()
@@ -992,7 +1016,8 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
     if (!getTorBoxToken()) {
       return {
         ok: false,
-        message: 'Add your TorBox key under Control centre → Media servers first.'
+        message:
+          'Saving your key on the cache server requires TorBox to be set up. It is under Control centre → Media servers → TorBox.'
       }
     }
     setLanCacheConnection({ ...connection, shareTorbox: true })

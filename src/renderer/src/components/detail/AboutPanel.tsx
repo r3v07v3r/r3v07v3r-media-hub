@@ -5,6 +5,8 @@ import type { MediaItem } from '@renderer/types'
 import type { DetailAdapterConfig } from '@renderer/lib/mediaHub/detailAdapters'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { formatReleaseDate, isFutureRelease } from '@renderer/lib/mediaHub/releaseDate'
+import { useServiceReadiness } from '@renderer/hooks/useServiceReadiness'
+import { RequiresSetup } from '@renderer/components/layout/RequiresSetup'
 import styles from './AboutPanel.module.css'
 
 const COLLAPSE_LENGTH = 320
@@ -63,7 +65,17 @@ function useContentRating(media: MediaItem): { rating: string; region: string } 
   return result.value.rating ? result.value : null
 }
 
-export function AboutPanel({ media, config }: { media: MediaItem; config: DetailAdapterConfig }) {
+export function AboutPanel({
+  media,
+  config,
+  metaLoaded = true
+}: {
+  media: MediaItem
+  config: DetailAdapterConfig
+  /** False while the detail page is still fetching the full record: the
+   *  card's seed item has no cast yet, and the fetch may bring some. */
+  metaLoaded?: boolean
+}) {
   const certificate = useContentRating(media)
   const [expanded, setExpanded] = useState(false)
   const description = media.description ?? ''
@@ -71,6 +83,19 @@ export function AboutPanel({ media, config }: { media: MediaItem; config: Detail
   const shown = !isLong || expanded ? description : `${description.slice(0, COLLAPSE_LENGTH)}…`
   const unreleased = isFutureRelease(media.releaseDate)
   const formattedReleaseDate = unreleased ? formatReleaseDate(media.releaseDate) : null
+  const ready = useServiceReadiness()
+  // Cast, crew and the age certificate all come from TMDB. Without a key
+  // they are simply absent, so say once where they would be and how to get
+  // them, rather than a line per missing fact. Anime has none of these from
+  // any source, so it is not told to set TMDB up for them.
+  const kind = media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie')
+  const needsTmdb =
+    metaLoaded &&
+    ready.loaded &&
+    !ready.tmdb &&
+    kind !== 'anime' &&
+    !media.cast?.length &&
+    !media.creators?.length
 
   return (
     <section
@@ -151,6 +176,9 @@ export function AboutPanel({ media, config }: { media: MediaItem; config: Detail
           </div>
         ) : null}
       </dl>
+      {needsTmdb && (
+        <RequiresSetup compact services={['tmdb']} what="Cast, crew and age ratings" plural />
+      )}
       {media.cast?.length ? (
         <div className={styles.people}>
           <h3 className={styles.subheading}>Cast</h3>

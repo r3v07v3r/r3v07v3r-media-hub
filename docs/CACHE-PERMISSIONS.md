@@ -57,7 +57,8 @@ only ever billed its own owner's account, never a housemate's**. `server.ts` alr
 
 **The key rule now.** Each person's TorBox key is saved on the cache and used only for their own
 requests. The app saves it whenever it joins, by hand or by the launch search (the Join panel's
-consent box is ticked by default), saves it again when the key changes in the app, and removes it
+consent box is ticked by default), if it holds a key then (with none it sends nothing, and keeps
+the consent so a key saved later follows), saves it again when the key changes in the app, and removes it
 when the key is removed. `POST /api/jobs` refuses a device with no saved key with 403
 `torbox-key-required` and queues nothing for it, so its request can never be fetched with another
 person's key. The check comes after the dedupe: a file already cached is still granted to that

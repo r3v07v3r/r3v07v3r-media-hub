@@ -14,7 +14,7 @@ import { RESOLUTION_STEPS } from '../../shared/media-hub/streamQuality'
  *  no source to fetch it from. Thrown only after both cache tiers have
  *  missed — see answerFromCacheTiers. */
 export const NO_PLAYBACK_SOURCE_MESSAGE =
-  "This title isn't on this computer or a paired cache server. Connect TorBox or a media server in Settings to play it."
+  "This title isn't on this computer or a paired cache server. Playing it requires TorBox or a media server to be set up. Both are under Control centre → Media servers."
 
 /** Which sources are configured right now. */
 export interface ResolveSources {

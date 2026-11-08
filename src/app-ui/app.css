@@ -160,6 +160,19 @@ html {
   color: var(--accent-orange);
 }
 
+/* A note with its one button (StatusNote's `action`): the words, then the
+   button beside them, wrapping under them on a narrow phone. */
+.status-note--action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.status-note__action {
+  padding: 0.25rem 0.75rem;
+}
+
 .browse-sentinel {
   height: 1px;
 }

@@ -36,7 +36,7 @@ export interface Collections {
 
 export function useCollections(): Collections {
   const api = window.api?.mediaHub?.collections
-  const { activeProfileId } = useAppState()
+  const { activeProfileId, mediaHubSettings } = useAppState()
   const [state, setState] = useState<CollectionsState>(EMPTY)
   const [loaded, setLoaded] = useState(() => !api?.state)
   const [generation, setGeneration] = useState(0)
@@ -74,7 +74,8 @@ export function useCollections(): Collections {
     return () => {
       cancelled = true
     }
-  }, [api, generation, activeProfileId])
+    // The snapshot changes when a service key is saved; traktReady follows.
+  }, [api, generation, activeProfileId, mediaHubSettings])
 
   const all = useMemo(() => [...UNIVERSES, ...state.added], [state.added])
   const shown = useMemo(

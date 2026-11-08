@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
+import { RequiresSetup } from '@renderer/components/layout/RequiresSetup'
 import { useAsyncAction } from '@renderer/hooks/useAsyncAction'
+import { missingServices, useServiceReadiness } from '@renderer/hooks/useServiceReadiness'
 import { AboutUpdateSection } from './AboutUpdateSection'
 import { DevicePairingSection } from './DevicePairingSection'
 import { MediaServicesSection } from './MediaServicesSection'
@@ -210,7 +212,9 @@ function SegmentedRow({
   description,
   value,
   options,
-  onChange
+  onChange,
+  disabledValues,
+  notice
 }: {
   icon: string
   title: string
@@ -218,6 +222,10 @@ function SegmentedRow({
   value: string
   options: { value: string; label: string }[]
   onChange: (v: string) => void
+  /** Choices that cannot act yet (their service is not set up). */
+  disabledValues?: readonly string[]
+  /** Under the description: the RequiresSetup notice that says why. */
+  notice?: ReactNode
 }) {
   return (
     <div className={`${styles.row} ${styles.rowSegmented}`}>
@@ -227,6 +235,7 @@ function SegmentedRow({
       <div className={styles.rowText}>
         <span className={styles.rowTitle}>{title}</span>
         <span className={styles.rowDescription}>{description}</span>
+        {notice}
       </div>
       <div className={styles.segmentGroup} role="radiogroup" aria-label={title}>
         {options.map((option) => (
@@ -235,6 +244,8 @@ function SegmentedRow({
             type="button"
             role="radio"
             aria-checked={value === option.value}
+            disabled={disabledValues?.includes(option.value)}
+            aria-disabled={disabledValues?.includes(option.value) || undefined}
             className={`${styles.segmentButton} ${value === option.value ? styles.segmentButtonActive : ''}`}
             onClick={() => onChange(option.value)}
           >
@@ -359,13 +370,17 @@ function ToggleRow({
   title,
   description,
   checked,
-  onChange
+  onChange,
+  requires
 }: {
   icon: string
   title: string
   description: string
   checked: boolean
   onChange: (v: boolean) => void
+  /** Drawn in place of the switch when the service it needs is not set
+   *  up, so a switch never reads On while it can do nothing. */
+  requires?: ReactNode
 }) {
   return (
     <div className={styles.row}>
@@ -376,16 +391,20 @@ function ToggleRow({
         <span className={styles.rowTitle}>{title}</span>
         <span className={styles.rowDescription}>{description}</span>
       </div>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        aria-label={title}
-        className={`${styles.switch} ${checked ? styles.switchOn : ''}`}
-        onClick={() => onChange(!checked)}
-      >
-        <span className={styles.switchThumb} />
-      </button>
+      {requires ? (
+        <div className={styles.rowRequires}>{requires}</div>
+      ) : (
+        <button
+          type="button"
+          role="switch"
+          aria-checked={checked}
+          aria-label={title}
+          className={`${styles.switch} ${checked ? styles.switchOn : ''}`}
+          onClick={() => onChange(!checked)}
+        >
+          <span className={styles.switchThumb} />
+        </button>
+      )}
     </div>
   )
 }
@@ -396,17 +415,23 @@ function ToggleRow({
 function ActionRow({
   icon,
   title,
+  titleId,
   description,
   label,
   busy,
-  onClick
+  onClick,
+  requires
 }: {
   icon: string
   title: string
+  /** A heading id, for a row a RequiresSetup button elsewhere points at. */
+  titleId?: string
   description: string
   label: string
   busy?: boolean
   onClick: () => void
+  /** Drawn in place of the button when the service it needs is not set up. */
+  requires?: ReactNode
 }) {
   return (
     <div className={styles.row}>
@@ -414,12 +439,18 @@ function ActionRow({
         <Icon name={icon} size={17} />
       </div>
       <div className={styles.rowText}>
-        <span className={styles.rowTitle}>{title}</span>
+        <span id={titleId} className={styles.rowTitle}>
+          {title}
+        </span>
         <span className={styles.rowDescription}>{description}</span>
       </div>
-      <button type="button" className={styles.testButton} disabled={busy} onClick={onClick}>
-        {busy ? 'Working…' : label}
-      </button>
+      {requires ? (
+        <div className={styles.rowRequires}>{requires}</div>
+      ) : (
+        <button type="button" className={styles.testButton} disabled={busy} onClick={onClick}>
+          {busy ? 'Working…' : label}
+        </button>
+      )}
     </div>
   )
 }
@@ -773,6 +804,23 @@ export default function SettingsPage({
     refreshProfiles,
     reloadLibrary
   } = useAppState()
+  // What the gated rows below need. Each list is empty until readiness has
+  // loaded, so no notice flashes before the snapshot answers.
+  const ready = useServiceReadiness()
+  const subtitlesMissing = missingServices(ready, ['subdl', 'opensubtitles'])
+  const tmdbMissing = missingServices(ready, ['tmdb'])
+  const mediaServerMissing = missingServices(ready, ['mediaServer'])
+  const autoSubtitlesRequires =
+    subtitlesMissing.length > 0 ? (
+      <RequiresSetup compact services={subtitlesMissing} what="Automatic subtitles" plural />
+    ) : undefined
+  // Embedded tracks still follow the language, so the field stays usable;
+  // the notice is drawn once, under the switch above it.
+  const subtitleLanguageDescription = `Language to search for, both automatically and in the Subtitles menu.${
+    subtitlesMissing.length > 0
+      ? ' Online search needs a subtitle provider; subtitles inside the file follow the language either way.'
+      : ''
+  }`
   // null = no form open, 'new' = create form, otherwise the id of the
   // profile being edited.
   const [editingProfile, setEditingProfile] = useState<string | 'new' | null>(null)
@@ -1226,11 +1274,12 @@ export default function SettingsPage({
                 description="Fetch and apply a matching subtitle as soon as a title starts playing."
                 checked={mediaHubSettings?.autoSubtitlesEnabled ?? true}
                 onChange={handleSetAutoSubtitles}
+                requires={autoSubtitlesRequires}
               />
               <SegmentedRow
                 icon="planet"
                 title="Subtitle language"
-                description="Language to search for, both automatically and in the Subtitles menu."
+                description={subtitleLanguageDescription}
                 value={mediaHubSettings?.subtitleLanguage ?? 'en'}
                 options={SUBTITLE_LANGUAGE_OPTIONS}
                 onChange={handleSetSubtitleLanguage}
@@ -1337,6 +1386,7 @@ export default function SettingsPage({
                 <ActionRow
                   icon="cpu"
                   title="Anime4K shaders"
+                  titleId="settings-anime4k"
                   description={
                     anime4kStatus?.state === 'installed'
                       ? 'Installed. Neural-network shaders that restore line art and upscale anime on the GPU while it plays. While Use Anime4K while watching is on, the player has an on/off button and the A key.'
@@ -1406,10 +1456,19 @@ export default function SettingsPage({
                 <ActionRow
                   icon="movies"
                   title="Import from Letterboxd"
-                  description="Reads the diary and ratings from Letterboxd's Export Your Data (Settings → Data → Export). Needs TMDB connected above to match titles, and only imports one it can match exactly — this can take a few minutes for a large diary."
+                  description="Reads the diary and ratings from Letterboxd's Export Your Data (Settings → Data → Export). Titles are matched through TMDB, and only one it can match exactly is imported — this can take a few minutes for a large diary."
                   label="Import…"
                   busy={backupBusy === 'letterboxd'}
                   onClick={handleImportLetterboxd}
+                  requires={
+                    tmdbMissing.length > 0 ? (
+                      <RequiresSetup
+                        compact
+                        services={tmdbMissing}
+                        what="Importing from Letterboxd"
+                      />
+                    ) : undefined
+                  }
                 />
               </section>
 
@@ -1456,6 +1515,7 @@ export default function SettingsPage({
                       series shows the rating for this region. Leave it blank to follow this
                       computer&apos;s own region.
                     </span>
+                    <RequiresSetup compact services={tmdbMissing} what="Age ratings" plural />
                   </div>
                   <span className={styles.field} style={{ flex: '0 0 88px' }}>
                     <input
@@ -1493,11 +1553,12 @@ export default function SettingsPage({
                   description="Fetch and apply a matching subtitle as soon as a title starts playing."
                   checked={mediaHubSettings?.autoSubtitlesEnabled ?? true}
                   onChange={handleSetAutoSubtitles}
+                  requires={autoSubtitlesRequires}
                 />
                 <SegmentedRow
                   icon="planet"
                   title="Subtitle language"
-                  description="Language to search for, both automatically and in the Subtitles menu."
+                  description={subtitleLanguageDescription}
                   value={mediaHubSettings?.subtitleLanguage ?? 'en'}
                   options={SUBTITLE_LANGUAGE_OPTIONS}
                   onChange={handleSetSubtitleLanguage}
@@ -1550,6 +1611,12 @@ export default function SettingsPage({
                   value={mediaHubSettings?.sourcePreference ?? 'balanced'}
                   options={SOURCE_PREFERENCE_OPTIONS}
                   onChange={(value) => setSourcePreference(value as SourcePreference)}
+                  // A stored "Media server" stays as it is; the notice says
+                  // why it has nothing to prefer yet.
+                  disabledValues={mediaServerMissing.length > 0 ? ['prefer-local'] : undefined}
+                  notice={
+                    <RequiresSetup compact services={mediaServerMissing} what="This choice" />
+                  }
                 />
                 <div className={styles.row}>
                   <div className={styles.rowIcon} aria-hidden="true">

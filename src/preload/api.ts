@@ -663,6 +663,10 @@ export function createApi(transport: ApiTransport) {
          *  known yet. No request. */
         unsentSeasons: (id: string, seasons: number[]): Promise<UnsentAnimeSeason[]> =>
           transport.invoke(MEDIA_HUB_CHANNELS.trackingUnsentSeasons, { id, seasons }),
+        /** Which tracker accounts hold a token: set up, whether or not the
+         *  service answers right now. No request. */
+        accounts: (): Promise<{ simkl: boolean; trakt: boolean; mal: boolean }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.trackingAccounts),
         toggle: (item: TrackableItem): Promise<{ tracked: boolean }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.trackingToggle, item),
         /** Undo of a Remove from plan made through toggle: the removed row
@@ -1103,7 +1107,20 @@ export function createApi(transport: ApiTransport) {
         isFullscreen: (): Promise<{ fullScreen: boolean }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.windowIsFullscreen),
         onFullscreenChange: (onEvent: (payload: { fullScreen: boolean }) => void): (() => void) =>
-          subscribe<{ fullScreen: boolean }>(MEDIA_HUB_CHANNELS.windowFullscreenChanged, onEvent)
+          subscribe<{ fullScreen: boolean }>(MEDIA_HUB_CHANNELS.windowFullscreenChanged, onEvent),
+        /** The player overlay's setup buttons: open the control centre in the
+         *  MAIN window at a section (and heading), and bring that window to
+         *  the front. The overlay has no AppStateContext of its own. */
+        openControlCentre: (place: { section: string; anchor?: string }): Promise<{ ok: true }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.uiOpenControlCentre, place),
+        /** The main window's half: main forwards the overlay's request here. */
+        onOpenControlCentre: (
+          onEvent: (place: { section: string; anchor?: string }) => void
+        ): (() => void) =>
+          subscribe<{ section: string; anchor?: string }>(
+            MEDIA_HUB_CHANNELS.uiOpenControlCentre,
+            onEvent
+          )
       },
 
       profiles: {

@@ -25,7 +25,7 @@ import type {
   UnsentService
 } from '../../shared/media-hub/types'
 import { parseImdbRatingsCsv } from '../../shared/media-hub/importCsv'
-import { importLetterboxdLibrary } from './letterboxdImport'
+import { importLetterboxdLibrary, requireLetterboxdPrerequisites } from './letterboxdImport'
 import { readBackup } from './backup'
 import { backupBeforeRewrite } from './autoBackup'
 import { requestRecommendationsRebuild } from './recommendations'
@@ -33,6 +33,7 @@ import { watchRegion } from './watchProviders'
 import { keepAnimeHistoryWithShows } from './animeSyncRepair'
 import { unsentAnimeSeasons } from './animeSeasons'
 import { getDatabase } from './dbState'
+import { getActiveWindow, sendToRenderer } from './rendererBridge'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { takeSecretsResetNotice } from './secretStorage'
@@ -437,6 +438,9 @@ export function registerAppIpc(): void {
   })
 
   handle<undefined, ImportSummary | null>(MEDIA_HUB_CHANNELS.importLetterboxd, async (event) => {
+    // Before the picker: choosing a file only to be told the key is missing
+    // is the order the renderer's notice exists to prevent.
+    requireLetterboxdPrerequisites()
     const win = BrowserWindow.fromWebContents(event.sender)
     const options = {
       title: 'Import from Letterboxd',
@@ -849,4 +853,28 @@ export function registerAppIpc(): void {
   handle<undefined, { fullScreen: boolean }>(MEDIA_HUB_CHANNELS.windowIsFullscreen, () => {
     return { fullScreen: mainWindowFullscreenTarget() }
   })
+
+  // The player overlay's "Set up …" buttons. The overlay is its own window
+  // with no control centre, so the request is handed to the main window as a
+  // push on the same channel, and that window comes to the front with the
+  // keyboard. Only strings of a sane length travel on; the main window checks
+  // the section against its own list before opening anything.
+  handle<{ section?: unknown; anchor?: unknown } | undefined, { ok: true }>(
+    MEDIA_HUB_CHANNELS.uiOpenControlCentre,
+    (_event, place) => {
+      const section = typeof place?.section === 'string' ? place.section.slice(0, 64) : ''
+      if (!section) throw new Error('Invalid control centre section.')
+      const anchor = typeof place?.anchor === 'string' ? place.anchor.slice(0, 128) : undefined
+      const mainWindow = getActiveWindow()
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        if (mainWindow.isMinimized()) mainWindow.restore()
+        mainWindow.focus()
+      }
+      sendToRenderer(
+        MEDIA_HUB_CHANNELS.uiOpenControlCentre,
+        anchor ? { section, anchor } : { section }
+      )
+      return { ok: true }
+    }
+  )
 }

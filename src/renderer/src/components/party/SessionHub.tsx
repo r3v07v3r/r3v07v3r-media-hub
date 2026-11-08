@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
+import { RequiresSetup } from '@renderer/components/layout/RequiresSetup'
 import { RoomsSection } from './RoomsSection'
 import styles from './SessionHub.module.css'
 
@@ -180,13 +181,31 @@ export function SessionHub() {
             </button>
           )}
 
-          {isHost && partyWanAvailable !== null && (
-            <p className={partyWanAvailable ? styles.reachabilityGood : styles.reachabilityWarning}>
-              {partyWanAvailable
-                ? 'Invite works across the internet.'
-                : 'Local network only. Connect R3 Party Sync under Control centre → Community for guests outside it.'}
-            </p>
-          )}
+          {/* Local network only: with no relay set up, the notice and its
+              button say how to reach guests outside your network; with one set up
+              that did not answer, the plain line says so. */}
+          {isHost &&
+            partyWanAvailable === false &&
+            mediaHubSettings &&
+            !mediaHubSettings.partySyncConnected && (
+              <RequiresSetup
+                compact
+                services={['relay']}
+                what="Guests outside your network"
+                plural
+              />
+            )}
+          {isHost &&
+            partyWanAvailable !== null &&
+            (partyWanAvailable || mediaHubSettings?.partySyncConnected === true) && (
+              <p
+                className={partyWanAvailable ? styles.reachabilityGood : styles.reachabilityWarning}
+              >
+                {partyWanAvailable
+                  ? 'Invite works across the internet.'
+                  : 'Local network only. The party relay did not answer, so guests outside your network cannot join yet.'}
+              </p>
+            )}
 
           <div className={styles.tabs} role="tablist" aria-label="Watch Party sections">
             {(

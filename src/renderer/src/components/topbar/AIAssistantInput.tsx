@@ -83,8 +83,13 @@ export function AIAssistantInput() {
     closeAssistant,
     categorySearch,
     runCategorySearch,
-    clearCategorySearch
+    clearCategorySearch,
+    mediaHubSettings
   } = useAppState()
+  // The search half works with no model; "ask" is promised only while one
+  // is set up. Until the snapshot lands, the field reads as it always has.
+  const canAsk = mediaHubSettings?.ollamaConnected !== false
+  const assistantLabel = canAsk ? 'Search or ask R3' : 'Search'
   const [value, setValue] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
   const pathname = useLocation().pathname
@@ -173,8 +178,9 @@ export function AIAssistantInput() {
           // Off a category page this field searches the whole catalog
           // AND asks the model about what it finds (see
           // AppStateContext's runAssistantQuery), so the placeholder no
-          // longer offers only the second half of that.
-          placeholder={category ? `Search ${category.label}…` : 'Search or ask R3…'}
+          // longer offers only the second half of that. With no model set
+          // up it offers only the half that works.
+          placeholder={category ? `Search ${category.label}…` : `${assistantLabel}…`}
           value={value}
           onChange={(e) => {
             const next = e.target.value
@@ -191,7 +197,7 @@ export function AIAssistantInput() {
             if (assistantState === 'focused') setAssistantState('idle')
           }}
           onKeyDown={handleKeyDown}
-          aria-label={category ? `Search ${category.label}` : 'Search or ask R3'}
+          aria-label={category ? `Search ${category.label}` : assistantLabel}
         />
         {/* Only while a search is actually standing. The search outlives
             navigating away and back now, so it needs a way out from the

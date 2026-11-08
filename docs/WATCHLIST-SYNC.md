@@ -383,7 +383,9 @@ the catch-up never write over each other's changes. **Sync now** pressed
 while the half-hourly pull is running waits for that pull to finish and
 then reads every service again, because the running pull may have asked
 before something was added on the web. The button stays on Syncing… through
-both. The catch-up waits the same way.
+both. The catch-up waits the same way. With no service connected the
+panel shows a **Set up** button in its place, and a pull asked for anyway
+returns at once, every line "not connected", with no request and no retry.
 
 The record of what was read is kept per profile and per Simkl account, and
 is shared with the catch-up on the same device (below), so the two of them

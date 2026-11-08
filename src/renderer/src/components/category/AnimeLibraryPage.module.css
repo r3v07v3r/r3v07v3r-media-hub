@@ -992,3 +992,23 @@
   font-size: 11px;
   color: var(--text-muted);
 }
+
+/* The household index notice, kept to the row's one line: the shared
+   notice wraps by default, which would grow the hero. */
+.householdSetup {
+  min-width: 0;
+}
+.householdSetup > [role='status'] {
+  flex-wrap: nowrap;
+  gap: 8px;
+  padding: 0;
+}
+.householdSetup > [role='status'] > p {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-muted);
+}

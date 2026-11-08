@@ -5,6 +5,8 @@ import { useLocation, useSearchParams } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { useOverlayActions } from '@renderer/context/OverlayContext'
 import { Icon } from '@renderer/components/icons/Icon'
+import { RequiresSetup } from '@renderer/components/layout/RequiresSetup'
+import { useServiceReadiness } from '@renderer/hooks/useServiceReadiness'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { resolveArtwork } from '@renderer/lib/artwork'
 import { mergedSeasonsLabel, parseRating } from '@shared/media-hub/catalogFields'
@@ -1032,6 +1034,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
   const [householdPaired, setHouseholdPaired] = useState(false)
   const [householdNote, setHouseholdNote] = useState<string | null>(null)
   const [askingHousehold, setAskingHousehold] = useState(false)
+  const ready = useServiceReadiness()
   useEffect(() => {
     let cancelled = false
     window.api?.mediaHub?.lanCache
@@ -1375,6 +1378,18 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
                   <Icon name="refresh" size={12} />
                   {askingHousehold ? 'Asking…' : 'Refresh household index'}
                 </button>
+              )}
+              {/* Where the button would be, on one line so the hero does not
+                  grow. Its own click must not open the featured title. */}
+              {!householdPaired && ready.loaded && !ready.lanCache && (
+                <span
+                  className={styles.householdSetup}
+                  // The line is cut to fit; the whole sentence on hover.
+                  title="The household index requires a cache server to be set up."
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <RequiresSetup compact services={['lanCache']} what="The household index" />
+                </span>
               )}
               {householdNote && !askingHousehold && (
                 <span className={styles.deepScanNote}>{householdNote}</span>

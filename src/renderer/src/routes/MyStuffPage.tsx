@@ -13,6 +13,8 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
+import { RequiresSetup } from '@renderer/components/layout/RequiresSetup'
+import { useServiceReadiness } from '@renderer/hooks/useServiceReadiness'
 import { useCatalogByIds } from '@renderer/lib/mediaHub/useCatalogByIds'
 import { Icon } from '@renderer/components/icons/Icon'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
@@ -285,6 +287,7 @@ function ListsView({
     useAppState()
   const indexRevision = `${catalogKindStates.movie}:${catalogKindStates.series}:${catalogKindStates.anime}`
   const [filters, setFilters] = useState<PlannedFilterState>(EMPTY_PLANNED_FILTERS)
+  const ready = useServiceReadiness()
 
   // No sync button here: Sync now on the Watchlists panel runs the same pull and
   // shows when it last ran and what each service reported.
@@ -543,6 +546,16 @@ function ListsView({
                 : 'Anything you mark Plan to Watch appears here, along with your Simkl, Trakt and MyAnimeList lists.'
             }
           />
+          {/* Planning works locally without any of them; this only says where
+              the remote lists would come from. */}
+          {watchlist.length === 0 && ready.loaded && !ready.tracker && (
+            <RequiresSetup
+              compact
+              services={['simkl', 'trakt', 'mal']}
+              what="Lists from a tracker"
+              plural
+            />
+          )}
           {watchlist.length > 0 && (
             <p className={styles.footnote}>
               Right-click a title to take it off the plan, mark it watched, or set it aside.

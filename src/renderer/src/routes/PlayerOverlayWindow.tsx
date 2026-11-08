@@ -68,6 +68,7 @@ import {
   videoScalingLabel
 } from '@shared/media-hub/videoScaling'
 import { anime4kModeLabel } from '@shared/media-hub/anime4k'
+import { SETUP_PLACES, nameServices, type SetupService } from '@renderer/lib/setupPlaces'
 import styles from './PlayerOverlayWindow.module.css'
 
 const CONTROLS_IDLE_MS = 3200
@@ -96,7 +97,56 @@ const SCRUB_PREVIEW_WIDTH = 160
  *  live; there is no re-render of anything. */
 const SUBTITLE_DELAY_STEP = 0.25
 
-type Menu = 'audio' | 'subtitles' | 'fit' | 'scaling' | 'picture' | 'playback' | 'info' | null
+type Menu =
+  'audio' | 'subtitles' | 'fit' | 'scaling' | 'picture' | 'playback' | 'info' | 'anime4k' | null
+
+/** What the overlay needs to know is set up, read from the settings snapshot.
+ *  This window has no AppStateContext (and so no useServiceReadiness), so it
+ *  reads the snapshot itself: on mount, and again as a menu that depends on
+ *  it opens, since a service set up meanwhile in the main window should show
+ *  here without a restart. */
+interface OverlayReadiness {
+  /** TorBox or a media server: something to fetch another copy from. */
+  source: boolean
+  /** SubDL or OpenSubtitles. */
+  subtitles: boolean
+  anime4kInstalled: boolean
+}
+
+async function fetchOverlayReadiness(): Promise<OverlayReadiness | null> {
+  const settings = await window.api?.mediaHub?.settings.get().catch(() => null)
+  if (!settings) return null
+  return {
+    source: settings.torboxConnected === true || settings.mediaServerConnected === true,
+    subtitles: settings.subdlConnected === true || settings.osConnected === true,
+    anime4kInstalled: settings.anime4k?.installed === true
+  }
+}
+
+/** The overlay's own "requires ... to be set up" line, in its menu styling.
+ *  RequiresSetup cannot be used here: it opens the control centre through
+ *  useAppState, which only the main window has. */
+function OverlaySetupLine({
+  sentence,
+  service,
+  label,
+  onSetUp
+}: {
+  sentence: string
+  service: SetupService
+  /** The button's text; "Set up <service>" when left out. */
+  label?: string
+  onSetUp: (service: SetupService) => void
+}) {
+  return (
+    <div role="status" data-requires-setup={service}>
+      <p className={styles.menuNote}>{sentence}</p>
+      <button type="button" className={styles.menuItem} onClick={() => onSetUp(service)}>
+        {label ?? `Set up ${SETUP_PLACES[service].name.replace(/^(a|an|the) /, '')}`}
+      </button>
+    </div>
+  )
+}
 
 /** What the speed control offers. 1 is listed with the rest rather than being
  *  a separate "reset", because it is the value people come back to and hunting
@@ -148,6 +198,7 @@ function PlayerControls() {
     results: SubtitleResult[]
   } | null>(null)
   const [subtitleSearchError, setSubtitleSearchError] = useState<string | null>(null)
+  const [readiness, setReadiness] = useState<OverlayReadiness | null>(null)
   const [pendingSubtitleId, setPendingSubtitleId] = useState<string | null>(null)
   const [subtitleDelay, setSubtitleDelay] = useState(0)
   const [preview, setPreview] = useState<{
@@ -199,8 +250,67 @@ function PlayerControls() {
   // Absent until main has applied it once per session; the control is not
   // drawn at all until then, and not at all when the pack is off in Settings.
   const anime4k = state.anime4k
-  const anime4kAvailable = anime4k?.available === true
   const anime4kActive = anime4k?.active === true
+
+  // --- What is set up ---------------------------------------------------------
+  // Null until the first read answers: nothing is gated before then, so a
+  // control never flashes a notice it then takes back.
+  const readReadiness = useCallback(async (): Promise<OverlayReadiness | null> => {
+    const next = await fetchOverlayReadiness()
+    if (next) setReadiness(next)
+    return next
+  }, [])
+  useEffect(() => {
+    let current = true
+    const read = (): void => {
+      void fetchOverlayReadiness().then((next) => {
+        if (current && next) setReadiness(next)
+      })
+    }
+    read()
+    // Back from the main window's Settings (a pack removed, a key added):
+    // the controls follow what was changed there.
+    window.addEventListener('focus', read)
+    return () => {
+      current = false
+      window.removeEventListener('focus', read)
+    }
+  }, [])
+  useEffect(() => {
+    if (menu !== 'playback' && menu !== 'anime4k') return
+    let current = true
+    void fetchOverlayReadiness().then((next) => {
+      if (current && next) setReadiness(next)
+    })
+    return () => {
+      current = false
+    }
+  }, [menu])
+  // The setup place opens in the MAIN window: main brings it forward, and
+  // the main window steps the picture aside while the control centre is up.
+  const openSetup = useCallback((service: SetupService) => {
+    const place = SETUP_PLACES[service]
+    setMenu(null)
+    void window.api?.mediaHub?.window
+      ?.openControlCentre(
+        place.anchor ? { section: place.section, anchor: place.anchor } : { section: place.section }
+      )
+      .catch(() => {})
+  }, [])
+  const sourceMissing = readiness !== null && !readiness.source
+  const subtitlesMissing =
+    (readiness !== null && !readiness.subtitles) ||
+    /(Connect|requires) SubDL or OpenSubtitles/i.test(subtitleSearchError ?? '')
+  // Anime4K starts on for anime (anime4kStartsActive), so that is where the
+  // missing pack is worth saying; the toggle itself stays undrawn until the
+  // pack is on disk.
+  const anime4kMissing =
+    media?.kind === 'anime' && readiness !== null && !readiness.anime4kInstalled
+  // The player's own state says the pack was applied this session; the
+  // latest settings read can say it has since been removed (Settings →
+  // Remove), and then the toggle would switch on files that are gone.
+  const anime4kAvailable =
+    anime4k?.available === true && (readiness === null || readiness.anime4kInstalled)
   const pictureSettings = {
     brightness: state.brightness ?? DEFAULT_VIDEO_PICTURE.brightness,
     contrast: state.contrast ?? DEFAULT_VIDEO_PICTURE.contrast,
@@ -1109,6 +1219,10 @@ function PlayerControls() {
     if (!media) return
     if (subtitleResults?.key === mediaKey) return
     setSubtitleSearchError(null)
+    // Asked fresh: a provider set up in the main window since the last open
+    // should be searched now, and with none there is nothing to search.
+    const ready = await readReadiness()
+    if (ready && !ready.subtitles) return
     try {
       const results = await window.api?.mediaHub?.subtitles.search(
         { id: media.id, type: media.kind, title: media.title },
@@ -1120,7 +1234,7 @@ function PlayerControls() {
       // menu opens — the "connect a provider in Settings" recovery loop.
       setSubtitleSearchError(error instanceof Error ? error.message : 'Subtitle search failed.')
     }
-  }, [media, mediaKey, subtitleResults])
+  }, [media, mediaKey, subtitleResults, readReadiness])
 
   const applyOnlineSubtitle = useCallback(
     async (subtitle: SubtitleResult) => {
@@ -1773,14 +1887,24 @@ function PlayerControls() {
                 </div>
 
                 <div className={styles.menuHeading}>Online subtitles</div>
-                {subtitleSearchError && (
-                  <span className={styles.menuNote}>{subtitleSearchError}</span>
-                )}
-                {!subtitleSearchError && currentSubtitleResults === null && (
-                  <span className={styles.menuNote}>Searching…</span>
-                )}
-                {!subtitleSearchError && currentSubtitleResults?.length === 0 && (
-                  <span className={styles.menuNote}>No results</span>
+                {subtitlesMissing ? (
+                  <OverlaySetupLine
+                    sentence={`Online subtitles require ${nameServices(['subdl', 'opensubtitles'])} to be set up.`}
+                    service="subdl"
+                    onSetUp={openSetup}
+                  />
+                ) : (
+                  <>
+                    {subtitleSearchError && (
+                      <span className={styles.menuNote}>{subtitleSearchError}</span>
+                    )}
+                    {!subtitleSearchError && currentSubtitleResults === null && (
+                      <span className={styles.menuNote}>Searching…</span>
+                    )}
+                    {!subtitleSearchError && currentSubtitleResults?.length === 0 && (
+                      <span className={styles.menuNote}>No results</span>
+                    )}
+                  </>
                 )}
                 {currentSubtitleResults?.map((subtitle) => (
                   <button
@@ -1830,18 +1954,29 @@ function PlayerControls() {
                 {/* First, not under the fold: the menu scrolls at 320px and
                     this is the item people come looking for mid-episode. */}
                 <div className={styles.menuHeading}>This copy</div>
-                <button
-                  type="button"
-                  className={styles.menuItem}
-                  disabled={party.following}
-                  onClick={() => ui({ type: 'different-copy' })}
-                >
-                  Wrong copy? Find another
-                  <span className={styles.menuItemNote}>
-                    For a recap, a different episode or a bad file. This copy is skipped for good
-                    and another one plays.
-                  </span>
-                </button>
+                {/* Not offered with nowhere to find another: the item stops
+                    this copy and bans it before searching, so with neither
+                    source it would end the film and fetch nothing. */}
+                {sourceMissing ? (
+                  <OverlaySetupLine
+                    sentence={`Finding another copy requires ${nameServices(['torbox', 'mediaServer'])} to be set up.`}
+                    service="torbox"
+                    onSetUp={openSetup}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className={styles.menuItem}
+                    disabled={party.following}
+                    onClick={() => ui({ type: 'different-copy' })}
+                  >
+                    Wrong copy? Find another
+                    <span className={styles.menuItemNote}>
+                      For a recap, a different episode or a bad file. This copy is skipped for good
+                      and another one plays.
+                    </span>
+                  </button>
+                )}
 
                 <div className={styles.menuHeading}>Speed</div>
                 {/* Hidden outright while following a host. Speed is the lever
@@ -2082,6 +2217,31 @@ function PlayerControls() {
             >
               Anime4K {anime4kActive ? 'On' : 'Off'}
             </button>
+          )}
+          {/* The one exception to the above: an anime, where the shaders
+              would start on, with the pack not on disk. Said behind a
+              button of its own, with the way to download it. */}
+          {!anime4kAvailable && anime4kMissing && (
+            <div className={styles.menuWrap}>
+              <button
+                type="button"
+                className={styles.button}
+                onClick={() => setMenu(menu === 'anime4k' ? null : 'anime4k')}
+                aria-expanded={menu === 'anime4k'}
+              >
+                Anime4K
+              </button>
+              {menu === 'anime4k' && (
+                <div className={styles.menu}>
+                  <OverlaySetupLine
+                    sentence="Anime4K requires the shader pack to be set up."
+                    service="anime4k"
+                    label="Set up Anime4K"
+                    onSetUp={openSetup}
+                  />
+                </div>
+              )}
+            </div>
           )}
 
           <div className={styles.menuWrap}>

@@ -837,7 +837,9 @@ export function registerRoomsIpc(): void {
     async (_e, payload) => {
       const creds = partySyncCredentials()
       if (!creds.url || !creds.inviteKey) {
-        throw new Error('Configure R3-Party-Sync in Settings first.')
+        throw new Error(
+          'Creating a room requires the party relay to be set up. It is under Control centre → Community → Watch Party relay.'
+        )
       }
       // membership: true asks the relay for the admission layer a kick
       // needs. A worker deployed before it exists simply returns no

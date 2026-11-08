@@ -735,11 +735,35 @@ const SERVICE_NAMES: Record<PlannedSource, string> = {
   mal: 'MyAnimeList'
 }
 
+/** Whether any service a watchlist can sync with is connected. With none,
+ *  a pull has nobody to ask and returns at once (see pullPlanned). */
+export function anyWatchlistServiceConnected(): boolean {
+  return Boolean(
+    simklCredentials().accessToken || traktCredentials().accessToken || malCredentials().accessToken
+  )
+}
+
 async function pullPlanned(
   priority: TaskPriority,
   options: PlannedPullOptions
 ): Promise<PlannedSyncReport> {
   const startedAt = Date.now()
+  if (!anyWatchlistServiceConnected()) {
+    // Nobody to ask, so nothing is retried or fetched. Each line still says
+    // its service is not connected, which is what the panel shows; the
+    // removals still owed wait for an account that can take them. Stored
+    // as the last pull, as before, so the panel does not show an older
+    // pull's "connected" lines after a disconnect.
+    const empty: PlannedSyncReport = {
+      at: Date.now(),
+      startedAt,
+      services: ORDER.map((service) => ({ service, connected: false, pulled: 0, unmapped: 0 })),
+      added: 0,
+      removed: 0
+    }
+    getDatabase().putCache(REPORT_CACHE_KEY, empty, SOURCES_TTL_MS, { durable: true })
+    return empty
+  }
   // Whose list this pull is about. Everything below the fetches writes to
   // the active profile's tracked table; a switch while three services were
   // being read would pour this profile's remote lists into the next one's.
