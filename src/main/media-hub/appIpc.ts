@@ -25,7 +25,7 @@ import type {
   UnsentService
 } from '../../shared/media-hub/types'
 import { parseImdbRatingsCsv } from '../../shared/media-hub/importCsv'
-import { importLetterboxdLibrary } from './letterboxdImport'
+import { importLetterboxdLibrary, requireLetterboxdPrerequisites } from './letterboxdImport'
 import { readBackup } from './backup'
 import { backupBeforeRewrite } from './autoBackup'
 import { requestRecommendationsRebuild } from './recommendations'
@@ -438,6 +438,9 @@ export function registerAppIpc(): void {
   })
 
   handle<undefined, ImportSummary | null>(MEDIA_HUB_CHANNELS.importLetterboxd, async (event) => {
+    // Before the picker: choosing a file only to be told the key is missing
+    // is the order the renderer's notice exists to prevent.
+    requireLetterboxdPrerequisites()
     const win = BrowserWindow.fromWebContents(event.sender)
     const options = {
       title: 'Import from Letterboxd',

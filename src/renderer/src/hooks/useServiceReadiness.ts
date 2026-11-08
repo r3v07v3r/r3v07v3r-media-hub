@@ -2,11 +2,12 @@
 //
 // The settings snapshot already says whether TorBox, a media server, the
 // metadata and subtitle keys, the relay and Ollama are configured. Simkl,
-// Trakt, MyAnimeList and the cache server are not in it: each is asked by
-// its own status call. This hook asks them ONCE for the whole window and
-// shares the answer, so a page with six gated controls does not make
-// eighteen requests, and a control that needs "Simkl or Trakt" reads one
-// flag instead of two calls.
+// Trakt, MyAnimeList and the cache server are not in it: the trackers come
+// from tracking.accounts() (which account holds a token, no request — the
+// status calls ask the service and would read "offline" as "not set up"),
+// the cache from its pairing state. This hook asks ONCE for the whole
+// window and shares the answer, so a page with six gated controls does not
+// ask six times, and a control that needs "Simkl or Trakt" reads one flag.
 //
 // `loaded` is false until both the snapshot and the status calls have
 // answered. A control must not draw its RequiresSetup notice before then —
@@ -87,18 +88,16 @@ async function fetchTrackers(): Promise<void> {
     publish({ ...NOT_LOADED, loaded: true })
     return
   }
-  const [simkl, trakt, mal, lan] = await Promise.all([
-    api.simkl.status().catch(() => null),
-    api.trakt.status().catch(() => null),
-    api.mal.status().catch(() => null),
+  const [accounts, lan] = await Promise.all([
+    api.tracking.accounts().catch(() => null),
     api.lanCache.pairStatus().catch(() => null)
   ])
   fetchedAt = Date.now()
   publish({
     loaded: true,
-    simkl: simkl?.connected === true,
-    trakt: trakt?.connected === true,
-    mal: mal?.connected === true,
+    simkl: accounts?.simkl === true,
+    trakt: accounts?.trakt === true,
+    mal: accounts?.mal === true,
     lanCache: lan?.state === 'approved'
   })
 }

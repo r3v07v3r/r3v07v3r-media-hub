@@ -54,8 +54,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   //
   // The watch-party hub is the exception: it deliberately hides the video to
   // show main-window UI, which must stay clickable — so the attribute follows
-  // "covered", not "playing".
-  const playbackCovered = Boolean(playbackMedia) && !partyPanelOpen
+  // "covered", not "playing". The control centre is the other: a Set up
+  // button in the player opens it over the film (AppStateContext hides the
+  // video for it the same way), and its controls must take the click.
+  const playbackCovered = Boolean(playbackMedia) && !partyPanelOpen && !controlCentreOpen
   useEffect(() => {
     document.documentElement.dataset.playbackCovered = playbackCovered ? 'true' : 'false'
   }, [playbackCovered])

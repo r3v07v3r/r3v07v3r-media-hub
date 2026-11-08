@@ -3593,6 +3593,20 @@ export function registerTrackingIpc(): void {
     }
   })
 
+  // Which tracker accounts hold a token, with no request. The renderer's
+  // readiness hook gates controls on this: the status handlers below ask
+  // the service, so with the network down they say "not connected", which
+  // is the wrong answer to "is it set up" and would turn every tracker
+  // control into a Set up notice for as long as the connection is out.
+  handle<undefined, { simkl: boolean; trakt: boolean; mal: boolean }>(
+    MEDIA_HUB_CHANNELS.trackingAccounts,
+    async () => ({
+      simkl: Boolean(simklCredentials().accessToken),
+      trakt: Boolean(traktCredentials().accessToken),
+      mal: Boolean(malCredentials().accessToken)
+    })
+  )
+
   handle<undefined, SimklStatus>(MEDIA_HUB_CHANNELS.simklStatus, async () => {
     const creds = simklCredentials()
     if (!creds.accessToken) return { connected: false, clientId: creds.clientId }

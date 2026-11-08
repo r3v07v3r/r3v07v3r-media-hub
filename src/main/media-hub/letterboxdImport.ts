@@ -175,16 +175,25 @@ function readZipTextEntry(archive: Buffer, fileName: string): string | null {
  * other import/backup flow's rule that the renderer can never name a file
  * for main to open.
  */
-export async function importLetterboxdLibrary(
-  archive: Buffer,
-  priority: TaskPriority = 'background'
-): Promise<ImportSummary> {
+/** Throws the requires sentence when the import cannot run. The IPC handler
+ *  calls it BEFORE opening the file picker, so nobody chooses a file only
+ *  to be told the key is missing; the import calls it again for its own
+ *  callers. */
+export function requireLetterboxdPrerequisites(): void {
   const { apiKey } = tmdbCredentials()
   if (!apiKey) {
     throw new Error(
       'Importing from Letterboxd requires a TMDB key to be set up. It is under Control centre > Accounts > TMDB.'
     )
   }
+}
+
+export async function importLetterboxdLibrary(
+  archive: Buffer,
+  priority: TaskPriority = 'background'
+): Promise<ImportSummary> {
+  requireLetterboxdPrerequisites()
+  const { apiKey } = tmdbCredentials()
 
   const diaryText = readZipTextEntry(archive, 'diary.csv')
   const ratingsText = readZipTextEntry(archive, 'ratings.csv')

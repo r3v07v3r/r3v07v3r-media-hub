@@ -663,6 +663,10 @@ export function createApi(transport: ApiTransport) {
          *  known yet. No request. */
         unsentSeasons: (id: string, seasons: number[]): Promise<UnsentAnimeSeason[]> =>
           transport.invoke(MEDIA_HUB_CHANNELS.trackingUnsentSeasons, { id, seasons }),
+        /** Which tracker accounts hold a token: set up, whether or not the
+         *  service answers right now. No request. */
+        accounts: (): Promise<{ simkl: boolean; trakt: boolean; mal: boolean }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.trackingAccounts),
         toggle: (item: TrackableItem): Promise<{ tracked: boolean }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.trackingToggle, item),
         /** Undo of a Remove from plan made through toggle: the removed row

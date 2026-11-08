@@ -188,7 +188,12 @@ export function SessionHub() {
             partyWanAvailable === false &&
             mediaHubSettings &&
             !mediaHubSettings.partySyncConnected && (
-              <RequiresSetup compact services={['relay']} what="Guests outside your network" />
+              <RequiresSetup
+                compact
+                services={['relay']}
+                what="Guests outside your network"
+                plural
+              />
             )}
           {isHost &&
             partyWanAvailable !== null &&

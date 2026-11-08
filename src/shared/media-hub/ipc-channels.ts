@@ -191,6 +191,7 @@ export const MEDIA_HUB_CHANNELS = {
   /** The seasons of one merged anime that are not sent to a connected
    *  Simkl or MyAnimeList — see UnsentAnimeSeason. */
   trackingUnsentSeasons: 'mediahub:tracking:unsent-seasons',
+  trackingAccounts: 'mediahub:tracking:accounts',
   trackingMarkWatched: 'mediahub:tracking:mark-watched',
   trackingUnmarkWatched: 'mediahub:tracking:unmark-watched',
   trackingMarkSeasonWatched: 'mediahub:tracking:mark-season-watched',
