@@ -38,6 +38,8 @@ export interface ServiceReadiness {
   /** Any tracker: what watch-history and plan pushes need. */
   tracker: boolean
   lanCache: boolean
+  /** The shader pack is on disk (settings.anime4k.installed); not a service. */
+  anime4k: boolean
 }
 
 interface TrackerState {
@@ -146,7 +148,8 @@ export function useServiceReadiness(): ServiceReadiness {
     trakt: trackers.trakt,
     mal: trackers.mal,
     tracker: trackers.simkl || trackers.trakt || trackers.mal,
-    lanCache: trackers.lanCache
+    lanCache: trackers.lanCache,
+    anime4k: s?.anime4k?.installed === true
   }
 }
 

@@ -28,6 +28,7 @@ export type SetupService =
   | 'relay'
   | 'mediaServer'
   | 'lanCache'
+  | 'anime4k'
 
 export interface SetupPlace {
   /** How the service is named in a sentence. */
@@ -55,7 +56,9 @@ export const SETUP_PLACES: Record<SetupService, SetupPlace> = {
   subtitles: { name: 'a subtitle provider', section: 'accounts', anchor: 'settings-subdl' },
   ollama: { name: 'Ollama', section: 'ai', anchor: 'settings-ollama' },
   relay: { name: 'the party relay', section: 'community', anchor: 'settings-party-sync' },
-  lanCache: { name: 'a cache server', section: 'caching' }
+  lanCache: { name: 'a cache server', section: 'caching' },
+  /** Not a service: the shader pack download in General. */
+  anime4k: { name: 'the Anime4K shader pack', section: 'general', anchor: 'settings-anime4k' }
 }
 
 /** "Simkl", "Simkl or Trakt", "Simkl, Trakt or MyAnimeList". */
