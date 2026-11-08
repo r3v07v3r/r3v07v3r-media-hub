@@ -506,6 +506,9 @@ function ConfigPanel({
           aria-checked={config.enabled}
           aria-label={`Use ${node.label}`}
           className={`${styles.switch} ${config.enabled ? styles.switchOn : ''}`}
+          // Held off until there is an address, as the note says; one that
+          // is already on can still be switched off.
+          disabled={!config.baseUrl.trim() && !config.enabled}
           onClick={() => onPatch({ ...config, enabled: !config.enabled })}
         >
           <span className={styles.switchThumb} />

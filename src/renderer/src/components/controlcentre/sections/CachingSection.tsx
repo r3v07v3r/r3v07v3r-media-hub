@@ -17,6 +17,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from '@renderer/components/icons/Icon'
+import { RequiresSetup } from '@renderer/components/layout/RequiresSetup'
+import { missingServices, useServiceReadiness } from '@renderer/hooks/useServiceReadiness'
 import type {
   LanCacheDevice,
   LanCacheOwnItem,
@@ -86,6 +88,11 @@ export function CachingSection() {
   // TorBox key and never anyone else's, so without it the server can only
   // share files it already has. Still a choice, and unticking it is kept.
   const [shareTorbox, setShareTorbox] = useState(true)
+  // No TorBox key on this computer: there is nothing to save on the cache,
+  // so the consent is not offered and the join does not ask for it. Empty
+  // until readiness has loaded, so the ticked default is not overridden
+  // before the snapshot says whether a key exists.
+  const torboxMissing = missingServices(useServiceReadiness(), ['torbox'])
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
 
@@ -284,7 +291,9 @@ export function CachingSection() {
 
   const header = (
     <header className={styles.head}>
-      <h2 className={styles.title}>Caching</h2>
+      <h2 id="settings-caching" className={styles.title}>
+        Caching
+      </h2>
       <p className={styles.blurb}>
         A machine on your own network that fetches what you plan to watch ahead of time, so playback
         starts one LAN hop away instead of over a slow link. Everything it stores expires on its
@@ -337,7 +346,10 @@ export function CachingSection() {
   const handleJoin = (targetUrl: string): void =>
     void guard(async () => {
       setMessage(null)
-      const result = await api.pair({ url: targetUrl, shareTorboxToken: shareTorbox })
+      const result = await api.pair({
+        url: targetUrl,
+        shareTorboxToken: shareTorbox && torboxMissing.length === 0
+      })
       setMessage({ ok: result.ok, text: result.message })
       if (!result.ok) return
       setPairState(result.pending ? 'pending' : 'approved')
@@ -594,19 +606,28 @@ export function CachingSection() {
             />
           </label>
 
-          <label className={styles.consent}>
-            <input
-              type="checkbox"
-              checked={shareTorbox}
-              onChange={(event) => setShareTorbox(event.target.checked)}
+          {torboxMissing.length > 0 ? (
+            <RequiresSetup
+              compact
+              services={torboxMissing}
+              what="Sharing your TorBox key with the cache"
+              detail="Without it the server only shares files it already has."
             />
-            <span>
-              Save my TorBox key on this server. It downloads my requests with my own account and
-              never anyone else&apos;s, so my titles can be fetched overnight with the app closed.
-              The key is protected by file permissions on that machine, not an OS keychain. Without
-              it the server only shares files it already has. Leaving removes it.
-            </span>
-          </label>
+          ) : (
+            <label className={styles.consent}>
+              <input
+                type="checkbox"
+                checked={shareTorbox}
+                onChange={(event) => setShareTorbox(event.target.checked)}
+              />
+              <span>
+                Save my TorBox key on this server. It downloads my requests with my own account and
+                never anyone else&apos;s, so my titles can be fetched overnight with the app closed.
+                The key is protected by file permissions on that machine, not an OS keychain.
+                Without it the server only shares files it already has. Leaving removes it.
+              </span>
+            </label>
+          )}
 
           <div className={styles.actions}>
             <button
@@ -955,22 +976,37 @@ export function CachingSection() {
                   </div>
                 </dl>
 
-                {!status.torboxLinked && (
-                  <div className={styles.actions}>
-                    <p className={styles.note}>
-                      The LAN cache needs your TorBox key before it can fetch for you. Add one under
-                      Control centre &rarr; Media servers, or wait for the cache to have it.
-                    </p>
-                    <button
-                      type="button"
-                      className={styles.ghostButton}
-                      onClick={handleShareKey}
-                      disabled={busy}
-                    >
-                      Save my key here
-                    </button>
-                  </div>
-                )}
+                {!status.torboxLinked &&
+                  (torboxMissing.length > 0 ? (
+                    // No key on this computer: "Save my key here" would only
+                    // answer that there is none, so the way to add one
+                    // stands in its place.
+                    <div className={styles.actions}>
+                      <p className={styles.note}>
+                        The LAN cache needs your TorBox key before it can fetch for you.
+                      </p>
+                      <RequiresSetup
+                        compact
+                        services={torboxMissing}
+                        what="Saving your key on the cache"
+                      />
+                    </div>
+                  ) : (
+                    <div className={styles.actions}>
+                      <p className={styles.note}>
+                        The LAN cache needs your TorBox key before it can fetch for you. Add one
+                        under Control centre &rarr; Media servers, or wait for the cache to have it.
+                      </p>
+                      <button
+                        type="button"
+                        className={styles.ghostButton}
+                        onClick={handleShareKey}
+                        disabled={busy}
+                      >
+                        Save my key here
+                      </button>
+                    </div>
+                  ))}
 
                 {status.jobs.length > 0 && (
                   <ul className={styles.jobs}>

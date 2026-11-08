@@ -29,6 +29,7 @@ import {
   type ServiceSettings
 } from '@shared/ipc-types'
 import { Icon } from '@renderer/components/icons/Icon'
+import { useAppState } from '@renderer/context/AppStateContext'
 import { testConnection as testJellyfin } from '@renderer/lib/api/jellyfin'
 import { sonarrClient, radarrClient } from '@renderer/lib/api/servarr'
 import {
@@ -89,6 +90,7 @@ function speed(bytesPerSecond: number): string {
 
 export function ServicesSection() {
   const visible = usePanelVisible()
+  const { openControlCentre } = useAppState()
   const [settings, setSettings] = useState<ServiceSettings | null>(null)
   const [live, setLive] = useState<Partial<Record<ServiceId, Live>>>({})
   const [busy, setBusy] = useState('')
@@ -205,9 +207,18 @@ export function ServicesSection() {
 
       {configured.length === 0 && (
         <section className={`${styles.card} glass-panel`}>
-          <p className={styles.note}>
-            Nothing is connected yet. Add a server under Settings and it appears here.
-          </p>
+          {/* Servers are added in Pipeline, where each one sits in the step
+              it does; the button goes there rather than naming a place. */}
+          <p className={styles.note}>Nothing is connected yet.</p>
+          <div className={styles.actions}>
+            <button
+              type="button"
+              className={styles.primaryButton}
+              onClick={() => openControlCentre('pipeline')}
+            >
+              Open Pipeline
+            </button>
+          </div>
         </section>
       )}
 

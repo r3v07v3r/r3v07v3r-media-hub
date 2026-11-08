@@ -375,6 +375,15 @@
     color var(--transition-fast),
     background var(--transition-fast);
 }
+.segmentButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+/* A RequiresSetup notice standing where a row's switch or button was. */
+.rowRequires {
+  flex: 0 1 300px;
+  min-width: 0;
+}
 .segmentButtonActive {
   color: #fff;
   background: linear-gradient(90deg, var(--accent-blue), var(--accent-violet));

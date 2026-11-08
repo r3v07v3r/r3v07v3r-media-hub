@@ -31,6 +31,28 @@ const SECRET_LABEL: Record<ServiceId, string> = {
   bazarr: 'API Key'
 }
 
+/** How the secret is named in "Enter the … before switching this on." */
+const SECRET_NAME: Record<ServiceId, string> = {
+  jellyfin: 'API key',
+  sonarr: 'API key',
+  radarr: 'API key',
+  qbittorrent: 'username and password',
+  prowlarr: 'API key',
+  bazarr: 'API key'
+}
+
+/** What has to be typed before the Enable switch can go on, or null when
+ *  nothing is missing. Every one of the six needs an address and its key
+ *  (qBittorrent's login is the "key"); a switch that reads On with either
+ *  blank is a server that is never used. */
+function missingFields(id: ServiceId, config: ServiceConfig): string | null {
+  const parts: string[] = []
+  if (!config.baseUrl.trim()) parts.push('address')
+  if (!config.apiKey.trim()) parts.push(SECRET_NAME[id])
+  if (parts.length === 0) return null
+  return `Enter the ${parts.join(' and ')} before switching this on.`
+}
+
 type TestState = { status: 'idle' | 'testing' | 'ok' | 'error'; message?: string }
 
 function ServiceCard({
@@ -50,6 +72,10 @@ function ServiceCard({
     setTest({ status: result.ok ? 'ok' : 'error', message: result.message })
   }
 
+  // Only switching ON is held back: one that is already on with a blank
+  // field can still be turned off.
+  const missing = config.enabled ? null : missingFields(id, config)
+
   return (
     <section className={`${styles.section} ${styles.serviceCard} glass-panel`}>
       <div className={styles.serviceHead}>
@@ -60,11 +86,14 @@ function ServiceCard({
           aria-checked={config.enabled}
           aria-label={`Enable ${SERVICE_LABELS[id]}`}
           className={`${styles.switch} ${config.enabled ? styles.switchOn : ''}`}
+          disabled={missing !== null}
+          title={missing ?? undefined}
           onClick={() => onChange({ ...config, enabled: !config.enabled })}
         >
           <span className={styles.switchThumb} />
         </button>
       </div>
+      {missing && <p className={styles.serviceNote}>{missing}</p>}
       {id === 'jellyfin' && (
         // Turning Jellyfin on now has playback consequences, not just
         // metadata ones: it becomes a source the player will pull video

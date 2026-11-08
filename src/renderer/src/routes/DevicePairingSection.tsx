@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { encode } from 'uqr'
+import { RequiresSetup } from '@renderer/components/layout/RequiresSetup'
+import { useServiceReadiness } from '@renderer/hooks/useServiceReadiness'
 import styles from './Settings.module.css'
 
 // The "Link a phone" card: shows a one-time QR code the phone app scans to
@@ -46,6 +48,18 @@ export function DevicePairingSection() {
   const [state, setState] = useState<PairingState>('idle')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
+  // The services main seals into the code (bundleContents in
+  // main/media-hub/devicePairingCore.ts). With none saved here the code
+  // would carry nothing, so the button is not offered until one is.
+  const ready = useServiceReadiness()
+  const nothingToSend =
+    ready.loaded &&
+    !ready.torbox &&
+    !ready.simkl &&
+    !ready.subdl &&
+    !ready.opensubtitles &&
+    !ready.tmdb &&
+    !ready.omdb
 
   // While a code is on screen: tick the countdown and ask whether it has
   // been used. The ticket is one-shot, so the first answer that is not
@@ -112,10 +126,10 @@ export function DevicePairingSection() {
         <h3 className={styles.serviceName}>Link a phone</h3>
       </div>
       <p className={styles.serviceNote}>
-        Sign the R3 phone app in to the same services as this computer. Show a code, then press Scan code in
-        the phone app’s Settings. The code works once, for three minutes, on your own Wi-Fi. Trakt
-        and MyAnimeList are not sent: a sign-in can’t be shared between devices, and signing in to
-        them on the phone is still to come.
+        Sign the R3 phone app in to the same services as this computer. Show a code, then press Scan
+        code in the phone app’s Settings. The code works once, for three minutes, on your own Wi-Fi.
+        Trakt and MyAnimeList are not sent: a sign-in can’t be shared between devices, and signing
+        in to them on the phone is still to come.
       </p>
 
       {link && state === 'waiting' ? (
@@ -142,6 +156,12 @@ export function DevicePairingSection() {
             </button>
           </div>
         </>
+      ) : nothingToSend ? (
+        <RequiresSetup
+          services={['torbox']}
+          what="Linking a phone"
+          detail="The code carries your TorBox key and other service keys to the phone; without any there is nothing to send."
+        />
       ) : (
         <div className={styles.serviceActions}>
           <button type="button" className={styles.testButton} onClick={handleStart} disabled={busy}>
