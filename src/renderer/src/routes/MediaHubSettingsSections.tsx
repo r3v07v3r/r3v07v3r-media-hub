@@ -773,9 +773,9 @@ export function SubDLSection() {
         <ConnectionBadge connected={connected} />
       </div>
       <p className={styles.rowDescription} style={{ marginBottom: 10 }}>
-        Subtitle search inside the player, with no daily download limit. Get a free key at
-        subdl.com/panel/api — it is searched first when connected, so OpenSubtitles&apos; small free
-        download quota is only spent when SubDL has no match.
+        A second subtitle catalogue beside the built-in SubtitleDB, with no daily download limit.
+        Get a free key at subdl.com/panel/api — it is searched ahead of OpenSubtitles, so that small
+        free download quota is only spent when neither free catalogue has a match.
       </p>
       {connected ? (
         <div className={styles.serviceActions}>
@@ -865,9 +865,9 @@ export function OpenSubtitlesSection() {
         <ConnectionBadge connected={connected} />
       </div>
       <p className={styles.rowDescription} style={{ marginBottom: 10 }}>
-        Subtitle search inside the player, for titles without embedded subtitle tracks. A free
-        account allows 5 subtitle downloads per day (1000 with their paid VIP), so connect SubDL
-        above as well — it is searched first and has no download limit.
+        A third subtitle catalogue, with file-hash matching for frame-accurate sync. A free account
+        allows 5 subtitle downloads per day (1000 with their paid VIP), so the built-in SubtitleDB
+        and SubDL above are searched first and this one fills in what they lack.
       </p>
       {connected ? (
         <div className={styles.serviceActions}>

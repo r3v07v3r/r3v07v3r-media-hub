@@ -60,7 +60,6 @@ const NONE: ServiceReadiness = {
   omdb: false,
   subdl: false,
   opensubtitles: false,
-  subtitles: false,
   ollama: false,
   relay: false,
   simkl: false,
@@ -145,10 +144,13 @@ async function main(): Promise<void> {
     }
   })
 
-  await check('the automatic subtitles switch carries the notice', () => {
-    // Pinned to its own subject: the page has other notices, and any one of
-    // them would otherwise stand in for this switch.
-    assert.match(read('routes/SettingsPage.tsx'), /what="Automatic subtitles"/)
+  await check('the automatic subtitles switch carries no notice: SubtitleDB needs no setup', () => {
+    // The one dependent control that lost its notice on purpose, because its
+    // dependency stopped being optional — the built-in provider is always
+    // there. A notice coming back here would mean online subtitles were
+    // gated on a key again.
+    assert.doesNotMatch(read('routes/SettingsPage.tsx'), /what="Automatic subtitles"/)
+    assert.doesNotMatch(read('routes/PlayerOverlayWindow.tsx'), /Online subtitles require/)
   })
 
   await check('every anchored Set up button lands in the section its heading is in', () => {

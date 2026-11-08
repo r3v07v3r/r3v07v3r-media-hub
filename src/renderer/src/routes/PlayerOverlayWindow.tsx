@@ -38,6 +38,7 @@ import {
 import { skipWindowsFromChapters } from '@shared/media-hub/skipChapters'
 import type { NextEpisodeRef } from '@shared/media-hub/nextEpisode'
 import type { PlayerChapter, PlayerSessionMedia } from '@shared/media-hub/player'
+import { subtitleProviderName } from '@shared/media-hub/subtitleProviders'
 import type { SubtitleResult } from '@shared/media-hub/types'
 import {
   DEFAULT_SUBTITLE_STYLE,
@@ -108,8 +109,6 @@ type Menu =
 interface OverlayReadiness {
   /** TorBox or a media server: something to fetch another copy from. */
   source: boolean
-  /** SubDL or OpenSubtitles. */
-  subtitles: boolean
   anime4kInstalled: boolean
 }
 
@@ -118,7 +117,6 @@ async function fetchOverlayReadiness(): Promise<OverlayReadiness | null> {
   if (!settings) return null
   return {
     source: settings.torboxConnected === true || settings.mediaServerConnected === true,
-    subtitles: settings.subdlConnected === true || settings.osConnected === true,
     anime4kInstalled: settings.anime4k?.installed === true
   }
 }
@@ -255,11 +253,6 @@ function PlayerControls() {
   // --- What is set up ---------------------------------------------------------
   // Null until the first read answers: nothing is gated before then, so a
   // control never flashes a notice it then takes back.
-  const readReadiness = useCallback(async (): Promise<OverlayReadiness | null> => {
-    const next = await fetchOverlayReadiness()
-    if (next) setReadiness(next)
-    return next
-  }, [])
   useEffect(() => {
     let current = true
     const read = (): void => {
@@ -298,9 +291,6 @@ function PlayerControls() {
       .catch(() => {})
   }, [])
   const sourceMissing = readiness !== null && !readiness.source
-  const subtitlesMissing =
-    (readiness !== null && !readiness.subtitles) ||
-    /(Connect|requires) SubDL or OpenSubtitles/i.test(subtitleSearchError ?? '')
   // Anime4K starts on for anime (anime4kStartsActive), so that is where the
   // missing pack is worth saying; the toggle itself stays undrawn until the
   // pack is on disk.
@@ -1219,10 +1209,8 @@ function PlayerControls() {
     if (!media) return
     if (subtitleResults?.key === mediaKey) return
     setSubtitleSearchError(null)
-    // Asked fresh: a provider set up in the main window since the last open
-    // should be searched now, and with none there is nothing to search.
-    const ready = await readReadiness()
-    if (ready && !ready.subtitles) return
+    // SubtitleDB needs nothing set up, so there is always something to
+    // search; SubDL and OpenSubtitles join in when a key is held.
     try {
       const results = await window.api?.mediaHub?.subtitles.search(
         { id: media.id, type: media.kind, title: media.title },
@@ -1234,7 +1222,7 @@ function PlayerControls() {
       // menu opens — the "connect a provider in Settings" recovery loop.
       setSubtitleSearchError(error instanceof Error ? error.message : 'Subtitle search failed.')
     }
-  }, [media, mediaKey, subtitleResults, readReadiness])
+  }, [media, mediaKey, subtitleResults])
 
   const applyOnlineSubtitle = useCallback(
     async (subtitle: SubtitleResult) => {
@@ -1887,24 +1875,14 @@ function PlayerControls() {
                 </div>
 
                 <div className={styles.menuHeading}>Online subtitles</div>
-                {subtitlesMissing ? (
-                  <OverlaySetupLine
-                    sentence={`Online subtitles require ${nameServices(['subdl', 'opensubtitles'])} to be set up.`}
-                    service="subdl"
-                    onSetUp={openSetup}
-                  />
-                ) : (
-                  <>
-                    {subtitleSearchError && (
-                      <span className={styles.menuNote}>{subtitleSearchError}</span>
-                    )}
-                    {!subtitleSearchError && currentSubtitleResults === null && (
-                      <span className={styles.menuNote}>Searching…</span>
-                    )}
-                    {!subtitleSearchError && currentSubtitleResults?.length === 0 && (
-                      <span className={styles.menuNote}>No results</span>
-                    )}
-                  </>
+                {subtitleSearchError && (
+                  <span className={styles.menuNote}>{subtitleSearchError}</span>
+                )}
+                {!subtitleSearchError && currentSubtitleResults === null && (
+                  <span className={styles.menuNote}>Searching…</span>
+                )}
+                {!subtitleSearchError && currentSubtitleResults?.length === 0 && (
+                  <span className={styles.menuNote}>No results</span>
                 )}
                 {currentSubtitleResults?.map((subtitle) => (
                   <button
@@ -1914,12 +1892,12 @@ function PlayerControls() {
                     onClick={() => void applyOnlineSubtitle(subtitle)}
                     disabled={pendingSubtitleId !== null}
                   >
-                    {/* Matched to the exact release being played (see
-                        shared/media-hub/movieHash.ts) rather than to the
-                        title in general — frame-accurate by construction,
-                        which is worth saying up front rather than leaving
-                        somebody to discover it by whether the line lands on
-                        time. */}
+                    {/* Matched to the exact release being played (by file
+                        hash at OpenSubtitles, by torrent info hash at
+                        SubtitleDB) rather than to the title in general —
+                        frame-accurate by construction, which is worth saying
+                        up front rather than leaving somebody to discover it
+                        by whether the line lands on time. */}
                     {subtitle.hashMatch && (
                       <span className={styles.hashMatchBadge}>Exact match</span>
                     )}
@@ -1927,7 +1905,7 @@ function PlayerControls() {
                       ? 'Loading…'
                       : `${subtitle.language.toUpperCase()} — ${
                           subtitle.releaseName || subtitle.fileName
-                        } · ${subtitle.provider === 'subdl' ? 'SubDL' : 'OpenSubtitles'}`}
+                        } · ${subtitleProviderName(subtitle.provider)}`}
                   </button>
                 ))}
               </div>

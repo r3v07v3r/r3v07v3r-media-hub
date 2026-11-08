@@ -1700,11 +1700,13 @@ export interface MalReconcileApplyResult {
   errors: { kitsuId?: string; malId?: number; targetId?: string; error: string }[]
 }
 
-/** Which online subtitle service a SubtitleResult came from. The two are
+/** Which online subtitle service a SubtitleResult came from. The three are
  *  searched together and merged into one list (see subtitlesService.ts), so
  *  every result has to say where it came from — the download step differs
- *  per provider and cannot be inferred from the row's other fields. */
-type SubtitleProvider = 'opensubtitles' | 'subdl'
+ *  per provider and cannot be inferred from the row's other fields.
+ *  SubtitleDB needs no account and is always searched; the other two are
+ *  optional extras behind a key. */
+export type SubtitleProvider = 'opensubtitles' | 'subdl' | 'subtitledb'
 
 export interface SubtitleResult {
   id: string
@@ -1712,11 +1714,12 @@ export interface SubtitleResult {
   /** OpenSubtitles only — the integer file id posted to its /download
    *  endpoint. 0 for SubDL results. */
   fileId: number
-  /** SubDL only — the root-relative archive path (`/subtitle/<id>.zip`)
-   *  resolved against dl.subdl.com at download time. '' for OpenSubtitles
-   *  results. Validated as an SSRF boundary before use, since it makes the
-   *  round trip through the renderer — see subdl.ts's
-   *  resolveSubdlDownloadUrl. */
+  /** SubDL and SubtitleDB — the root-relative path the file is fetched by
+   *  at download time (`/subtitle/<id>.zip` on dl.subdl.com, `/get/<id>`
+   *  on api.thesubtitledb.org). '' for OpenSubtitles results. Validated as
+   *  an SSRF boundary before use, since it makes the round trip through the
+   *  renderer — see subdl.ts's resolveSubdlDownloadUrl and subtitledb.ts's
+   *  resolveTsdbDownloadUrl. */
   downloadPath: string
   fileName: string
   language: string
@@ -1724,10 +1727,11 @@ export interface SubtitleResult {
   downloadCount: number
   uploader: string
   hearingImpaired: boolean
-  /** True when this row was matched to the exact release being played, via
-   *  the OpenSubtitles/moviehash algorithm — see main/media-hub/movieHash.ts
-   *  — rather than to the title in general. Always false for SubDL, which
-   *  has no hash-matching endpoint. A hash match is frame-accurate by
+  /** True when this row was matched to the exact release being played
+   *  rather than to the title in general: by the OpenSubtitles/moviehash
+   *  algorithm (see main/media-hub/movieHash.ts) or by SubtitleDB's lookup
+   *  of the torrent's info hash. Always false for SubDL, which has no
+   *  hash-matching endpoint. A hash match is frame-accurate by
    *  construction: no manual delay nudging needed, because it is keyed to
    *  the same bytes on screen rather than to the title's IMDb id. */
   hashMatch: boolean

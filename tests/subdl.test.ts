@@ -240,18 +240,23 @@ check('refuses a response that is not a zip at all', () => {
 
 // --- provider merge --------------------------------------------------------
 //
-// Mirrors mergeSubtitleResults in subtitlesService.ts. Kept in sync by hand;
-// see this file's header for why it is not imported.
+// Mirrors mergeSubtitleResults in subtitlesService.ts (the three-provider
+// form; SubtitleDB's own cases are in tests/subtitledb.test.ts). Kept in
+// sync by hand; see this file's header for why it is not imported.
 function mergeSubtitleResults(
   subdl: SubtitleResult[],
   openSubtitles: SubtitleResult[],
   limit = 20
 ): SubtitleResult[] {
-  const half = Math.ceil(limit / 2)
-  const merged = [...subdl.slice(0, half), ...openSubtitles.slice(0, limit - half)]
+  const lists = [subdl, openSubtitles]
+  const present = lists.filter((list) => list.length)
+  const share = present.length ? Math.ceil(limit / present.length) : limit
+  const merged = present.flatMap((list) => list.slice(0, share)).slice(0, limit)
   const seen = new Set(merged.map((entry) => entry.id))
-  const backfill = [...subdl, ...openSubtitles].filter((entry) => !seen.has(entry.id))
-  return [...merged, ...backfill].slice(0, limit)
+  const backfill = present.flat().filter((entry) => !seen.has(entry.id))
+  const rows = [...merged, ...backfill].slice(0, limit)
+  const exact = rows.filter((entry) => entry.hashMatch)
+  return exact.length ? [...exact, ...rows.filter((entry) => !entry.hashMatch)] : rows
 }
 
 function row(id: string, provider: SubtitleResult['provider']): SubtitleResult {
@@ -265,7 +270,8 @@ function row(id: string, provider: SubtitleResult['provider']): SubtitleResult {
     releaseName: id,
     downloadCount: 0,
     uploader: 'someone',
-    hearingImpaired: false
+    hearingImpaired: false,
+    hashMatch: false
   }
 }
 

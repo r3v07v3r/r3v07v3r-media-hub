@@ -4,8 +4,9 @@
 // the shared media-hub settings file (see settingsStore.ts) exactly as in
 // the original — this module only adds the request/auth-retry logic on top.
 //
-// Since the port, this module hosts TWO subtitle providers: OpenSubtitles
-// (above) and SubDL (below), searched together and merged into one list by
+// Since the port, this module hosts THREE subtitle providers: OpenSubtitles
+// (above), SubDL (below) and SubtitleDB (below that, and the only one that
+// needs no account), searched together and merged into one list by
 // mergeSubtitleResults. The provider-agnostic entry points the rest of the
 // app uses are the subtitles:search handler and downloadSubtitleText; the
 // pure per-provider helpers live in opensubtitles.ts and subdl.ts. SubDL
@@ -37,10 +38,20 @@ import {
 } from './opensubtitles'
 import {
   buildSubdlSearchParams,
+  decodeSubtitleText,
   normalizeSubdlResult,
   readSrtFromZip,
   resolveSubdlDownloadUrl
 } from './subdl'
+import {
+  buildTsdbInfohashPath,
+  buildTsdbLookupPath,
+  normalizeTsdbResult,
+  resolveTsdbDownloadUrl,
+  stripLeadingCredits,
+  TSDB_API_ORIGIN,
+  type TsdbLookupResponse
+} from './subtitledb'
 import {
   encrypt,
   osConnected,
@@ -225,12 +236,114 @@ async function subdlDownloadSubtitleText(downloadPath: string): Promise<string> 
   return readSrtFromZip(Buffer.from(archive.buffer, archive.byteOffset, archive.byteLength))
 }
 
+// --- SubtitleDB -----------------------------------------------------------
+//
+// No key, no login, no account: see subtitledb.ts's header for why it is
+// the first provider searched and the one every install has.
+
+/** Caps a subtitle file from SubtitleDB — the same bound as the
+ *  OpenSubtitles download above, for the same reason. */
+const MAX_TSDB_FILE_BYTES = 8 * 1024 * 1024
+
+/** How long one SubtitleDB request may take before the other providers'
+ *  rows go out without it. */
+const TSDB_TIMEOUT_MS = 12_000
+/** How long to wait before the one retry of a lookup SubtitleDB answered
+ *  503 (busy) to. */
+const TSDB_BUSY_RETRY_MS = 2_000
+
+/**
+ * One SubtitleDB lookup. A 503 (busy) is retried once after a short wait,
+ * since a busy moment should not empty the menu. Any other failure is
+ * thrown, so searchSubtitles can tell "nothing filed" from "could not ask".
+ */
+async function tsdbLookup(pathname: string): Promise<SubtitleResult[]> {
+  const call = (): Promise<TsdbLookupResponse> =>
+    fetchJson<TsdbLookupResponse>(
+      `${TSDB_API_ORIGIN}${pathname}`,
+      {},
+      { timeoutMs: TSDB_TIMEOUT_MS }
+    )
+  let result: TsdbLookupResponse
+  try {
+    result = await call()
+  } catch (error) {
+    // A 503 carries a retry-after of a few seconds; httpClient only reads
+    // that header on a 429, so one short fixed wait stands in for it.
+    if ((error as HttpError)?.status !== 503) throw error
+    await new Promise((resolve) => setTimeout(resolve, TSDB_BUSY_RETRY_MS))
+    result = await call()
+  }
+  return (result.subtitles?.items || [])
+    .map((entry) => normalizeTsdbResult(entry, pathname.startsWith('/v1/by-infohash/')))
+    .filter((entry) => resolveTsdbDownloadUrl(entry.downloadPath))
+}
+
+/**
+ * Searches SubtitleDB for one title: by the torrent's info hash first, when
+ * the copy playing is a torrent (those rows are timed to this exact
+ * release, and come back marked hashMatch), then by the title's IMDb id or
+ * name. The hash lookup finds nothing for a re-encode nobody has filed yet,
+ * so the title lookup always runs too; a title lookup that cannot be built
+ * (no id, no name) is simply skipped.
+ */
+async function tsdbSearch(
+  item: OpenSubtitlesSearchItem,
+  playback: OpenSubtitlesSearchPlayback & { language: string },
+  infoHash: string | undefined
+): Promise<SubtitleResult[]> {
+  const paths = [
+    buildTsdbInfohashPath(infoHash, playback.language),
+    buildTsdbLookupPath(item, playback)
+  ].filter(Boolean)
+  if (!paths.length) return []
+  const outcomes = await Promise.allSettled(paths.map(tsdbLookup))
+  const rows: SubtitleResult[] = []
+  const seen = new Set<string>()
+  for (const outcome of outcomes) {
+    if (outcome.status !== 'fulfilled') continue
+    for (const row of outcome.value) {
+      if (seen.has(row.id)) continue
+      seen.add(row.id)
+      rows.push(row)
+    }
+  }
+  // Both lookups failing is a failure; one of them is not, as long as the
+  // other answered. (An info-hash lookup for a torrent SubtitleDB has never
+  // seen answers 404, which is an empty list here, not a rejection.)
+  const failed = outcomes.filter(
+    (outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected'
+  )
+  if (failed.length === outcomes.length) throw failed[0].reason
+  return rows
+}
+
+/** Downloads one SubtitleDB file and returns its text. The API answers
+ *  with a redirect to the file host, which fetch follows. */
+async function tsdbDownloadSubtitleText(downloadPath: string): Promise<string> {
+  const url = resolveTsdbDownloadUrl(downloadPath)
+  if (!url) throw new Error('Invalid subtitle selection.')
+  const response = await fetch(url)
+  if (!response.ok) throw new Error('Could not download the subtitle file.')
+  const body = await readLimitedResponseBytes(
+    response,
+    MAX_TSDB_FILE_BYTES,
+    'The subtitle file is unexpectedly large.'
+  )
+  return stripLeadingCredits(
+    decodeSubtitleText(Buffer.from(body.buffer, body.byteOffset, body.byteLength))
+  )
+}
+
 /**
  * Fetches the SRT text for whichever provider `selection` names. The single
  * entry point playbackSession's subtitles:apply handler uses, so that
- * handler never has to know how either provider delivers a file.
+ * handler never has to know how any provider delivers a file.
  */
 export async function downloadSubtitleText(selection: SubtitleSelection): Promise<string> {
+  if (selection.provider === 'subtitledb') {
+    return tsdbDownloadSubtitleText(selection.downloadPath)
+  }
   if (selection.provider === 'subdl') {
     return subdlDownloadSubtitleText(selection.downloadPath)
   }
@@ -238,26 +351,31 @@ export async function downloadSubtitleText(selection: SubtitleSelection): Promis
 }
 
 /**
- * Merges the two providers' rows into one menu.
+ * Merges the providers' rows into one menu, in the order given: SubtitleDB,
+ * then SubDL, then OpenSubtitles.
  *
- * SubDL goes first, and that ordering is the point of the feature rather
- * than an arbitrary tie-break: "Always have subtitles" and any hurried
- * click take the top row, and a SubDL row costs nothing to download, where
- * an OpenSubtitles row spends one of a free account's five daily
- * downloads. Each provider is still guaranteed half the list so a
- * SubDL-heavy result set can never hide OpenSubtitles entirely, with
- * whichever side has more backfilling any unused half.
+ * That order is the point rather than a tie-break: "Show subtitles
+ * automatically" and any hurried click take the top row, and a SubtitleDB
+ * or SubDL row costs nothing to download, where an OpenSubtitles row spends
+ * one of a free account's five daily downloads. Every provider with rows is
+ * still guaranteed a share of the list, so a large catalogue can never
+ * hide a small one entirely, and whoever has more backfills what the
+ * others leave. Rows matched to the exact release playing (hashMatch) go
+ * to the top whichever provider found them: they are the ones that need
+ * no delay nudging.
  */
 export function mergeSubtitleResults(
-  subdl: SubtitleResult[],
-  openSubtitles: SubtitleResult[],
+  lists: SubtitleResult[][],
   limit = SEARCH_RESULT_LIMIT
 ): SubtitleResult[] {
-  const half = Math.ceil(limit / 2)
-  const merged = [...subdl.slice(0, half), ...openSubtitles.slice(0, limit - half)]
+  const present = lists.filter((list) => list.length)
+  const share = present.length ? Math.ceil(limit / present.length) : limit
+  const merged = present.flatMap((list) => list.slice(0, share)).slice(0, limit)
   const seen = new Set(merged.map((entry) => entry.id))
-  const backfill = [...subdl, ...openSubtitles].filter((entry) => !seen.has(entry.id))
-  return [...merged, ...backfill].slice(0, limit)
+  const backfill = present.flat().filter((entry) => !seen.has(entry.id))
+  const rows = [...merged, ...backfill].slice(0, limit)
+  const exact = rows.filter((entry) => entry.hashMatch)
+  return exact.length ? [...exact, ...rows.filter((entry) => !entry.hashMatch)] : rows
 }
 
 interface OsConnectPayload {
@@ -368,16 +486,12 @@ async function searchableItem(item: OpenSubtitlesSearchItem): Promise<OpenSubtit
   return item
 }
 
-/** Whether either subtitle provider is set up — the check searchSubtitles
- *  refuses on, for callers that should not ask at all without one. */
-export function subtitleProviderConnected(): boolean {
-  return subdlConnected() || osConnected()
-}
-
 /**
- * Searches every connected provider for one title and merges the rows —
- * the subtitles:search handler, and play:stream's automatic fetch for a
- * copy with neither the wanted audio nor subtitles.
+ * Searches every provider for one title and merges the rows — the
+ * subtitles:search handler, and play:stream's automatic fetch for a copy
+ * with neither the wanted audio nor subtitles. SubtitleDB is always asked;
+ * SubDL and OpenSubtitles when a key is held. There is no "nothing is set
+ * up" case any more: a fresh install has SubtitleDB.
  */
 export async function searchSubtitles(
   rawItem: OpenSubtitlesSearchItem,
@@ -385,36 +499,36 @@ export async function searchSubtitles(
 ): Promise<SubtitleResult[]> {
   const subdlOn = subdlConnected()
   const osOn = osConnected()
-  if (!subdlOn && !osOn) {
-    throw new Error(
-      'Searching for subtitles requires SubDL or OpenSubtitles to be set up. Both are under Control centre → Accounts.'
-    )
-  }
 
-  // After the connection check: the id lookup can be two network round
-  // trips, and nobody should wait on them to learn nothing is connected.
+  // Up to two network round trips for an anime's IMDb id, shared by all
+  // three providers.
   const item = await searchableItem(rawItem)
 
+  // What is playing, for the two exact-release lookups: SubtitleDB's by
+  // the torrent's info hash, OpenSubtitles' by the file's hash. Imported
+  // here rather than at the top of the file: playbackSession.ts imports
+  // THIS module (downloadSubtitleText), so a static import here would be a
+  // cycle — see recommendations.ts's rebuildRecommendations for the same
+  // pattern and the same reason.
+  const session = await import('./playbackSession')
+  const infoHash = session.activeRelease()?.infoHash
+
   // Fired off now, awaited only inside the OpenSubtitles branch below —
-  // not before either provider starts. SubDL's search must not wait on
-  // a tail read off a torrent that may not have downloaded it yet; only
-  // the branch that can actually USE the hash pays for computing it, and
-  // even that one only pays up to computeActiveStreamHash's own bounded
-  // timeout, never longer. Imported here rather than at the top of the
-  // file: playbackSession.ts imports THIS module (downloadSubtitleText),
-  // so a static import here would be a cycle — see recommendations.ts's
-  // rebuildRecommendations for the same pattern and the same reason.
+  // not before either provider starts. The other providers' searches must
+  // not wait on a tail read off a torrent that may not have downloaded it
+  // yet; only the branch that can actually USE the hash pays for computing
+  // it, and even that one only pays up to computeActiveStreamHash's own
+  // bounded timeout, never longer.
   const movieHashPromise = osOn
-    ? import('./playbackSession').then(({ activeStreamUrl }) =>
-        computeActiveStreamHash(activeStreamUrl())
-      )
+    ? computeActiveStreamHash(session.activeStreamUrl())
     : Promise.resolve(null)
 
-  // Both providers are searched together and failures are per-provider:
+  // Every provider is searched together and failures are per-provider:
   // one being down, rate-limited or holding a stale key must not empty
-  // a menu the other could still fill. A provider that is not connected
+  // a menu the others could still fill. A provider that is not connected
   // simply contributes nothing.
-  const [subdlOutcome, osOutcome] = await Promise.allSettled([
+  const [tsdbOutcome, subdlOutcome, osOutcome] = await Promise.allSettled([
+    tsdbSearch(item, playback, infoHash),
     subdlOn
       ? subdlSearch(subdlCredentials().apiKey, item, playback)
       : Promise.resolve<SubtitleResult[]>([]),
@@ -450,38 +564,44 @@ export async function searchSubtitles(
       : Promise.resolve<SubtitleResult[]>([])
   ])
 
-  if (subdlOutcome.status === 'rejected') {
-    logError('media-hub:subtitles:subdl', subdlOutcome.reason)
-  }
-  if (osOutcome.status === 'rejected') {
-    logError('media-hub:subtitles:opensubtitles', osOutcome.reason)
+  const providers: Array<{
+    name: string
+    on: boolean
+    outcome: PromiseSettledResult<SubtitleResult[]>
+  }> = [
+    { name: 'SubtitleDB', on: true, outcome: tsdbOutcome },
+    { name: 'SubDL', on: subdlOn, outcome: subdlOutcome },
+    { name: 'OpenSubtitles', on: osOn, outcome: osOutcome }
+  ]
+  for (const provider of providers) {
+    if (provider.on && provider.outcome.status === 'rejected') {
+      logError(`media-hub:subtitles:${provider.name.toLowerCase()}`, provider.outcome.reason)
+    }
   }
 
-  // Raised only when every CONNECTED provider failed — counting the
+  // Raised only when every provider that was asked failed — counting a
   // not-connected one's resolved [] as a success would mask the real
-  // failure. That is not hypothetical: with only SubDL connected (the
-  // setup this provider exists to make viable), a bad key, an outage or
-  // a rate-limit came back as a bare "No results" in the menu while the
-  // actual reason went only to logs/media-hub.log, which is exactly the
-  // dead end that made "SubDL isn't loading" impossible to act on.
-  const failures = [
-    subdlOn && subdlOutcome.status === 'rejected' ? subdlOutcome.reason : undefined,
-    osOn && osOutcome.status === 'rejected' ? osOutcome.reason : undefined
-  ].filter((reason) => reason !== undefined)
-  if (failures.length === Number(subdlOn) + Number(osOn)) {
-    // Every provider's reason, not the first one's: SubDL's "can't find
-    // movie or tv" used to be all the menu said while OpenSubtitles'
-    // own failure went only to the log.
-    if (failures.length === 1) throw failures[0]
+  // failure, and a bare "No results" in the menu while the actual reason
+  // went only to logs/media-hub.log is exactly the dead end that made
+  // "subtitles aren't loading" impossible to act on. Every asked
+  // provider's reason is named, not the first one's.
+  const asked = providers.filter((provider) => provider.on)
+  const failures = asked.filter((provider) => provider.outcome.status === 'rejected')
+  if (failures.length === asked.length) {
+    if (failures.length === 1) throw (failures[0].outcome as PromiseRejectedResult).reason
     throw new Error(
-      `SubDL: ${(failures[0] as Error)?.message ?? failures[0]} · OpenSubtitles: ${
-        (failures[1] as Error)?.message ?? failures[1]
-      }`
+      failures
+        .map((provider) => {
+          const reason = (provider.outcome as PromiseRejectedResult).reason
+          return `${provider.name}: ${(reason as Error)?.message ?? reason}`
+        })
+        .join(' · ')
     )
   }
 
   return mergeSubtitleResults(
-    subdlOutcome.status === 'fulfilled' ? subdlOutcome.value : [],
-    osOutcome.status === 'fulfilled' ? osOutcome.value : []
+    providers.map((provider) =>
+      provider.outcome.status === 'fulfilled' ? provider.outcome.value : []
+    )
   )
 }

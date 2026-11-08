@@ -180,7 +180,7 @@ const MAX_SUBTITLE_BYTES = 8 * 1024 * 1024
  * "wrong accents" rather than "throws"; a full charset detector would be a
  * bigger dependency than this feature warrants.
  */
-function decodeSubtitleText(bytes: Buffer): string {
+export function decodeSubtitleText(bytes: Buffer): string {
   try {
     return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
   } catch {

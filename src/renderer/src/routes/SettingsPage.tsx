@@ -807,20 +807,12 @@ export default function SettingsPage({
   // What the gated rows below need. Each list is empty until readiness has
   // loaded, so no notice flashes before the snapshot answers.
   const ready = useServiceReadiness()
-  const subtitlesMissing = missingServices(ready, ['subdl', 'opensubtitles'])
   const tmdbMissing = missingServices(ready, ['tmdb'])
   const mediaServerMissing = missingServices(ready, ['mediaServer'])
-  const autoSubtitlesRequires =
-    subtitlesMissing.length > 0 ? (
-      <RequiresSetup compact services={subtitlesMissing} what="Automatic subtitles" plural />
-    ) : undefined
-  // Embedded tracks still follow the language, so the field stays usable;
-  // the notice is drawn once, under the switch above it.
-  const subtitleLanguageDescription = `Language to search for, both automatically and in the Subtitles menu.${
-    subtitlesMissing.length > 0
-      ? ' Online search needs a subtitle provider; subtitles inside the file follow the language either way.'
-      : ''
-  }`
+  // No notice under the subtitle rows: SubtitleDB needs nothing set up, so
+  // online search works on a fresh install.
+  const subtitleLanguageDescription =
+    'Language to search for, both automatically and in the Subtitles menu.'
   // null = no form open, 'new' = create form, otherwise the id of the
   // profile being edited.
   const [editingProfile, setEditingProfile] = useState<string | 'new' | null>(null)
@@ -1271,10 +1263,9 @@ export default function SettingsPage({
               <ToggleRow
                 icon="eye"
                 title="Show subtitles automatically"
-                description="Fetch and apply a matching subtitle as soon as a title starts playing."
+                description="Fetch and apply a matching subtitle as soon as a title starts playing. Searched at SubtitleDB, which needs no account, plus SubDL and OpenSubtitles when connected."
                 checked={mediaHubSettings?.autoSubtitlesEnabled ?? true}
                 onChange={handleSetAutoSubtitles}
-                requires={autoSubtitlesRequires}
               />
               <SegmentedRow
                 icon="planet"
@@ -1550,10 +1541,9 @@ export default function SettingsPage({
                 <ToggleRow
                   icon="eye"
                   title="Show subtitles automatically"
-                  description="Fetch and apply a matching subtitle as soon as a title starts playing."
+                  description="Fetch and apply a matching subtitle as soon as a title starts playing. Searched at SubtitleDB, which needs no account, plus SubDL and OpenSubtitles when connected."
                   checked={mediaHubSettings?.autoSubtitlesEnabled ?? true}
                   onChange={handleSetAutoSubtitles}
-                  requires={autoSubtitlesRequires}
                 />
                 <SegmentedRow
                   icon="planet"
@@ -1894,7 +1884,10 @@ export default function SettingsPage({
             <div className={styles.subGroup}>
               <div className={styles.subGroupHead}>
                 <h3>Subtitles</h3>
-                <p>Where subtitles are searched for, in the order you have them connected.</p>
+                <p>
+                  SubtitleDB is built in and needs no account: every title is searched there first.
+                  These two add their catalogues when connected.
+                </p>
               </div>
               <div className={styles.groupGrid}>
                 <SubDLSection />
