@@ -33,6 +33,7 @@ import { watchRegion } from './watchProviders'
 import { keepAnimeHistoryWithShows } from './animeSyncRepair'
 import { unsentAnimeSeasons } from './animeSeasons'
 import { getDatabase } from './dbState'
+import { getActiveWindow, sendToRenderer } from './rendererBridge'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { takeSecretsResetNotice } from './secretStorage'
@@ -849,4 +850,25 @@ export function registerAppIpc(): void {
   handle<undefined, { fullScreen: boolean }>(MEDIA_HUB_CHANNELS.windowIsFullscreen, () => {
     return { fullScreen: mainWindowFullscreenTarget() }
   })
+
+  // The player overlay's "Set up …" buttons. The overlay is its own window
+  // with no control centre, so the request is handed to the main window as a
+  // push on the same channel, and that window comes to the front with the
+  // keyboard. Only strings of a sane length travel on; the main window checks
+  // the section against its own list before opening anything.
+  handle<{ section?: unknown; anchor?: unknown } | undefined, { ok: true }>(
+    MEDIA_HUB_CHANNELS.uiOpenControlCentre,
+    (_event, place) => {
+      const section = typeof place?.section === 'string' ? place.section.slice(0, 64) : ''
+      if (!section) throw new Error('Invalid control centre section.')
+      const anchor = typeof place?.anchor === 'string' ? place.anchor.slice(0, 128) : undefined
+      const mainWindow = getActiveWindow()
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.focus()
+      sendToRenderer(
+        MEDIA_HUB_CHANNELS.uiOpenControlCentre,
+        anchor ? { section, anchor } : { section }
+      )
+      return { ok: true }
+    }
+  )
 }

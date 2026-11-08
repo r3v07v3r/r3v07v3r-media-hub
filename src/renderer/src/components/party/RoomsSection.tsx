@@ -5,6 +5,7 @@ import { useAppState } from '@renderer/context/AppStateContext'
 import { catalogItemToMediaItem } from '@renderer/lib/mediaHub/adapters'
 import type { MediaKind, RoomView, RoomsStatus } from '@shared/media-hub/types'
 import { Icon } from '@renderer/components/icons/Icon'
+import { RequiresSetup } from '@renderer/components/layout/RequiresSetup'
 import styles from './RoomsSection.module.css'
 
 // A join-request has no wire-level cancel or ack — the only replies are
@@ -121,6 +122,11 @@ export function RoomsSection() {
 
   if (!status) return null
 
+  // A room lives on the party relay: creating one, and joining a member's
+  // party, cannot work without it. Joining by a pasted code stays, since
+  // the code carries the relay's address. Unknown until the snapshot lands.
+  const relayMissing = mediaHubSettings !== null && !mediaHubSettings.partySyncConnected
+
   const renderRoom = (room: RoomView): React.ReactElement => (
     <div key={room.roomId} className={styles.roomCard}>
       <div className={styles.roomHead}>
@@ -231,44 +237,48 @@ export function RoomsSection() {
                     </button>
                   ) : choosing === key ? (
                     <span className={styles.choiceRow}>
-                      <button
-                        type="button"
-                        className={styles.joinButton}
-                        disabled={busy}
-                        onClick={() =>
-                          run(async () => {
-                            setChoosing(null)
-                            const api = window.api?.mediaHub?.rooms
-                            // Already hosting: join straight away. Watching
-                            // alone: ask, and they'll create one for us —
-                            // without being interrupted; their side answers
-                            // with a code and keeps playing.
-                            if (member.activity?.partyCode) {
-                              await joinParty(
-                                member.activity.partyCode,
-                                mediaHubSettings?.partyDisplayName || 'A friend'
-                              )
-                            } else {
-                              setAwaiting(key)
-                              armAwaitingTimeout(key, member.name)
-                              try {
-                                await api?.send(room.roomId, {
-                                  type: 'friend-join-request',
-                                  toFriendId: member.friendId,
-                                  fromFriendId: '',
-                                  fromName: mediaHubSettings?.partyDisplayName || 'A friend'
-                                })
-                              } catch (error) {
-                                clearAwaitingTimeout()
-                                setAwaiting(null)
-                                throw error
+                      {relayMissing ? (
+                        <RequiresSetup compact services={['relay']} what="Joining them" />
+                      ) : (
+                        <button
+                          type="button"
+                          className={styles.joinButton}
+                          disabled={busy}
+                          onClick={() =>
+                            run(async () => {
+                              setChoosing(null)
+                              const api = window.api?.mediaHub?.rooms
+                              // Already hosting: join straight away. Watching
+                              // alone: ask, and they'll create one for us —
+                              // without being interrupted; their side answers
+                              // with a code and keeps playing.
+                              if (member.activity?.partyCode) {
+                                await joinParty(
+                                  member.activity.partyCode,
+                                  mediaHubSettings?.partyDisplayName || 'A friend'
+                                )
+                              } else {
+                                setAwaiting(key)
+                                armAwaitingTimeout(key, member.name)
+                                try {
+                                  await api?.send(room.roomId, {
+                                    type: 'friend-join-request',
+                                    toFriendId: member.friendId,
+                                    fromFriendId: '',
+                                    fromName: mediaHubSettings?.partyDisplayName || 'A friend'
+                                  })
+                                } catch (error) {
+                                  clearAwaitingTimeout()
+                                  setAwaiting(null)
+                                  throw error
+                                }
                               }
-                            }
-                          }, 'Could not join them.')
-                        }
-                      >
-                        Join them
-                      </button>
+                            }, 'Could not join them.')
+                          }
+                        >
+                          Join them
+                        </button>
+                      )}
                       <button
                         type="button"
                         className={styles.secondaryButton}
@@ -401,33 +411,37 @@ export function RoomsSection() {
 
       {status.rooms.map(renderRoom)}
 
-      <div className={styles.joinRow}>
-        <input
-          className={styles.input}
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
-          placeholder="Name a new room"
-          maxLength={40}
-          aria-label="New room name"
-        />
-        <button
-          type="button"
-          className={styles.primaryButton}
-          disabled={busy || !newName.trim()}
-          onClick={() =>
-            run(async () => {
-              const api = window.api?.mediaHub?.rooms
-              if (!api) return
-              const { code } = await api.create(newName.trim())
-              setNewName('')
-              await window.api?.mediaHub?.clipboard.write(code)
-              pushNotification({ tone: 'success', message: 'Room created — code copied.' })
-            }, 'Could not create the room.')
-          }
-        >
-          Create
-        </button>
-      </div>
+      {relayMissing ? (
+        <RequiresSetup services={['relay']} what="Creating a room" />
+      ) : (
+        <div className={styles.joinRow}>
+          <input
+            className={styles.input}
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="Name a new room"
+            maxLength={40}
+            aria-label="New room name"
+          />
+          <button
+            type="button"
+            className={styles.primaryButton}
+            disabled={busy || !newName.trim()}
+            onClick={() =>
+              run(async () => {
+                const api = window.api?.mediaHub?.rooms
+                if (!api) return
+                const { code } = await api.create(newName.trim())
+                setNewName('')
+                await window.api?.mediaHub?.clipboard.write(code)
+                pushNotification({ tone: 'success', message: 'Room created — code copied.' })
+              }, 'Could not create the room.')
+            }
+          >
+            Create
+          </button>
+        </div>
+      )}
       <div className={styles.joinRow}>
         <input
           className={styles.input}

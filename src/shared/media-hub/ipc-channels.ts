@@ -398,6 +398,9 @@ export const MEDIA_HUB_CHANNELS = {
   windowExitFullscreen: 'mediahub:window:exit-fullscreen',
   windowIsFullscreen: 'mediahub:window:is-fullscreen',
   windowFullscreenChanged: 'mediahub:window:fullscreen-changed', // push event
+  // The player overlay asks for the control centre in the main window (a setup
+  // button); main focuses that window and pushes the same channel to it.
+  uiOpenControlCentre: 'mediahub:ui:open-control-centre', // invoke + push event
 
   // Downloads
   downloadBlocked: 'mediahub:download:blocked', // push event — a file was refused

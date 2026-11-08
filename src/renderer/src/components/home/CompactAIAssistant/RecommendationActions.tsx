@@ -144,7 +144,12 @@ export function RecommendationActions({ kinds = ['movie', 'series'] }: Recommend
         : `Picked "${pick.title}" at random. A real recommendation requires Ollama to be set up.`,
       ...(modelDeclined
         ? {}
-        : { action: { label: 'Set up Ollama', run: () => openControlCentre('ai', 'settings-ollama') } })
+        : {
+            action: {
+              label: 'Set up Ollama',
+              run: () => openControlCentre('ai', 'settings-ollama')
+            }
+          })
     })
     openDetail(pick)
   }

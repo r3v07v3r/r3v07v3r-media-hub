@@ -23,6 +23,7 @@ import {
   HomeRail
 } from '@renderer/types'
 import {
+  CONTROL_CENTRE_SECTIONS,
   DEFAULT_CONTROL_CENTRE_SECTION,
   type ControlCentreSectionId
 } from '@renderer/components/controlcentre/sections'
@@ -418,6 +419,11 @@ interface AppStateValue {
    *  so the note can say it did not answer in time rather than that it
    *  could not be reached (see combinedShortfall). */
   assistantProviderReason?: ProviderShortfall
+  /** The model half could not run because no local model is set up (main's
+   *  requireConfig refusal, or no bridge at all). The panel shows the
+   *  RequiresSetup notice for Ollama in place of the sentence; the search
+   *  results stay. */
+  assistantNeedsModel: boolean
   runAssistantQuery: (query: string) => void
   closeAssistant: () => void
 
@@ -685,6 +691,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [mediaHubSettings, setMediaHubSettings] = useState<MediaHubSettingsSnapshot | null>(null)
   const [assistantState, setAssistantState] = useState<AssistantState>('idle')
   const [assistantResponse, setAssistantResponse] = useState<string | null>(null)
+  const [assistantNeedsModel, setAssistantNeedsModel] = useState(false)
   // The RAW rows behind the assistant's two title rows, for the same reason
   // categorySearchRaw below keeps rows rather than MediaItems: the watched/
   // My List/disliked badges are baked in at conversion time, and an answer
@@ -1291,6 +1298,20 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     })
   }, [pushNotification])
 
+  // The control centre, and opening it at a section and heading. Declared
+  // ahead of the toasts below, whose Set up actions open it.
+  const [controlCentreOpen, setControlCentreOpen] = useState(false)
+  const [controlCentreSection, setControlCentreSection] = useState<ControlCentreSectionId>(
+    DEFAULT_CONTROL_CENTRE_SECTION
+  )
+  const [controlCentreAnchor, setControlCentreAnchor] = useState<string | null>(null)
+  const openControlCentre = useCallback((section: ControlCentreSectionId, anchor?: string) => {
+    setControlCentreSection(section)
+    setControlCentreAnchor(anchor ?? null)
+    setControlCentreOpen(true)
+  }, [])
+  const clearControlCentreAnchor = useCallback(() => setControlCentreAnchor(null), [])
+
   // The cache server, found or followed by the main process on its own (see
   // lanCache.ts's runLanCacheAutoConnect), and, on the administrator's
   // device, another device asking to join. The request waits on the server
@@ -1333,7 +1354,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         pushNotification({
           tone: 'info',
           message:
-            'The LAN cache needs your TorBox key before it can fetch for you. Add one under Control centre → Media servers, or wait for the cache to have it.'
+            'The LAN cache needs your TorBox key before it can fetch for you. Add one under Control centre → Media servers, or wait for the cache to have it.',
+          action: {
+            label: 'Set up TorBox',
+            run: () => openControlCentre('media-services', 'settings-torbox')
+          }
         })
         return
       }
@@ -1353,7 +1378,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
               : `${event.serverName} moved to ${event.url}. Following it there.`
       pushNotification({ tone: event.kind === 'asked' ? 'info' : 'success', message })
     })
-  }, [pushNotification])
+  }, [pushNotification, openControlCentre])
 
   // Watch-status reconciliation — see tracking.ts's own header comment on
   // why this only ever runs occasionally and never on the critical path
@@ -1366,17 +1391,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [syncDiscrepancies, setSyncDiscrepancies] = useState<WatchStatusDiscrepancy[]>([])
   const [syncShows, setSyncShows] = useState<ShowSyncRow[]>([])
   const [syncReviewOpen, setSyncReviewOpen] = useState(false)
-  const [controlCentreOpen, setControlCentreOpen] = useState(false)
-  const [controlCentreSection, setControlCentreSection] = useState<ControlCentreSectionId>(
-    DEFAULT_CONTROL_CENTRE_SECTION
-  )
-  const [controlCentreAnchor, setControlCentreAnchor] = useState<string | null>(null)
-  const openControlCentre = useCallback((section: ControlCentreSectionId, anchor?: string) => {
-    setControlCentreSection(section)
-    setControlCentreAnchor(anchor ?? null)
-    setControlCentreOpen(true)
-  }, [])
-  const clearControlCentreAnchor = useCallback(() => setControlCentreAnchor(null), [])
 
   // Discarded when the library underneath them changes — a profile switch, or
   // a restore. A discrepancy is a claim about ONE profile's history against
@@ -1458,11 +1472,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           tone: 'warning',
           message:
             'Saved sign-ins could not be unlocked. Reconnect your services under Control centre → Accounts.',
-          action: { label: 'Open control centre', run: () => setControlCentreOpen(true) }
+          action: { label: 'Open Accounts', run: () => openControlCentre('accounts') }
         })
       })
       .catch(() => {})
-  }, [pushNotification])
+  }, [pushNotification, openControlCentre])
 
   const resolveSyncDiscrepancy = useCallback(
     (discrepancy: WatchStatusDiscrepancy, resolution: ReconcileResolution) => {
@@ -1486,10 +1500,28 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             setSyncDiscrepancies((prev) =>
               prev.some((d) => d.id === discrepancy.id) ? prev : [...prev, discrepancy]
             )
-            pushNotification({
-              tone: 'error',
-              message: `Could not keep your choice for "${discrepancy.title}". Nothing was changed — try again.`
-            })
+            // Main refuses a keep-local pick outright when there is no Simkl
+            // token to deliver it with (tracking.ts), and "try again" could
+            // never succeed then. Asked rather than inferred from the answer,
+            // which is the same for an id Simkl cannot be told about.
+            void (async () => {
+              const simkl = await window.api?.mediaHub?.simkl.status().catch(() => null)
+              if (simkl && !simkl.connected) {
+                pushNotification({
+                  tone: 'error',
+                  message: `Keeping your choice for "${discrepancy.title}" requires Simkl to be set up. Nothing was changed.`,
+                  action: {
+                    label: 'Set up Simkl',
+                    run: () => openControlCentre('accounts', 'settings-simkl')
+                  }
+                })
+                return
+              }
+              pushNotification({
+                tone: 'error',
+                message: `Could not keep your choice for "${discrepancy.title}". Nothing was changed — try again.`
+              })
+            })()
             return
           }
           watchedIdsResult.refresh()
@@ -1497,7 +1529,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         })
         .catch(() => {})
     },
-    [watchedIdsResult, homeFeed, pushNotification]
+    [watchedIdsResult, homeFeed, pushNotification, openControlCentre]
   )
 
   // Rows a pass adds after the launch check (the catch-up on focus, the
@@ -1771,6 +1803,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     abandonAssistantRequest()
     setAssistantState('idle')
     setAssistantResponse(null)
+    setAssistantNeedsModel(false)
     setAssistantFindings({ results: [], similar: [], similarSource: null, searching: false })
   }, [abandonAssistantRequest])
 
@@ -2300,16 +2333,37 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           return { started: false, target: media }
         // Keyed by title: the message names the reason, not the title, so
         // two titles failing alike would otherwise share one Retry.
+        const message = playbackPreparationErrorMessage(error)
+        const retry = {
+          label: 'Retry',
+          run: () => {
+            void startPlaybackRef.current(media)
+          }
+        }
+        // Nothing to play from: main's NO_PLAYBACK_SOURCE_MESSAGE
+        // (streamTierRules.ts), or the snapshot saying neither TorBox nor a
+        // media server is set up. Retry alone could never succeed, so the
+        // way to set one up comes first. Every play path lands here: a
+        // click, Play next, a party follower's auto-play, Rooms' Watch too
+        // and the player's Wrong copy.
+        const noSource =
+          /Connect TorBox or a media server/i.test(message) ||
+          (mediaHubSettings !== null &&
+            !mediaHubSettings.torboxConnected &&
+            !mediaHubSettings.mediaServerConnected)
         pushNotification({
           tone: 'error',
-          message: playbackPreparationErrorMessage(error),
+          message,
           key: `play-failed:${media.id}`,
-          action: {
-            label: 'Retry',
-            run: () => {
-              void startPlaybackRef.current(media)
-            }
-          }
+          ...(noSource
+            ? {
+                action: {
+                  label: 'Set up TorBox',
+                  run: () => openControlCentre('media-services', 'settings-torbox')
+                },
+                secondaryAction: retry
+              }
+            : { action: retry })
         })
         return { started: false, target: media }
       } finally {
@@ -2324,7 +2378,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       pushNotification,
       closeContextMenu,
       cancelPlaybackPreparation,
-      resolvePlaybackTarget
+      resolvePlaybackTarget,
+      openControlCentre
     ]
   )
   /** The public shape: everything outside this file only wants to know
@@ -2587,15 +2642,35 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     [homeFeed, watchedIdsResult, pushNotification, myList, toggleMyList, holdInFeed]
   )
 
+  // The control centre opened over a film counts as main-window UI the same
+  // way the party panel does: the embedded video covers this whole page, so
+  // the picture (and the overlay with it) has to step aside for it to be
+  // seen. The only way in while a film plays is the overlay's own Set up
+  // buttons (see the onOpenControlCentre effect below).
+  const mainWindowUiOpen = partyPanelOpen || (controlCentreOpen && Boolean(playbackMedia))
   const partyPanelReportedOpen = useRef<boolean | null>(null)
   useEffect(() => {
     const reported = partyPanelReportedOpen.current
-    partyPanelReportedOpen.current = partyPanelOpen
+    partyPanelReportedOpen.current = mainWindowUiOpen
     const player = window.api?.mediaHub?.player
     if (!player) return
-    if (partyPanelOpen) player.uiEvent({ type: 'party-panel-open' }).catch(() => {})
+    if (mainWindowUiOpen) player.uiEvent({ type: 'party-panel-open' }).catch(() => {})
     else if (reported !== false) player.uiEvent({ type: 'party-panel-closed' }).catch(() => {})
-  }, [partyPanelOpen, playbackMedia])
+  }, [mainWindowUiOpen, playbackMedia])
+
+  // The player overlay's Set up buttons. The overlay is its own window with
+  // no control centre; main brings this window forward and hands the place
+  // over. The section is checked against this window's own list, since a
+  // stale overlay could name one that has since moved.
+  useEffect(() => {
+    const api = window.api?.mediaHub?.window
+    if (!api?.onOpenControlCentre) return
+    return api.onOpenControlCentre((place) => {
+      const section = CONTROL_CENTRE_SECTIONS.find((entry) => entry.id === place?.section)?.id
+      if (!section) return
+      openControlCentre(section, typeof place.anchor === 'string' ? place.anchor : undefined)
+    })
+  }, [openControlCentre])
 
   // Held in refs, not dependencies: refreshWatchStatus's identity changes
   // whenever the home feed or watched-ids query refreshes, and re-subscribing
@@ -3110,6 +3185,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // machine isn't running two models at once.
       abandonAssistantRequest()
       setAssistantResponse(null)
+      setAssistantNeedsModel(false)
       setAssistantFindings({ results: [], similar: [], similarSource: null, searching: false })
 
       if (!question) {
@@ -3170,11 +3246,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // could answer later. The one case the renderer can settle by
           // itself.
           setAssistantState(found.length ? 'responding' : 'error')
-          setAssistantResponse(
-            found.length
-              ? 'Connect a local model in Settings → AI and R3 will add what it makes of these.'
-              : 'No local model is connected, and nothing in the catalog matched that.'
-          )
+          setAssistantNeedsModel(true)
+          setAssistantResponse(found.length ? null : 'Nothing in the catalog matched that.')
           return
         }
 
@@ -3204,11 +3277,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // that could not be reached downgrades the answer rather than
           // replacing it with a failure.
           setAssistantState(found.length ? 'responding' : 'error')
-          setAssistantResponse(
-            error instanceof Error
-              ? error.message
-              : 'That question did not get through to the model.'
-          )
+          // No model set up is not a failure to explain in prose: the panel
+          // draws the Ollama notice with its button in place of the sentence
+          // (main's requireConfig wording; the older wording too, for a main
+          // process built before it changed).
+          const message = error instanceof Error ? error.message : ''
+          if (/requires Ollama to be set up|No local model is connected/i.test(message)) {
+            setAssistantNeedsModel(true)
+            setAssistantResponse(found.length ? null : 'Nothing in the catalog matched that.')
+            return
+          }
+          setAssistantResponse(message || 'That question did not get through to the model.')
           return
         }
 
@@ -3361,6 +3440,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       assistantSearching: assistantFindings.searching,
       assistantProviderUnreachable: assistantFindings.providerUnreachable === true,
       assistantProviderReason: assistantFindings.providerReason,
+      assistantNeedsModel,
       runAssistantQuery,
       closeAssistant,
       categorySearch,
@@ -3464,6 +3544,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       assistantFindings.searching,
       assistantFindings.providerUnreachable,
       assistantFindings.providerReason,
+      assistantNeedsModel,
       runAssistantQuery,
       closeAssistant,
       categorySearch,

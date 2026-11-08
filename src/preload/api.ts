@@ -1103,7 +1103,20 @@ export function createApi(transport: ApiTransport) {
         isFullscreen: (): Promise<{ fullScreen: boolean }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.windowIsFullscreen),
         onFullscreenChange: (onEvent: (payload: { fullScreen: boolean }) => void): (() => void) =>
-          subscribe<{ fullScreen: boolean }>(MEDIA_HUB_CHANNELS.windowFullscreenChanged, onEvent)
+          subscribe<{ fullScreen: boolean }>(MEDIA_HUB_CHANNELS.windowFullscreenChanged, onEvent),
+        /** The player overlay's setup buttons: open the control centre in the
+         *  MAIN window at a section (and heading), and bring that window to
+         *  the front. The overlay has no AppStateContext of its own. */
+        openControlCentre: (place: { section: string; anchor?: string }): Promise<{ ok: true }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.uiOpenControlCentre, place),
+        /** The main window's half: main forwards the overlay's request here. */
+        onOpenControlCentre: (
+          onEvent: (place: { section: string; anchor?: string }) => void
+        ): (() => void) =>
+          subscribe<{ section: string; anchor?: string }>(
+            MEDIA_HUB_CHANNELS.uiOpenControlCentre,
+            onEvent
+          )
       },
 
       profiles: {

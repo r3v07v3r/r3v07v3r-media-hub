@@ -3,6 +3,7 @@
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
+import { RequiresSetup } from '@renderer/components/layout/RequiresSetup'
 import { resolveArtwork } from '@renderer/lib/artwork'
 import type { MediaItem } from '@renderer/types'
 import styles from './Overlays.module.css'
@@ -92,6 +93,7 @@ export function AIResponsePanel() {
     assistantSearching,
     assistantProviderUnreachable,
     assistantProviderReason,
+    assistantNeedsModel,
     closeAssistant,
     openDetail,
     dislikedIds
@@ -176,7 +178,14 @@ export function AIResponsePanel() {
               <span className={styles.skeletonLine} style={{ width: '55%' }} />
             </div>
           ) : (
-            assistantResponse
+            <>
+              {assistantResponse}
+              {/* The search half needs no model; the "what the model makes
+                  of it" half does, and says so with the way to set it up. */}
+              {assistantNeedsModel && (
+                <RequiresSetup compact services={['ollama']} what="Asking R3" />
+              )}
+            </>
           )}
         </div>
 
