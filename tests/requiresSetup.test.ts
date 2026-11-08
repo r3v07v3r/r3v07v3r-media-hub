@@ -76,7 +76,12 @@ async function main(): Promise<void> {
     assert.ok(anchors.length >= 10, `found ${anchors.length} anchors in setupPlaces.ts`)
     const sources = rendererSources()
     const missing = anchors.filter(
-      (anchor) => !sources.some((source) => source.includes(`id="${anchor}"`))
+      // A heading draws it as id="…", or a row takes it as titleId="…" and
+      // puts it on its title span (SettingsPage's ActionRow).
+      (anchor) =>
+        !sources.some(
+          (source) => source.includes(`id="${anchor}"`) || source.includes(`Id="${anchor}"`)
+        )
     )
     assert.deepEqual(missing, [], `anchors with no id="…" in src/renderer/src: ${missing}`)
   })
