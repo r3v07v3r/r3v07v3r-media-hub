@@ -509,6 +509,10 @@ function PlayerControls() {
   // cursor — see surfaceIdle) while someone is deciding.
   const pinned =
     menu !== null ||
+    // A drag of the subtitle handle holds pointer capture; were the bar to
+    // fade mid-drag the handle would unmount with it and the release would
+    // never arrive, leaving the drag stuck on.
+    draggingSubtitles ||
     party.syncing ||
     roomRailOpen ||
     autoplay !== null ||
