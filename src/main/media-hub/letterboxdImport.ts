@@ -182,7 +182,7 @@ export async function importLetterboxdLibrary(
   const { apiKey } = tmdbCredentials()
   if (!apiKey) {
     throw new Error(
-      'Connect TMDB in Settings before importing from Letterboxd — resolving titles needs it.'
+      'Importing from Letterboxd requires a TMDB key to be set up. It is under Control centre > Accounts > TMDB.'
     )
   }
 

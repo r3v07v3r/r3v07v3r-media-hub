@@ -342,7 +342,7 @@ async function requireConfig(): Promise<OllamaConfig> {
   const config = await resolveConfig()
   if (!config.baseUrl || !config.model) {
     throw new Error(
-      'No local model is connected. Start Ollama, or point R3 at one in Settings under AI.'
+      'Asking R3 requires Ollama to be set up. Start Ollama, or point R3 at one under Control centre > AI > Local AI model.'
     )
   }
   return config

@@ -345,6 +345,12 @@ async function searchableItem(item: OpenSubtitlesSearchItem): Promise<OpenSubtit
   return item
 }
 
+/** Whether either subtitle provider is set up — the check searchSubtitles
+ *  refuses on, for callers that should not ask at all without one. */
+export function subtitleProviderConnected(): boolean {
+  return subdlConnected() || osConnected()
+}
+
 /**
  * Searches every connected provider for one title and merges the rows —
  * the subtitles:search handler, and play:stream's automatic fetch for a
@@ -357,7 +363,9 @@ export async function searchSubtitles(
   const subdlOn = subdlConnected()
   const osOn = osConnected()
   if (!subdlOn && !osOn) {
-    throw new Error('Connect SubDL or OpenSubtitles in Settings to search for subtitles.')
+    throw new Error(
+      'Searching for subtitles requires SubDL or OpenSubtitles to be set up. Both are under Control centre > Accounts.'
+    )
   }
 
   // After the connection check: the id lookup can be two network round
