@@ -27,10 +27,10 @@ export interface ServiceReadiness {
   source: boolean
   tmdb: boolean
   omdb: boolean
+  /** The two keyed subtitle providers. Online subtitles themselves never
+   *  need setup: SubtitleDB is built in and searched for everyone. */
   subdl: boolean
   opensubtitles: boolean
-  /** Either subtitle provider. */
-  subtitles: boolean
   ollama: boolean
   relay: boolean
   simkl: boolean
@@ -138,8 +138,6 @@ export function useServiceReadiness(): ServiceReadiness {
   const s = mediaHubSettings
   const torbox = s?.torboxConnected === true
   const mediaServer = s?.mediaServerConnected === true
-  const subdl = s?.subdlConnected === true
-  const opensubtitles = s?.osConnected === true
   return {
     loaded: Boolean(s) && trackers.loaded,
     torbox,
@@ -147,9 +145,8 @@ export function useServiceReadiness(): ServiceReadiness {
     source: torbox || mediaServer,
     tmdb: s?.tmdbConnected === true,
     omdb: s?.omdbConnected === true,
-    subdl,
-    opensubtitles,
-    subtitles: subdl || opensubtitles,
+    subdl: s?.subdlConnected === true,
+    opensubtitles: s?.osConnected === true,
     ollama: s?.ollamaConnected === true,
     relay: s?.partySyncConnected === true,
     simkl: trackers.simkl,

@@ -23,7 +23,6 @@ export type SetupService =
   | 'omdb'
   | 'subdl'
   | 'opensubtitles'
-  | 'subtitles'
   | 'ollama'
   | 'relay'
   | 'mediaServer'
@@ -60,13 +59,6 @@ export const SETUP_PLACES: Record<SetupService, SetupPlace> = {
   },
   subdl: { name: 'SubDL', section: 'accounts', anchor: 'settings-subdl' },
   opensubtitles: { name: 'OpenSubtitles', section: 'accounts', anchor: 'settings-opensubtitles' },
-  /** Either subtitle provider; the button lands on the first of the two. */
-  subtitles: {
-    name: 'a subtitle provider',
-    section: 'accounts',
-    anchor: 'settings-subdl',
-    button: 'Set up SubDL'
-  },
   ollama: { name: 'Ollama', section: 'ai', anchor: 'settings-ollama' },
   relay: {
     name: 'the party relay',

@@ -300,12 +300,13 @@ Playback is mpv, embedded inside the app's own window on Windows; there is no tr
   you use it or close it, and each title has only one: a second failure replaces it with the latest
   reason.
 - **Subtitles:** with **Show subtitles automatically** on (the Settings page), an embedded track in
-  your subtitle language is turned on by itself, and if the file has none and SubDL or OpenSubtitles
-  is connected, one is fetched and applied, with a note saying where it came from; with neither,
-  the setting says so, with a **Set up** button. With either
-  connected, the player's **Subtitles** button also searches online and applies the result you pick.
-  Both are searched together; SubDL rows come first because its downloads are unmetered, and
-  OpenSubtitles can match by file hash for frame-accurate sync. Series and anime episodes are looked
+  your subtitle language is turned on by itself, and if the file has none, one is fetched and
+  applied, with a note saying where it came from. The player's **Subtitles** button also searches
+  online and applies the result you pick. SubtitleDB is built in and needs no account; SubDL and
+  OpenSubtitles join the search when connected. All are searched together; SubtitleDB rows come
+  first, then SubDL's, because their downloads are unmetered, and rows matched to the exact release
+  playing (SubtitleDB by the torrent's info hash, OpenSubtitles by file hash) go to the top for
+  frame-accurate sync. Series and anime episodes are looked
   up by the show's IMDb id with the season and episode, and OpenSubtitles tries the title when that
   finds nothing, so later anime seasons and shows known by a Japanese name find subtitles too. An
   anime's IMDb id comes from Simkl, so that needs a Simkl Client ID (no sign-in); without one the
@@ -713,7 +714,8 @@ never in the source tree.
 | **Simkl**           | No                                                   | History push (scrobbles if turned on) and take-in of what was watched elsewhere, two-way watchlist (anime comes in only), your Simkl lists, Sync review.                                      | Accounts → Tracking                |
 | **Trakt**           | No                                                   | History, ratings and (if turned on) scrobble push; two-way watchlist (films and series); lists pull; one-off import, then history pull; public lists as Collections (needs only the app key). | Accounts → Tracking                |
 | **MyAnimeList**     | No                                                   | Anime progress push, two-way watchlist, preview-then-apply sync.                                                                                                                              | Accounts → Tracking                |
-| **SubDL**           | No                                                   | Subtitle search with no daily download limit.                                                                                                                                                 | Accounts → Subtitles               |
+| **SubtitleDB**      | No (nothing to set up)                               | Built-in subtitle search and download, no account; the provider every install has.                                                                                                            |
+| **SubDL**           | No                                                   | A second subtitle catalogue with no daily download limit.                                                                                                                                     | Accounts → Subtitles               |
 | **OpenSubtitles**   | No                                                   | A second subtitle catalogue with hash matching (a free account allows 5 downloads a day).                                                                                                     | Accounts → Subtitles               |
 | **R3 Party Sync**   | To create a Room; not to join one or for a LAN party | Relays Watch Party traffic across the internet; the backbone Rooms run on. See [party-sync-worker/README.md](party-sync-worker/README.md).                                                    | Community → Watch Party relay      |
 | **Ollama**          | No                                                   | The assistant and Recommend Next, on a model you host. Found automatically on this machine.                                                                                                   | AI                                 |
@@ -920,9 +922,9 @@ What the app does when the player hangs is under
 Both automatic steps follow **Show subtitles automatically** on the Settings page. While it is on, a
 track in the subtitle language chosen there is turned on by itself, and when the copy that plays has
 no such track, one is fetched online by itself, whatever its audio, unless you pick one first; a
-message names the language and the service it came from. That needs SubDL or OpenSubtitles connected
-under **Control centre → Accounts → Subtitles**, and each fetch from OpenSubtitles counts against
-its daily downloads. While the switch is off, nothing is fetched, and a track in your subtitle
+message names the language and the service it came from. SubtitleDB is searched without any setup;
+SubDL and OpenSubtitles join when connected under **Control centre → Accounts → Subtitles**, and
+each fetch from OpenSubtitles counts against its daily downloads. While the switch is off, nothing is fetched, and a track in your subtitle
 language is turned on only when the copy lacks your audio language; with your audio language, the
 player alone decides whether one shows. A subtitle you pick yourself in the player's Subtitles menu
 always wins; otherwise open that menu and pick a result.

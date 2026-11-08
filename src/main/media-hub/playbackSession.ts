@@ -29,6 +29,7 @@ import path from 'node:path'
 
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type {
+  PlaybackRelease,
   CacheSessionMeta,
   MediaTracks,
   PlaybackResult,
@@ -43,6 +44,7 @@ import { sendToRenderer } from './rendererBridge'
 import { getPlaybackBufferSeconds } from '../../shared/media-hub/playbackBuffer'
 import { normalizeVideoScaling } from '../../shared/media-hub/videoScaling'
 import type { PlayerSessionMedia } from '../../shared/media-hub/player'
+import { subtitleProviderName } from '../../shared/media-hub/subtitleProviders'
 import { metadata } from './catalog'
 import { nextEpisodeInOrder } from '../../shared/media-hub/nextEpisode'
 import { hasAired } from '../../shared/media-hub/catalog-logic'
@@ -74,11 +76,7 @@ import {
   memoryModeEnabled,
   MIN_CACHE_BYTES
 } from './streamCache'
-import {
-  downloadSubtitleText,
-  searchSubtitles,
-  subtitleProviderConnected
-} from './subtitlesService'
+import { downloadSubtitleText, searchSubtitles } from './subtitlesService'
 
 export { mpvPath } from './mpv'
 
@@ -171,6 +169,12 @@ export async function applyStoragePolicyToPlayback(): Promise<void> {
   // clearAllSessions skips whatever is in activeCacheTokens, so the live
   // session is not pulled out from under the player mid-frame.
   if (memoryModeEnabled()) await clearAllSessions()
+}
+
+/** The release playing — its name and, for a torrent, its info hash —
+ *  for the subtitle providers' exact-release lookups. Null between titles. */
+export function activeRelease(): PlaybackRelease | null {
+  return getSessionSnapshot()?.media?.release ?? null
 }
 
 export function activeStreamUrl(): string {
@@ -558,10 +562,10 @@ interface SubtitlesApplyPayload {
  * rejects the obviously malformed early, with a message the menu can show.
  */
 function parseSubtitleSelection(payload: SubtitlesApplyPayload | undefined): SubtitleSelection {
-  if (payload?.provider === 'subdl') {
+  if (payload?.provider === 'subdl' || payload?.provider === 'subtitledb') {
     const downloadPath = String(payload?.downloadPath || '')
     if (!downloadPath) throw new Error('Invalid subtitle selection.')
-    return { provider: 'subdl', fileId: 0, downloadPath }
+    return { provider: payload.provider, fileId: 0, downloadPath }
   }
   const fileId = Number(payload?.fileId)
   if (!Number.isInteger(fileId) || fileId <= 0) throw new Error('Invalid subtitle selection.')
@@ -581,9 +585,6 @@ export async function fetchSubtitlesForShortfall(
   since = subtitleChoiceCount()
 ): Promise<void> {
   if (readSettings().autoSubtitlesEnabled === false) return
-  // No provider set up: nothing to ask, and nothing worth logging. The
-  // setting shows a Set up button in its place until one is.
-  if (!subtitleProviderConnected()) return
   const media = getSessionSnapshot()?.media
   // The cache URL, which every session has — a copy played from this disk
   // has no remote link at all, and is as likely to need subtitles as any.
@@ -604,9 +605,9 @@ export async function fetchSubtitlesForShortfall(
     sendToRenderer(MEDIA_HUB_CHANNELS.playerUiEvent, {
       type: 'notify',
       tone: 'info',
-      message: `Added ${languageName(subtitles)} subtitles from ${
-        pick.provider === 'subdl' ? 'SubDL' : 'OpenSubtitles'
-      }.`
+      message: `Added ${languageName(subtitles)} subtitles from ${subtitleProviderName(
+        pick.provider
+      )}.`
     })
   } catch (error) {
     logError('media-hub:subtitles:auto', error)
