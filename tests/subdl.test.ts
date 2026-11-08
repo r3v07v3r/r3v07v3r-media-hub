@@ -93,6 +93,27 @@ check('normalizes a SubDL row into a provider-tagged SubtitleResult', () => {
   assert.equal(result.hearingImpaired, true)
 })
 
+check('keeps only the archive path from a url that carries the API key', () => {
+  // SubDL's live response since late 2026: the caller's own key is written
+  // onto every row's url. Without this the SSRF check refused every row and
+  // the menu said "No results" for a film with thirty English subtitles.
+  const result = normalizeSubdlResult({
+    release_name: 'Captain.America.The.Winter.Soldier.2014.1080p.BluRay.x265',
+    url: '/subtitle/3500214-8422634.zip?api_key=subdl_notarealkey',
+    language: 'EN'
+  })
+  assert.equal(result.downloadPath, '/subtitle/3500214-8422634.zip')
+  assert.equal(result.id, 'subdl:/subtitle/3500214-8422634.zip')
+  assert.ok(
+    !JSON.stringify(result).includes('subdl_notarealkey'),
+    'the key must not leave the main process in a row'
+  )
+  assert.equal(
+    resolveSubdlDownloadUrl(result.downloadPath),
+    'https://dl.subdl.com/subtitle/3500214-8422634.zip'
+  )
+})
+
 check('survives a row missing every optional field', () => {
   const result = normalizeSubdlResult({})
   assert.equal(result.provider, 'subdl')

@@ -177,9 +177,22 @@ async function subdlSearch(
     throw new Error(String(result.error || 'SubDL search failed.'))
   }
 
-  return (result.subtitles || [])
-    .map(normalizeSubdlResult)
-    .filter((entry) => resolveSubdlDownloadUrl(entry.downloadPath))
+  const rows = (result.subtitles || []).map(normalizeSubdlResult)
+  const usable = rows.filter((entry) => resolveSubdlDownloadUrl(entry.downloadPath))
+  if (rows.length && !usable.length) {
+    // Every row refused is SubDL changing the shape of its links (as it did
+    // when it put the API key on them), not a title without subtitles; a
+    // bare "No results" in the menu hid that for weeks.
+    logError(
+      'media-hub:subtitles:subdl',
+      new Error(
+        `SubDL returned ${rows.length} rows and none had a usable download path, e.g. ${JSON.stringify(
+          rows[0].downloadPath
+        )}`
+      )
+    )
+  }
+  return usable
 }
 
 /** Downloads a SubDL archive and returns the SRT text inside it. */
@@ -187,7 +200,17 @@ async function subdlDownloadSubtitleText(downloadPath: string): Promise<string> 
   const url = resolveSubdlDownloadUrl(downloadPath)
   if (!url) throw new Error('Invalid subtitle selection.')
 
-  const response = await fetch(url)
+  let response = await fetch(url)
+  if (response.status === 401 || response.status === 403) {
+    // The archives are public today (subdl.ts's header has the check), but
+    // SubDL now writes the key onto its links, so a day it starts requiring
+    // one is plausible. The key goes on the query string the way SubDL's
+    // own links carry it, and only after a refusal, so the free anonymous
+    // path stays the one normally used.
+    const withKey = new URL(url)
+    withKey.searchParams.set('api_key', subdlCredentials().apiKey)
+    response = await fetch(withKey)
+  }
   if (!response.ok) throw new Error('Could not download the subtitle file.')
 
   // Capped while streaming, not after: buffering the whole response first
