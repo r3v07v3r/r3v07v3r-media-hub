@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict'
 import {
+  addonFileName,
   checkcachedShortlist,
   guardedForPrefetch,
   rankStreams,
   releaseGroup,
+  selectTorrentFile,
   streamSeeders,
   titleMatchesRelease,
-  type SourcePreference
+  type SourcePreference,
+  type TorBoxFile
 } from '../src/main/media-hub/core'
 import { mediaServerCopyEndsSearch } from '../src/main/media-hub/streamTierRules'
 import { streamReleaseName } from '../src/shared/media-hub/streamQuality'
@@ -767,3 +770,90 @@ console.log('ok  balanced source preference')
   }
 }
 console.log('ok  media-server copy ends the search')
+
+// --- picking the file inside a torrent ---------------------------------------
+// Found 2026-11-10: Solo Leveling S02E05 from "[neoDESU] Solo Leveling
+// [Season 1+2]". Torrentio's fileIdx 20 is "Season 2/… S02E05.mkv" in the
+// torrent's order; TorBox lists the files in its own (here season 2's folder
+// first), and its entry 20 was a season-one episode, which is what played.
+{
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  const torboxListing: TorBoxFile[] = [
+    { id: 0, name: 'Solo Leveling [Season 1+2]/Extras/NCOP.mkv', size: 90 },
+    { id: 1, name: 'Solo Leveling [Season 1+2]/Fonts/font.ttf', size: 1 },
+    ...Array.from({ length: 13 }, (_, i) => ({
+      id: 2 + i,
+      name: `Solo Leveling [Season 1+2]/Season 2/Solo Leveling - S02E${pad(i + 1)}.mkv`,
+      size: 430 + i
+    })),
+    ...Array.from({ length: 12 }, (_, i) => ({
+      id: 15 + i,
+      name: `Solo Leveling [Season 1+2]/Season 1/Solo Leveling - S01E${pad(i + 1)}.mkv`,
+      size: 400 + i
+    }))
+  ]
+  const torrentio: StreamCandidate = {
+    infoHash: '9fc9990a5de2389b1ce26d56d6e5c6ff3b2978d0',
+    fileIdx: 20,
+    title:
+      '[neoDESU] Solo Leveling [Season 1+2] [BD 1080p x265 HEVC AAC] [Dual Audio]\nSeason 2/Solo Leveling - S02E05.mkv\n👤 39 💾 437.99 MB',
+    behaviorHints: { filename: 'Solo Leveling - S02E05.mkv' }
+  }
+  const nameOf = (f: TorBoxFile | null): string =>
+    String(f?.name ?? '')
+      .split('/')
+      .pop() ?? ''
+
+  assert.match(
+    nameOf(torboxListing[20]),
+    /S01E/,
+    'the fixture reproduces the bug: TorBox entry 20 is a season-one episode'
+  )
+  assert.equal(addonFileName(torrentio), 'Solo Leveling - S02E05.mkv')
+  assert.equal(
+    nameOf(
+      selectTorrentFile(torboxListing, { fileIdx: 20, fileName: addonFileName(torrentio) }, 2, 5)
+    ),
+    'Solo Leveling - S02E05.mkv',
+    "the add-on's file name wins over its index"
+  )
+  assert.equal(
+    addonFileName({ infoHash: 'x', title: 'Pack\nSeason 2/Solo Leveling - S02E05.mkv\n👤 1' }),
+    'Season 2/Solo Leveling - S02E05.mkv',
+    "without behaviorHints the path line in Torrentio's title names the file"
+  )
+  assert.equal(
+    nameOf(selectTorrentFile(torboxListing, { fileIdx: 20 }, 2, 5)),
+    'Solo Leveling - S02E05.mkv',
+    'with no file name, an index that names another episode loses to the episode match'
+  )
+  assert.equal(
+    selectTorrentFile(
+      torboxListing.filter((f) => !String(f.name).includes('/Season 2/')),
+      { fileIdx: 6 },
+      2,
+      5
+    ),
+    null,
+    'an index naming a different episode is never played when the episode is not in the list'
+  )
+
+  const absolute: TorBoxFile[] = Array.from({ length: 25 }, (_, i) => ({
+    id: i,
+    name: `[Group] Solo Leveling - ${pad(i + 1)} [1080p].mkv`,
+    size: 400
+  }))
+  assert.equal(
+    nameOf(selectTorrentFile(absolute, { fileIdx: 16 }, 2, 5)),
+    '[Group] Solo Leveling - 17 [1080p].mkv',
+    'a batch with absolute numbering still plays from the index'
+  )
+
+  const film: TorBoxFile[] = [
+    { id: 0, name: 'Film/sample.mkv', size: 10 },
+    { id: 1, name: 'Film/Film.2024.1080p.mkv', size: 9000 }
+  ]
+  assert.equal(nameOf(selectTorrentFile(film, { fileIdx: 0 }, undefined, undefined)), 'sample.mkv')
+  assert.equal(nameOf(selectTorrentFile(film, {}, undefined, undefined)), 'Film.2024.1080p.mkv')
+}
+console.log('ok  file inside a torrent')

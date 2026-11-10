@@ -43,7 +43,8 @@ import {
   releaseGroup,
   streamResolution,
   streamSizeGb,
-  selectVideoFile,
+  addonFileName,
+  selectTorrentFile,
   titleMatchesRelease,
   validateTorBoxToken,
   type RawApiPayload,
@@ -1406,28 +1407,17 @@ async function playCandidate(
     const season = Number(parts.at(-2))
     const episodic = parts.length >= 3 && Number.isFinite(season) && Number.isFinite(episode)
     const files = (item.files || []) as TorBoxFile[]
-    // Prefer the scraper add-on's own fileIdx (Torrentio provides it,
-    // Comet doesn't — see StreamCandidate.fileIdx's own doc comment)
-    // over selectVideoFile's filename-regex guessing, but only when it
-    // actually resolves to a real video file in TorBox's own listing —
-    // found live: on a large batch torrent (e.g. a "Complete Series"
-    // pack), the regex guess can miss entirely even though the add-on
-    // already told us exactly which file. Falls back to the regex guess
-    // whenever the index doesn't line up, rather than trusting it
-    // blindly (TorBox's own file ordering isn't guaranteed to match the
-    // add-on's).
-    const videoExt = /\.(mkv|mp4|avi|mov|webm|m4v|ts)$/i
-    const hintedIdx = Number(stream?.fileIdx)
-    const hinted =
-      Number.isInteger(hintedIdx) &&
-      hintedIdx >= 0 &&
-      files[hintedIdx] &&
-      videoExt.test(files[hintedIdx].name || files[hintedIdx].short_name || '')
-        ? files[hintedIdx]
-        : null
-    const file =
-      hinted ||
-      selectVideoFile(files, episodic ? season : undefined, episodic ? episode : undefined)
+    // The add-on's file name first, then the episode's own name, and the
+    // add-on's fileIdx only where it does not name another episode: that
+    // index counts the torrent's files, and TorBox lists them in its own
+    // order (Solo Leveling S02E05 opened a season-one episode from a
+    // two-season batch). See selectTorrentFile.
+    const file = selectTorrentFile(
+      files,
+      { fileIdx: stream?.fileIdx, fileName: addonFileName(stream) },
+      episodic ? season : undefined,
+      episodic ? episode : undefined
+    )
     if (!file) throw new Error('No matching video file was found in the TorBox torrent.')
     const result = await torboxFetch<{
       data?: string | { url?: string; download_url?: string }

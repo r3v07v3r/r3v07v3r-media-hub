@@ -6,11 +6,11 @@
 // file the daemon must never drag in. What IS shared is everything that
 // matters for correctness: fetchJson + the 'torbox' scheduler lane
 // (httpClient/taskScheduler, dependency-free by design) and
-// selectVideoFile from core.ts, so the daemon picks the same file out of a
+// selectTorrentFile from core.ts, so the daemon picks the same file out of a
 // season pack the app would.
 
 import { fetchJson } from '../src/main/media-hub/httpClient'
-import { selectVideoFile, type TorBoxFile } from '../src/main/media-hub/core'
+import { selectTorrentFile, type TorBoxFile } from '../src/main/media-hub/core'
 
 const TORBOX = 'https://api.torbox.app/v1/api'
 
@@ -83,15 +83,15 @@ export async function resolveDownload(
   const files = item?.files ?? []
   if (!files.length) return null // still ingesting — retry later
 
-  // Same preference order as the app's play path: the scraper's fileIdx
-  // when it maps to a real video file, selectVideoFile's guess otherwise.
-  const video = /\.(mkv|mp4|avi|mov|webm|m4v|ts)$/i
-  let file: TorBoxFile | null = null
-  if (options.fileIdx !== undefined && files[options.fileIdx]) {
-    const byIdx = files[options.fileIdx]
-    if (video.test(byIdx.name || byIdx.short_name || '')) file = byIdx
-  }
-  if (!file) file = selectVideoFile(files, options.season ?? null, options.episode ?? null)
+  // The app's play path's own rule (selectTorrentFile): the scraper's
+  // fileIdx counts the torrent's files, TorBox lists them in its own order,
+  // so the index is trusted only where it does not name another episode.
+  const file = selectTorrentFile(
+    files,
+    { fileIdx: options.fileIdx },
+    options.season ?? null,
+    options.episode ?? null
+  )
   if (!file) return null
 
   const fileId = file.id ?? file.file_id

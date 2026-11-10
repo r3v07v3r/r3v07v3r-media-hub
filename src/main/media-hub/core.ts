@@ -1370,6 +1370,32 @@ export interface TorBoxFile {
   size?: number
 }
 
+/** Whether a file name is this season's episode: S02E05 / S2E5, 2x05, or
+ *  (season 1 only) a fansub's bare "Show - 05". */
+function episodeFileMatches(name: string, season: number, episode: number): boolean {
+  // Both padded (S01E03) and unpadded (S1E3) forms of each number, since
+  // real-world release names aren't consistent about zero-padding —
+  // matching only the padded season while requiring a padded episode (the
+  // original patterns' actual behavior) silently missed plenty of
+  // otherwise-correctly-named files.
+  const sPad = String(season).padStart(2, '0')
+  const ePad = String(episode).padStart(2, '0')
+  const patterns = [
+    new RegExp(`S(?:${season}|${sPad})[ ._-]*E(?:${episode}|${ePad})(?:\\D|$)`, 'i'),
+    new RegExp(`(?:^|[ ._-])(?:${season}|${sPad})x(?:${episode}|${ePad})(?:[ ._-]|$)`, 'i'),
+    // Anime fansub convention: a lone episode number after a dash, no
+    // season marker anywhere (fansub groups essentially never encode
+    // season — it's implicit) — e.g. "[SubsPlease] Show - 05 (1080p)
+    // [HASH].mkv". Found live: this is the *normal* single-episode
+    // release shape, not an edge case — SxxExx/1x05 patterns above never
+    // match it at all. Restricted to season 1 since a bare "- 05" in a
+    // later season's own release would be genuinely ambiguous with a
+    // season-1 episode of the same number.
+    ...(season === 1 ? [new RegExp(`-\\s*0*${episode}(?:v\\d)?(?:[ ._[(]|$)`, 'i')] : [])
+  ]
+  return patterns.some((p) => p.test(name))
+}
+
 export function selectVideoFile(
   files: TorBoxFile[] | undefined,
   season?: number | null,
@@ -1383,28 +1409,8 @@ export function selectVideoFile(
     typeof episode === 'number' &&
     Number.isFinite(episode)
   if (episodic) {
-    // Both padded (S01E03) and unpadded (S1E3) forms of each number, since
-    // real-world release names aren't consistent about zero-padding —
-    // matching only the padded season while requiring a padded episode (the
-    // original patterns' actual behavior) silently missed plenty of
-    // otherwise-correctly-named files.
-    const sPad = String(season).padStart(2, '0')
-    const ePad = String(episode).padStart(2, '0')
-    const patterns = [
-      new RegExp(`S(?:${season}|${sPad})[ ._-]*E(?:${episode}|${ePad})(?:\\D|$)`, 'i'),
-      new RegExp(`(?:^|[ ._-])(?:${season}|${sPad})x(?:${episode}|${ePad})(?:[ ._-]|$)`, 'i'),
-      // Anime fansub convention: a lone episode number after a dash, no
-      // season marker anywhere (fansub groups essentially never encode
-      // season — it's implicit) — e.g. "[SubsPlease] Show - 05 (1080p)
-      // [HASH].mkv". Found live: this is the *normal* single-episode
-      // release shape, not an edge case — SxxExx/1x05 patterns above never
-      // match it at all. Restricted to season 1 since a bare "- 05" in a
-      // later season's own release would be genuinely ambiguous with a
-      // season-1 episode of the same number.
-      ...(season === 1 ? [new RegExp(`-\\s*0*${episode}(?:v\\d)?(?:[ ._[(]|$)`, 'i')] : [])
-    ]
     const filtered = candidates.filter((f) =>
-      patterns.some((p) => p.test(f.name || f.short_name || ''))
+      episodeFileMatches(f.name || f.short_name || '', season, episode)
     )
     // A torrent with only one video file at all has no ambiguity to guess
     // wrong about, regardless of what its name looks like — this is the
@@ -1426,6 +1432,93 @@ export function selectVideoFile(
     return match || null
   }
   return candidates.sort((a, b) => (b.size || 0) - (a.size || 0))[0] || null
+}
+
+const VIDEO_FILE = /\.(mkv|mp4|avi|mov|webm|m4v|ts)$/i
+
+function fileBaseName(name: string): string {
+  return (name.split(/[\\/]/).pop() || '').trim().toLowerCase()
+}
+
+/** Whether a file name says outright which season and episode it is
+ *  (S02E05, 2x05). A bare "- 17" does not count: on a batch that is often
+ *  an absolute number, not a contradiction. */
+function namesAnEpisode(name: string): boolean {
+  return /S\d{1,2}[ ._-]*E\d{1,4}(?:\D|$)|(?:^|[ ._-])\d{1,2}x\d{2,4}(?:[ ._-]|$)/i.test(name)
+}
+
+/**
+ * The file the scraper add-on named for this candidate: Torrentio's
+ * `behaviorHints.filename`, else a path line in its `.title` ending in a
+ * video extension ("Season 2/Solo Leveling - S02E05.mkv"). Empty when the
+ * add-on did not say.
+ */
+export function addonFileName(stream: StreamCandidate | undefined): string {
+  const hints = stream?.behaviorHints as { filename?: unknown } | undefined
+  if (typeof hints?.filename === 'string' && VIDEO_FILE.test(hints.filename)) {
+    return hints.filename
+  }
+  const lines = String(stream?.title ?? '').split('\n')
+  return lines.map((line) => line.trim()).find((line) => VIDEO_FILE.test(line)) ?? ''
+}
+
+/**
+ * The file to play from a torrent in TorBox's listing.
+ *
+ * The add-on's `fileIdx` counts files in the TORRENT's order, and TorBox
+ * lists them in its own, so the index alone can land on another episode:
+ * Solo Leveling S02E05 from a "[Season 1+2]" batch, fileIdx 20 =
+ * "Season 2/… S02E05.mkv" to Torrentio, opened a season-one episode as
+ * entry 20 of TorBox's list (found 2026-11-10). So, in order:
+ *  1. the add-on's own file name, matched by name;
+ *  2. for an episode, the file whose name is that season and episode;
+ *  3. the indexed file, only if its name does not name another episode
+ *     (a batch with absolute numbering still plays from the index);
+ *  4. for a film, the indexed file, else the largest video.
+ * Null rather than a guess when an episode cannot be found.
+ */
+export function selectTorrentFile(
+  files: TorBoxFile[] | undefined,
+  hint: { fileIdx?: unknown; fileName?: string },
+  season?: number | null,
+  episode?: number | null
+): TorBoxFile | null {
+  const list = files || []
+  const nameOf = (f: TorBoxFile): string => f.name || f.short_name || ''
+  const videos = list.filter((f) => VIDEO_FILE.test(nameOf(f)))
+
+  const wanted = hint.fileName ? fileBaseName(hint.fileName) : ''
+  if (wanted) {
+    const named = videos.filter((f) => fileBaseName(nameOf(f)) === wanted)
+    if (named.length === 1) return named[0]
+  }
+
+  const idx = Number(hint.fileIdx)
+  const indexed =
+    hint.fileIdx != null &&
+    Number.isInteger(idx) &&
+    idx >= 0 &&
+    list[idx] &&
+    VIDEO_FILE.test(nameOf(list[idx]))
+      ? list[idx]
+      : null
+
+  const episodic =
+    typeof season === 'number' &&
+    Number.isFinite(season) &&
+    typeof episode === 'number' &&
+    Number.isFinite(episode)
+  if (!episodic) return indexed || selectVideoFile(list)
+
+  const guessed = selectVideoFile(list, season, episode)
+  if (guessed) {
+    // Two names can match (a v2, a second encode); the indexed one wins
+    // when it is among them.
+    if (indexed && episodeFileMatches(nameOf(indexed), season, episode)) return indexed
+    return guessed
+  }
+  if (indexed && !namesAnEpisode(nameOf(indexed))) return indexed
+  return null
 }
 
 /**
