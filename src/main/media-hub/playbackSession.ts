@@ -77,7 +77,12 @@ import {
   MIN_CACHE_BYTES
 } from './streamCache'
 import { downloadSubtitleText, searchSubtitles } from './subtitlesService'
-import { assertCurrent, createSupersession, isSuperseded } from './playbackSupersession'
+import {
+  assertCurrent,
+  createSupersession,
+  isSuperseded,
+  PlaybackSupersededError
+} from './playbackSupersession'
 
 export { mpvPath } from './mpv'
 
@@ -124,6 +129,9 @@ let activeCacheUrl = ''
 // One ticket per openPlayback; the next open, or a stopPlayback, makes it
 // stale — see playbackSupersession.ts for the race this closes.
 const opens = createSupersession()
+/** Counts openPlayback calls, so a superseded one can tell a stop (nothing
+ *  newer is opening) from a newer title (which is). */
+let openSequence = 0
 // One ticket per play:stream request (the whole copy loop, not one copy).
 // A stopPlayback — the window's Cancel, or the stop it sends before every
 // new play — ends the request, so it stops trying copies.
@@ -221,10 +229,13 @@ export async function preparePlayback(
   cacheMeta?: CacheSessionMeta,
   /** Tier 1: play this already-complete cache session instead of opening a
    *  remote link. `url` is ignored (and is '') on this path. */
-  localToken?: string
+  localToken?: string,
+  /** The play:stream request this open belongs to; false once that request
+   *  has been stopped or replaced. */
+  request: () => boolean = () => true
 ): Promise<PlaybackResult> {
   try {
-    return await openPlayback(url, cacheMeta, localToken)
+    return await openPlayback(url, cacheMeta, localToken, request)
   } catch (error) {
     // Overtaken: the backpressure is the business of whatever replaced this
     // (a newer title has just raised it, a stop has already released it).
@@ -391,7 +402,8 @@ async function resolveNextUp(media: PlayerSessionMedia | null): Promise<void> {
 async function openPlayback(
   url: string,
   cacheMeta?: CacheSessionMeta,
-  localToken?: string
+  localToken?: string,
+  request: () => boolean = () => true
 ): Promise<PlaybackResult> {
   // StreamCache is the sole owner of the upstream connection to `url`. It is
   // started before the player opens anything, and mpv then reads only from its
@@ -411,7 +423,9 @@ async function openPlayback(
   // trying to watch a film over. Raised before the upstream connection
   // opens rather than after the player appears, so the queue is already
   // quiet by the time the first bytes are being pulled.
-  const current = opens.take()
+  const open = opens.take()
+  const mine = ++openSequence
+  const current = (): boolean => open() && request()
   setPressure('playback', 'critical')
   // Tier 1 skips the connect stage entirely — there is nothing to connect
   // to. Every byte is already on this disk, so this path works with the
@@ -467,7 +481,17 @@ async function openPlayback(
   })
   // A stop or a newer title while mpv was loading: whatever comes next owns
   // the player and the snapshot, so nothing below may be written for this one.
-  assertCurrent(current)
+  if (!current()) {
+    // A stop that raced the load can have finished its teardown before mpv
+    // did, leaving this title playing with nobody waiting for it. Undone
+    // here unless a newer open has begun, which replaces it anyway (and
+    // whose cache session a stop here would end).
+    if (openSequence === mine) {
+      activeCacheUrl = ''
+      await Promise.all([streamCache.stop(), stopPlayerSession()]).catch(() => {})
+    }
+    throw new PlaybackSupersededError()
+  }
   activeMediaTracks = tracks
   // Whether the file has the wanted audio is play:stream's question now —
   // it may open other copies before settling, and reports the outcome once

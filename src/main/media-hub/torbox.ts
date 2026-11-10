@@ -78,11 +78,7 @@ import {
   stopPlayback,
   beginPlayRequest
 } from './playbackSession'
-import {
-  assertCurrent,
-  isSuperseded,
-  PlaybackSupersededError
-} from './playbackSupersession'
+import { assertCurrent, isSuperseded, PlaybackSupersededError } from './playbackSupersession'
 import {
   languageTryOrder,
   pickFallback,
@@ -1072,9 +1068,12 @@ const REJECTED_COPY_TTL_MS = 365 * 24 * 60 * 60 * 1000
 let lastOpened: { key: string; result: PlaybackResult; payload: PlayStreamPayload } | null = null
 
 /** playCandidate, noting what it opened. */
-async function openCandidate(payload: PlayStreamPayload): Promise<PlaybackResult> {
+async function openCandidate(
+  payload: PlayStreamPayload,
+  live: () => boolean = () => true
+): Promise<PlaybackResult> {
   lastOpened = null
-  const result = await playCandidate(payload)
+  const result = await playCandidate(payload, live)
   lastOpened = { key: sourceKey(payload.stream), result, payload }
   return result
 }
@@ -1138,7 +1137,7 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
     }
     let result: PlaybackResult
     try {
-      result = await openCandidate({ ...payload, stream })
+      result = await openCandidate({ ...payload, stream }, live)
     } catch (error) {
       // Not a copy that failed: this request has been replaced or stopped,
       // and every further open would tear down what replaced it.
@@ -1168,7 +1167,7 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
   if (target !== open) {
     reportPreparation('link', 'Going back to the closest copy')
     try {
-      const result = await openCandidate({ ...payload, stream: target })
+      const result = await openCandidate({ ...payload, stream: target }, live)
       current = { stream: target, result, fit: languageFit(result.tracks, audio, subtitles) }
     } catch (error) {
       // The target may be one remembered from an earlier play and not
@@ -1177,7 +1176,7 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
       // was playing, so open it again rather than trust it is still there.
       if (isSuperseded(error) || !live()) throw new PlaybackSupersededError()
       logError('torbox:play:fallback', error)
-      const result = await openCandidate({ ...payload, stream: current.stream })
+      const result = await openCandidate({ ...payload, stream: current.stream }, live)
       current = { ...current, result }
     }
   }
@@ -1199,18 +1198,22 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
  * before it learned to look past a copy in the wrong language — see
  * playWithLanguageFallback.
  */
-async function playCandidate({
-  stream,
-  mediaId,
-  type,
-  resolveId,
-  catalogId,
-  title,
-  posterUrl,
-  season,
-  episode,
-  episodeTitle
-}: PlayStreamPayload): Promise<PlaybackResult> {
+async function playCandidate(
+  {
+    stream,
+    mediaId,
+    type,
+    resolveId,
+    catalogId,
+    title,
+    posterUrl,
+    season,
+    episode,
+    episodeTitle
+  }: PlayStreamPayload,
+  /** The play:stream request this copy belongs to — see playWithLanguageFallback. */
+  live: () => boolean = () => true
+): Promise<PlaybackResult> {
   // Both sources converge here: whatever produced the URL, playback
   // opens it the same way and the same stream gets remembered. Shared
   // as a closure rather than duplicated so the two branches can never
@@ -1235,6 +1238,10 @@ async function playCandidate({
   }
 
   const finish = async (url: string): Promise<PlaybackResult> => {
+    // Checked here, after the link is in hand and before anything opens: a
+    // stop that landed while TorBox was minting it must not be followed by a
+    // fresh cache session and an mpv load nobody is waiting for any more.
+    assertCurrent(live)
     const result = await preparePlayback(
       url,
       title
@@ -1254,7 +1261,9 @@ async function playCandidate({
             resolution: stream ? streamResolution(stream) || undefined : undefined,
             release: stream ? releaseFacts(stream) : undefined
           }
-        : undefined
+        : undefined,
+      undefined,
+      live
     )
     // Only remembered once playback actually started — see
     // stream:resolve's own "fast path 2" comment for where this gets
@@ -1268,6 +1277,7 @@ async function playCandidate({
   // Tier 1's own tail. Same memo and metadata handling as `finish`,
   // but preparePlayback opens the existing session instead of a link.
   const finishLocal = async (cacheToken: string): Promise<PlaybackResult> => {
+    assertCurrent(live)
     const result = await preparePlayback(
       '',
       title
@@ -1281,7 +1291,8 @@ async function playCandidate({
             episodeTitle
           }
         : undefined,
-      cacheToken
+      cacheToken,
+      live
     )
     if (type && resolveId) rememberPlayedStream(type, resolveId, stream)
     return result
