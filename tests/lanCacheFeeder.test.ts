@@ -197,4 +197,38 @@ function historyEntry(overrides: Partial<HistoryEntry>): HistoryEntry {
   )
 }
 
+// A later season of a merged anime is its own Kitsu entry. The feeder asks
+// the add-ons for that entry's episode and files it under that entry, the
+// key stream:resolve asks the daemon with; before, S2E3 was queued as the
+// first season's episode 3 (Solo Leveling S02E01 played S01E01, 2026-11-10).
+{
+  const members = ['kitsu:46231', 'kitsu:48671']
+  const address = (show: string, season: number | null, episode: number): string | null => {
+    if (show !== 'kitsu:46231' || !season || season <= 1) return `${show}:${episode}`
+    return members[season - 1] ? `${members[season - 1]}:${episode}` : null
+  }
+  const wanted = computeWantedList(
+    [],
+    [historyEntry({ id: 'kitsu:46231', type: 'anime', season: 2, episode: 2, title: 'Solo' })],
+    address
+  )
+  assert.deepEqual(
+    wanted.map((entry) => [entry.resolveId, entry.contentKey]),
+    [
+      ['kitsu:48671:3', 'kitsu:48671::3'],
+      ['kitsu:48671:4', 'kitsu:48671::4']
+    ],
+    "a later season's next episodes are its own entry's"
+  )
+  assert.deepEqual(
+    computeWantedList(
+      [],
+      [historyEntry({ id: 'kitsu:46231', type: 'anime', season: 3, episode: 1, title: 'Solo' })],
+      address
+    ),
+    [],
+    'a season with no entry of its own queues nothing rather than another season'
+  )
+}
+
 console.log('ok  lancache feeder wanted list')

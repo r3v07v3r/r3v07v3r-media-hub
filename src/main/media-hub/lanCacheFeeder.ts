@@ -8,6 +8,7 @@
 // re-queued, or the hard-max-age rule would mean nothing.
 
 import { computeWantedList } from '../../shared/lancache/wantedList'
+import { animeEpisodeStreamAddress } from './animeSeasons'
 import { getDatabase } from './dbState'
 import { isLanCacheConnected, lanCacheCatalog, queueLanCacheJob } from './lanCache'
 import { logError } from './logger'
@@ -22,7 +23,7 @@ const MAX_NEW_JOBS_PER_PASS = 3
 export async function runLanCacheFeeder(): Promise<void> {
   if (!isLanCacheConnected()) return
   const db = getDatabase()
-  const wanted = computeWantedList(db.tracked(), db.history())
+  const wanted = computeWantedList(db.tracked(), db.history(), animeEpisodeStreamAddress)
   if (!wanted.length) return
 
   const catalog = await lanCacheCatalog(wanted.map((entry) => entry.contentKey))
