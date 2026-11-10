@@ -890,7 +890,9 @@ export function createApi(transport: ApiTransport) {
         // restarted the ffmpeg transcoder. Track selection and seeking are player
         // properties now (see the `player` group above), so nothing in this group
         // touches the stream itself anymore.
-        stop: (options?: { watched?: boolean }): Promise<{ ok: true }> =>
+        /** `onlyUrl`: stop only if that is still what is playing — for
+         *  cleaning up after a play the window has already moved on from. */
+        stop: (options?: { watched?: boolean; onlyUrl?: string }): Promise<{ ok: true }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.playbackStop, options),
         /** For a provisional copy that stays: switch on its subtitles, say
          *  what is playing, fetch subtitles if it has none. */

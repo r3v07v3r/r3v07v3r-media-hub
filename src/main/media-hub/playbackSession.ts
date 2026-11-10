@@ -77,6 +77,7 @@ import {
   MIN_CACHE_BYTES
 } from './streamCache'
 import { downloadSubtitleText, searchSubtitles } from './subtitlesService'
+import { assertCurrent, createSupersession, isSuperseded } from './playbackSupersession'
 
 export { mpvPath } from './mpv'
 
@@ -119,6 +120,20 @@ let thumbnailInFlight: Promise<void> = Promise.resolve()
 // streamCache.start() ever touches directly. Thumbnail capture reads from
 // this one too, so it never costs a second connection to the remote link.
 let activeCacheUrl = ''
+
+// One ticket per openPlayback; the next open, or a stopPlayback, makes it
+// stale — see playbackSupersession.ts for the race this closes.
+const opens = createSupersession()
+// One ticket per play:stream request (the whole copy loop, not one copy).
+// A stopPlayback — the window's Cancel, or the stop it sends before every
+// new play — ends the request, so it stops trying copies.
+const playRequests = createSupersession()
+
+/** Starts a play:stream request. The check goes false once a newer request
+ *  starts or playback is stopped. */
+export function beginPlayRequest(): () => boolean {
+  return playRequests.take()
+}
 let activeMediaTracks: MediaTracks = { video: [], audio: [], subtitle: [], probed: false }
 /** The external subtitle file (if any) written for the current title, deleted
  *  with the session. Now handed to mpv via sub-add rather than to a transcode
@@ -211,6 +226,9 @@ export async function preparePlayback(
   try {
     return await openPlayback(url, cacheMeta, localToken)
   } catch (error) {
+    // Overtaken: the backpressure is the business of whatever replaced this
+    // (a newer title has just raised it, a stop has already released it).
+    if (isSuperseded(error)) throw error
     // Nothing is playing, so the backpressure raised below has to come
     // back off here. Every SUCCESSFUL end-of-playback path goes through
     // stopPlayback, which releases it — but a preparation that throws
@@ -393,6 +411,7 @@ async function openPlayback(
   // trying to watch a film over. Raised before the upstream connection
   // opens rather than after the player appears, so the queue is already
   // quiet by the time the first bytes are being pulled.
+  const current = opens.take()
   setPressure('playback', 'critical')
   // Tier 1 skips the connect stage entirely — there is nothing to connect
   // to. Every byte is already on this disk, so this path works with the
@@ -412,6 +431,9 @@ async function openPlayback(
           cacheMeta
         )
       })()
+  // Overtaken while the cache was opening: the session it opened is no
+  // longer this request's to hand to the player.
+  assertCurrent(current)
   activeCacheUrl = cacheResult.url
   const settings = readSettings()
   reportPreparation('buffer', 'Opening the file')
@@ -443,6 +465,9 @@ async function openPlayback(
     mediaId: cacheMeta?.catalogId,
     mediaKind: cacheMeta?.mediaKind
   })
+  // A stop or a newer title while mpv was loading: whatever comes next owns
+  // the player and the snapshot, so nothing below may be written for this one.
+  assertCurrent(current)
   activeMediaTracks = tracks
   // Whether the file has the wanted audio is play:stream's question now —
   // it may open other copies before settling, and reports the outcome once
@@ -524,6 +549,10 @@ async function openPlayback(
  *  the idle sweep; otherwise the cache is left on disk for a likely
  *  near-term resume. */
 export async function stopPlayback(deleteCache = false): Promise<void> {
+  // First, so an open or a copy loop waiting on the network sees itself
+  // ended the moment it wakes.
+  opens.supersede()
+  playRequests.supersede()
   // Released here rather than in a `finally` around playback, because this
   // is the one function every end-of-playback path goes through — the
   // renderer closing the player, a new title replacing this one, and the
@@ -678,9 +707,15 @@ export function registerPlaybackIpc(): void {
     return { ok: true }
   })
 
-  handle<{ watched?: boolean } | undefined, { ok: true }>(
+  handle<{ watched?: boolean; onlyUrl?: unknown } | undefined, { ok: true }>(
     MEDIA_HUB_CHANNELS.playbackStop,
     async (_event, payload) => {
+      // `onlyUrl`: the window cleaning up after a play it had already given
+      // up on. That play's session may be long gone, and an untargeted stop
+      // here would end whatever replaced it.
+      if (payload?.onlyUrl !== undefined && payload.onlyUrl !== activeCacheUrl) {
+        return { ok: true }
+      }
       await stopPlayback(Boolean(payload?.watched))
       return { ok: true }
     }

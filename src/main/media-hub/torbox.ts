@@ -75,8 +75,14 @@ import {
   takeHeldLanguageSettle,
   preparePlayback,
   settleLanguageShortfall,
-  stopPlayback
+  stopPlayback,
+  beginPlayRequest
 } from './playbackSession'
+import {
+  assertCurrent,
+  isSuperseded,
+  PlaybackSupersededError
+} from './playbackSupersession'
 import {
   languageTryOrder,
   pickFallback,
@@ -1074,6 +1080,11 @@ async function openCandidate(payload: PlayStreamPayload): Promise<PlaybackResult
 }
 
 async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<PlaybackResult> {
+  // Ended by a newer play:stream or by playback:stop. Without it a play the
+  // window had cancelled read its own stopped session as a copy that would
+  // not open, opened the next copy, and fought the new request for the one
+  // stream cache — see playbackSupersession.ts.
+  const live = beginPlayRequest()
   const { audio, subtitles } = playbackLanguages()
   const alternates = Array.isArray(payload.alternates) ? payload.alternates : []
   const memoKey =
@@ -1109,6 +1120,7 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
   // `current`.
   let open: StreamCandidate | null = null
   for (const [index, stream] of order.entries()) {
+    assertCurrent(live)
     // A copy already known to lack the audio is only the last resort: once
     // something has opened, it is weighed from what is known, not reopened.
     const knownFit = known[sourceKey(stream)]
@@ -1128,6 +1140,9 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
     try {
       result = await openCandidate({ ...payload, stream })
     } catch (error) {
+      // Not a copy that failed: this request has been replaced or stopped,
+      // and every further open would tear down what replaced it.
+      if (isSuperseded(error) || !live()) throw new PlaybackSupersededError()
       if (order.length === 1) throw error
       open = null
       firstError ??= error
@@ -1149,6 +1164,7 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
   // again when something else is in the player — a later copy in the wrong
   // language, or nothing, after a later copy failed to open.
   const target = current.fit.audio ? current.stream : (pickFallback(tried) ?? current.stream)
+  assertCurrent(live)
   if (target !== open) {
     reportPreparation('link', 'Going back to the closest copy')
     try {
@@ -1159,12 +1175,14 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
       // opened this time — its source can have gone since. The copy that
       // did open is still good. A failed open may have torn down whatever
       // was playing, so open it again rather than trust it is still there.
+      if (isSuperseded(error) || !live()) throw new PlaybackSupersededError()
       logError('torbox:play:fallback', error)
       const result = await openCandidate({ ...payload, stream: current.stream })
       current = { ...current, result }
     }
   }
 
+  assertCurrent(live)
   if (current.fit.audio && payload.type && payload.resolveId) {
     rememberReleaseGroup(payload.type, payload.resolveId, current.stream)
   }
