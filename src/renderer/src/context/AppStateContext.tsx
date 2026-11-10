@@ -2249,9 +2249,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           )
           // If cancellation/timeout wins the race, a late successful IPC result
           // must not leave its newly-created backend playback session running.
+          // Only ITS session: by the time it lands, a newer play may already
+          // own the player, and an untargeted stop ended that one instead.
           void task.then(
-            () => {
-              if (!isCurrent()) api.playback.stop().catch(() => {})
+            (result) => {
+              if (!isCurrent()) api.playback.stop({ onlyUrl: result.url }).catch(() => {})
             },
             () => {
               // The awaited, deadline-bounded branch below owns user feedback.

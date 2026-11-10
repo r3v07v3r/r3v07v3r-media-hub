@@ -70,6 +70,7 @@ import { electronModule } from './electronModule'
 import { logError } from './logger'
 import { formatMegabytes, reportPreparation } from './playbackProgress'
 import { readSettings } from './settingsStore'
+import { assertCurrent, createSupersession } from './playbackSupersession'
 import { effectiveCacheMode } from './preferences'
 import type {
   CacheSessionMeta,
@@ -764,6 +765,11 @@ export function createStreamCache({
   let fillFrontierByte = 0
   let highWatermarkByte = 0
   let diskCheckTimer: ReturnType<typeof setInterval> | undefined
+  // One ticket per start()/startLocal(); the next one, or a stop(), makes
+  // it stale. Every await in those two is followed by a check, so a start
+  // that has been overtaken gives up instead of writing its title's state
+  // over the session that replaced it — see playbackSupersession.ts.
+  const starts = createSupersession()
 
   const chunks = new Map<number, ChunkStatus>()
   const waiters = new Map<number, ChunkWaiter[]>()
@@ -1700,7 +1706,9 @@ export function createStreamCache({
     inputDurationSeconds: number | undefined,
     meta?: CacheSessionMeta
   ): Promise<StreamCacheStartResult> {
+    const current = starts.take()
     await stopInternal(false)
+    assertCurrent(current)
     // Always the disk store: a memory session cannot have survived to be
     // adopted, so a local candidate is by definition on disk.
     store = diskChunkStore
@@ -1718,14 +1726,17 @@ export function createStreamCache({
     readerPositions.clear()
 
     await listen()
+    assertCurrent(current)
 
     const stored = JSON.parse(
       await fsp.readFile(metaFilePath(cacheRoot, token), 'utf8')
     ) as StoredMeta
+    assertCurrent(current)
     totalBytes = stored.totalBytes
     if (totalBytes === null) throw new Error('That cached copy has no recorded length.')
 
     await adoptExistingChunks()
+    assertCurrent(current)
     // Everything is present by contract, so the fill frontier is the end of
     // the file — serveRange's isNearFillFrontier checks must not think
     // there is a download still catching up.
@@ -1748,8 +1759,11 @@ export function createStreamCache({
     inputMaxBytes: number,
     meta?: CacheSessionMeta
   ): Promise<StreamCacheStartResult> {
+    const current = starts.take()
     await assertPublicMediaUrl(inputRemoteUrl, resolveHost)
+    assertCurrent(current)
     await stopInternal(false)
+    assertCurrent(current)
     // Chosen before anything else in the session exists, because it
     // decides whether half the machinery below (reuse, adoption, the meta
     // file) applies at all.
@@ -1783,8 +1797,11 @@ export function createStreamCache({
     readerPositions.clear()
 
     await listen()
+    assertCurrent(current)
     reportPreparation('connect', 'Connecting to the source')
-    totalBytes = await fetchTotalBytes()
+    const fetchedTotal = await fetchTotalBytes()
+    assertCurrent(current)
+    totalBytes = fetchedTotal
 
     // REUSE AN EXISTING CACHE FOR THIS CONTENT, if there is one.
     //
@@ -1804,11 +1821,13 @@ export function createStreamCache({
     // promise — memory mode must not write anything, including metadata.
     if (store.persistent) {
       const reusableToken = await findReusableSession(cacheRoot, meta, totalBytes, token)
+      assertCurrent(current)
       if (reusableToken) {
         activeCacheTokens.delete(token)
         token = reusableToken
         activeCacheTokens.add(token)
         await adoptExistingChunks()
+        assertCurrent(current)
       }
     }
 
@@ -1846,6 +1865,10 @@ export function createStreamCache({
     } finally {
       clearInterval(fillTicker)
     }
+    // A stop or a newer start while the first chunk was coming: the token
+    // in hand has been revoked, and handing it to the player is what used to
+    // end in "Playback requires a valid HTTPS media URL".
+    assertCurrent(current)
 
     if (diskCheckTimer) clearInterval(diskCheckTimer)
     diskCheckTimer = setInterval(() => {
@@ -1959,6 +1982,9 @@ export function createStreamCache({
   }
 
   async function stop(): Promise<void> {
+    // Before the teardown: a start() waiting on the network must already
+    // see itself overtaken when it wakes.
+    starts.supersede()
     await stopInternal(true)
   }
 
