@@ -42,6 +42,7 @@ import { subtitleProviderName } from '@shared/media-hub/subtitleProviders'
 import type { SubtitleResult } from '@shared/media-hub/types'
 import {
   DEFAULT_SUBTITLE_STYLE,
+  effectiveSubtitlePosition,
   isSubtitleStyleDefault,
   SUBTITLE_COLORS,
   SUBTITLE_POSITION_MAX,
@@ -73,6 +74,10 @@ import { SETUP_PLACES, nameServices, type SetupService } from '@renderer/lib/set
 import styles from './PlayerOverlayWindow.module.css'
 
 const CONTROLS_IDLE_MS = 3200
+/** Online subtitle rows shown before "Show N more". The merge puts exact
+ *  matches and the free providers first, so the top five are the ones
+ *  worth a click; the rest are a press away. */
+const ONLINE_SUBTITLE_ROWS = 5
 // A stable reference for "no chapters", rather than a fresh `[]` literal each
 // render — `chapters` (below) feeds chapterSkipTimes's useMemo, and a new
 // array identity every render (even one holding nothing) would invalidate
@@ -198,7 +203,18 @@ function PlayerControls() {
   const [subtitleSearchError, setSubtitleSearchError] = useState<string | null>(null)
   const [readiness, setReadiness] = useState<OverlayReadiness | null>(null)
   const [pendingSubtitleId, setPendingSubtitleId] = useState<string | null>(null)
+  // The online list shows a handful of rows until asked for the rest: twenty
+  // release names in a popover is a wall. Keyed to the title, like the
+  // results, so the next episode opens folded again.
+  const [subtitleListExpandedFor, setSubtitleListExpandedFor] = useState<string | null>(null)
   const [subtitleDelay, setSubtitleDelay] = useState(0)
+  // The bottom bar's size and its inset from the window's bottom edge, as
+  // measured, from which the subtitles' clearance is worked out at render.
+  const [barGeometry, setBarGeometry] = useState<{ height: number; inset: number } | null>(null)
+  // A drag of the on-picture subtitle handle is in progress.
+  const [draggingSubtitles, setDraggingSubtitles] = useState(false)
+  const [viewportHeight, setViewportHeight] = useState(() => window.innerHeight)
+  const controlsRef = useRef<HTMLDivElement | null>(null)
   const [preview, setPreview] = useState<{
     x: number
     time: number
@@ -493,6 +509,10 @@ function PlayerControls() {
   // cursor — see surfaceIdle) while someone is deciding.
   const pinned =
     menu !== null ||
+    // A drag of the subtitle handle holds pointer capture; were the bar to
+    // fade mid-drag the handle would unmount with it and the release would
+    // never arrive, leaving the drag stuck on.
+    draggingSubtitles ||
     party.syncing ||
     roomRailOpen ||
     autoplay !== null ||
@@ -704,6 +724,118 @@ function PlayerControls() {
       void command({ type: 'set-subtitle-style', style: { ...subtitleStyle, ...patch } })
     },
     [command, subtitleStyle]
+  )
+
+  // --- Subtitles clear of the bar, and draggable ---------------------------
+  //
+  // While the bottom bar is open, subtitles that would sit under it move up
+  // to its top edge so they stay readable, and go back when the bar fades.
+  // Suspended while the Subtitles menu is open or the handle is being
+  // dragged: both are the person placing the subtitles, and the Height
+  // slider or the drag must show where they really are.
+  useEffect(() => {
+    const onResize = (): void => setViewportHeight(window.innerHeight)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+  // The bar is measured whenever its size changes (a notice line appearing,
+  // a font loading), never by a read during render; its inset from the
+  // window's bottom edge is a CSS margin, so the two together place its top
+  // at any window height without measuring again.
+  useEffect(() => {
+    const bar = controlsRef.current
+    if (!bar || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => {
+      const rect = bar.getBoundingClientRect()
+      setBarGeometry({ height: rect.height, inset: window.innerHeight - rect.bottom })
+    })
+    observer.observe(bar)
+    return () => observer.disconnect()
+  }, [])
+  const barOpen = controlsVisible || pinned
+  const liftSuspended = menu === 'subtitles' || draggingSubtitles
+  // A whole percent below the bar's top edge: mpv places the baseline at
+  // sub-pos and keeps its own small margin above that, so one percent of
+  // clearance reads as a clear gap rather than a touch.
+  const subtitleClearance = ((): number | null => {
+    if (!barOpen || liftSuspended || !barGeometry) return null
+    const barTop = viewportHeight - barGeometry.inset - barGeometry.height
+    const percent = Math.floor((barTop / viewportHeight) * 100) - 1
+    return percent > 0 ? percent : null
+  })()
+  useEffect(() => {
+    void command({ type: 'set-subtitle-clearance', percent: subtitleClearance })
+  }, [command, subtitleClearance])
+
+  // Where the subtitles are on screen right now, for the handle. mpv's
+  // sub-pos is the baseline's height as a percentage of the window; it keeps
+  // a margin of 22 units on a 720-unit-tall window above the bottom, and a
+  // default line is 55 units tall, scaled by the chosen size. Two lines'
+  // worth of band is the shape of a subtitle, not a measurement of one.
+  const shownPosition = effectiveSubtitlePosition(subtitleStyle.position, subtitleClearance)
+  const subtitleBaselinePx = (viewportHeight * shownPosition) / 100 - (viewportHeight * 22) / 720
+  const subtitleBandPx = Math.max(28, ((viewportHeight * 55) / 720) * subtitleStyle.scale * 2)
+  const dragStart = useRef<{ y: number; position: number } | null>(null)
+  const dragFrame = useRef<number | null>(null)
+  const pendingPosition = useRef<number | null>(null)
+  const pushPosition = useCallback(
+    (position: number) => {
+      pendingPosition.current = position
+      if (dragFrame.current !== null) return
+      dragFrame.current = requestAnimationFrame(() => {
+        dragFrame.current = null
+        if (
+          pendingPosition.current !== null &&
+          pendingPosition.current !== subtitleStyle.position
+        ) {
+          applySubtitleStyle({ position: pendingPosition.current })
+        }
+      })
+    },
+    [applySubtitleStyle, subtitleStyle.position]
+  )
+  const onHandlePointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0) return
+      event.stopPropagation()
+      event.currentTarget.setPointerCapture(event.pointerId)
+      dragStart.current = { y: event.clientY, position: subtitleStyle.position }
+      setDraggingSubtitles(true)
+    },
+    [subtitleStyle.position]
+  )
+  const onHandlePointerMove = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const start = dragStart.current
+      if (!start) return
+      const delta = ((event.clientY - start.y) / viewportHeight) * 100
+      const next = Math.round(
+        Math.max(SUBTITLE_POSITION_MIN, Math.min(SUBTITLE_POSITION_MAX, start.position + delta))
+      )
+      pushPosition(next)
+    },
+    [pushPosition, viewportHeight]
+  )
+  const onHandlePointerUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragStart.current) return
+    dragStart.current = null
+    event.currentTarget.releasePointerCapture(event.pointerId)
+    setDraggingSubtitles(false)
+  }, [])
+  const onHandleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      const step = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0
+      if (!step) return
+      event.preventDefault()
+      event.stopPropagation()
+      applySubtitleStyle({
+        position: Math.max(
+          SUBTITLE_POSITION_MIN,
+          Math.min(SUBTITLE_POSITION_MAX, subtitleStyle.position + step)
+        )
+      })
+    },
+    [applySubtitleStyle, subtitleStyle.position]
   )
 
   // Tell the tracking services what is happening, on TRANSITIONS only.
@@ -1100,6 +1232,13 @@ function PlayerControls() {
   // Null while a search for THIS title has not landed, which is what makes the
   // menu say "Searching…" rather than showing the last episode's list.
   const currentSubtitleResults = subtitleResults?.key === mediaKey ? subtitleResults.results : null
+  const subtitleListExpanded = subtitleListExpandedFor === mediaKey
+  const shownSubtitleResults =
+    currentSubtitleResults && !subtitleListExpanded
+      ? currentSubtitleResults.slice(0, ONLINE_SUBTITLE_ROWS)
+      : currentSubtitleResults
+  const hiddenSubtitleRows =
+    (currentSubtitleResults?.length ?? 0) - (shownSubtitleResults?.length ?? 0)
 
   // Anime reads the Aniskip fetch above; everything else reads the
   // chapter-derived memo — see both sources' own comments for why they are
@@ -1449,7 +1588,46 @@ function PlayerControls() {
         </div>
       )}
 
+      {/* The subtitles' own handle: a band drawn where mpv is putting them,
+          shown with the bar. Dragging it moves them (the stored Height, so
+          the next title keeps it); while the bar is open and would cover
+          them they are shown lifted, and the band follows. mpv draws the
+          text itself, so this band is the only thing on the picture there
+          is to take hold of. */}
+      {barOpen && (
+        <div
+          className={`${styles.subtitleHandle} ${
+            draggingSubtitles ? styles.subtitleHandleDragging : ''
+          }`}
+          style={{ top: Math.max(0, subtitleBaselinePx - subtitleBandPx), height: subtitleBandPx }}
+          role="slider"
+          tabIndex={0}
+          aria-label="Subtitle height — drag up or down"
+          aria-valuemin={SUBTITLE_POSITION_MIN}
+          aria-valuemax={SUBTITLE_POSITION_MAX}
+          aria-valuenow={subtitleStyle.position}
+          onPointerDown={onHandlePointerDown}
+          onPointerMove={onHandlePointerMove}
+          onPointerUp={onHandlePointerUp}
+          onPointerCancel={onHandlePointerUp}
+          onKeyDown={onHandleKeyDown}
+          onClick={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+        >
+          <span className={styles.subtitleHandleTag}>
+            {draggingSubtitles
+              ? `Subtitles · ${subtitleStyle.position}${
+                  subtitleStyle.position > 100 ? ' · below picture' : ''
+                }`
+              : subtitleClearance !== null && shownPosition !== subtitleStyle.position
+                ? 'Subtitles · lifted clear of the bar · drag to move'
+                : 'Subtitles · drag to move'}
+          </span>
+        </div>
+      )}
+
       <div
+        ref={controlsRef}
         className={`${styles.controls} ${controlsVisible || pinned ? '' : styles.controlsHidden}`}
       >
         <div className={styles.title}>
@@ -1884,7 +2062,7 @@ function PlayerControls() {
                 {!subtitleSearchError && currentSubtitleResults?.length === 0 && (
                   <span className={styles.menuNote}>No results</span>
                 )}
-                {currentSubtitleResults?.map((subtitle) => (
+                {shownSubtitleResults?.map((subtitle) => (
                   <button
                     key={subtitle.id}
                     type="button"
@@ -1908,6 +2086,15 @@ function PlayerControls() {
                         } · ${subtitleProviderName(subtitle.provider)}`}
                   </button>
                 ))}
+                {hiddenSubtitleRows > 0 && (
+                  <button
+                    type="button"
+                    className={`${styles.menuItem} ${styles.menuItemMore}`}
+                    onClick={() => setSubtitleListExpandedFor(mediaKey)}
+                  >
+                    Show {hiddenSubtitleRows} more
+                  </button>
+                )}
               </div>
             )}
           </div>

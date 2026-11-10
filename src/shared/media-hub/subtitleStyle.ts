@@ -112,3 +112,17 @@ export function subtitleStyleProperties(style: SubtitleStyle): Record<string, st
     'sub-back-color': style.background ? '#80000000' : '#00000000'
   }
 }
+
+/**
+ * Where the subtitles sit right now: the stored position, or higher when the
+ * player's bottom bar is open and would cover them. `clearance` is the bar's
+ * top edge as a percentage of the window height (mpv's sub-pos scale, 100 =
+ * the bottom), or null while the bar is hidden. The stored position is never
+ * changed by this; it is what the subtitles go back to when the bar fades.
+ * Shared by the bridge (which sets mpv's sub-pos) and the overlay (which
+ * draws the drag handle at the same place), so the two cannot disagree.
+ */
+export function effectiveSubtitlePosition(position: number, clearance: number | null): number {
+  if (clearance === null || !Number.isFinite(clearance)) return position
+  return Math.max(SUBTITLE_POSITION_MIN, Math.min(position, Math.floor(clearance)))
+}

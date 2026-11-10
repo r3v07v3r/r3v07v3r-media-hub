@@ -46,6 +46,7 @@ import {
 import {
   DEFAULT_SUBTITLE_STYLE,
   normalizeSubtitleStyle,
+  effectiveSubtitlePosition,
   subtitleStyleProperties,
   type SubtitleStyle
 } from '../../shared/media-hub/subtitleStyle'
@@ -252,10 +253,21 @@ export function currentPlaybackForParty(): {
  * it did before.
  */
 async function applySubtitleStyle(style: SubtitleStyle): Promise<void> {
-  for (const [property, value] of Object.entries(subtitleStyleProperties(style))) {
+  const properties = {
+    ...subtitleStyleProperties(style),
+    // Lifted clear of the open bottom bar, when there is one; the stored
+    // position itself is untouched.
+    'sub-pos': effectiveSubtitlePosition(style.position, subtitleClearance)
+  }
+  for (const [property, value] of Object.entries(properties)) {
     await player.set(property, value).catch(() => {})
   }
 }
+
+/** The overlay's bottom bar top edge as a percentage of the window height
+ *  while the bar is open, else null. Session state, never stored: the bar
+ *  is hidden again at the next launch. */
+let subtitleClearance: number | null = null
 
 /** The stored look, or the untouched default. Read on every session start,
  *  because mpv resets these along with everything else on `loadfile`. */
@@ -1300,6 +1312,24 @@ async function runCommand(command: PlayerCommand): Promise<PlayerCommandOutcome>
       if (current) {
         pushSessionSnapshot({ ...current, settings: { ...current.settings, subtitleStyle: style } })
       }
+      return
+    }
+    case 'set-subtitle-clearance': {
+      // Only the one property moves: the rest of the look is as it was, and
+      // re-pushing four properties on every bar reveal would make the
+      // subtitle flicker. A value outside mpv's sub-pos range reads as "no
+      // bar", which leaves the subtitles where the person put them.
+      const percent = command.percent
+      subtitleClearance =
+        typeof percent === 'number' && Number.isFinite(percent) && percent > 0 && percent <= 150
+          ? percent
+          : null
+      await player
+        .set(
+          'sub-pos',
+          effectiveSubtitlePosition(storedSubtitleStyle().position, subtitleClearance)
+        )
+        .catch(() => {})
       return
     }
     case 'set-fit-mode':
