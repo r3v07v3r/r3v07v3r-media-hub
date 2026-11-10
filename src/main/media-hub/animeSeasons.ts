@@ -69,6 +69,7 @@ import type {
 } from '../../shared/media-hub/types'
 import {
   animeEntryTarget,
+  animeEpisodeStreamId,
   animeSeasonMembers,
   animeSeasonOf,
   animeTvdbSeasonIs
@@ -120,6 +121,23 @@ function seasonMembersOf(showId: string): (string | null)[] | undefined {
     : undefined
   animeSeasonMembersIndex.set(showId, members)
   return members
+}
+
+/**
+ * The id the stream add-ons are asked for one episode of an anime on the
+ * show's page — the season's own Kitsu entry, see animeEpisodeStreamId in
+ * serviceIds.ts. Not behind animeGroupingReady: the page this episode was
+ * picked from was built from the same grouped catalog, gate or no gate, and
+ * the season it named is that catalog's. Null for a later season no member
+ * can be shown to be. No request.
+ */
+export function animeEpisodeStreamAddress(
+  showId: string,
+  season: number | null | undefined,
+  episode: number
+): string | null {
+  const members = season && season > 1 ? seasonMembersOf(String(showId)) : undefined
+  return animeEpisodeStreamId(String(showId), season, episode, members)
 }
 
 /** Whether `memberId`, at `season` of `showId` by its place in the group, is

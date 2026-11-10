@@ -186,6 +186,32 @@ export function animeTvdbSeasonIs(
 }
 
 /**
+ * The id the stream add-ons know one episode of an anime by:
+ * `<kitsu id>:<episode>`, with no season, because a Kitsu id is already one
+ * season. On a merged show the page's season N is a different Kitsu entry
+ * from the show's own, so the id has to be that season's member, never the
+ * show's: `kitsu:46231:1` is the first episode of Solo Leveling's first
+ * season whatever season the page had open (found 2026-11-10, S02E01 played
+ * S01E01 from a season-one batch).
+ *
+ * `members` is animeSeasonMembers for the show, or nothing for an id that
+ * fronts no group; such a title is one Kitsu entry, whose own episode
+ * numbers the add-ons go by whatever season Kitsu files an episode under.
+ * Null for a later season no member can be shown to be: no search at all
+ * rather than one for another season.
+ */
+export function animeEpisodeStreamId(
+  showId: string,
+  season: number | null | undefined,
+  episode: number,
+  members: readonly (string | null)[] | undefined
+): string | null {
+  if (!members || !season || season <= 1) return `${showId}:${episode}`
+  const member = members[season - 1]
+  return member ? `${member}:${episode}` : null
+}
+
+/**
  * The inverse of animeSeasonMembers: the season of its show's page a member
  * is, or null where it cannot be shown to be one.
  */

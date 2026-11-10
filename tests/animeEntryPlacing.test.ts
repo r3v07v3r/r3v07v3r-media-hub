@@ -24,6 +24,7 @@ import path from 'node:path'
 import {
   ANIME_GROUPED_KEY,
   animeEntriesFor,
+  animeEpisodeStreamAddress,
   animeSeasonMembersWhenGrouped,
   invalidateAnimeGroupIndex,
   laterSeasonOf,
@@ -363,6 +364,28 @@ check('until the catalog is grouped nothing is a season of anything', () => {
   assert.deepEqual(animeEntriesFor(MHA), { id: MHA, season: 1 })
   seed(true)
   assert.deepEqual(laterSeasonOf(MHA_3), { id: MHA, season: 3 })
+})
+
+// What the stream add-ons are asked for an episode of the page: a later
+// season is its own Kitsu entry. Solo Leveling S02E01 was searched as
+// `kitsu:46231:1`, the first season's first episode, and played it.
+check("a later season's episode is searched under that season's own entry", () => {
+  seed(true)
+  assert.equal(animeEpisodeStreamAddress(SOLO, 2, 1), `${SOLO_2}:1`)
+  assert.equal(animeEpisodeStreamAddress(SOLO, 1, 1), `${SOLO}:1`)
+  assert.equal(animeEpisodeStreamAddress(MHA, 3, 5), `${MHA_3}:5`)
+})
+check('a season no member can be shown to be is not searched at all', () => {
+  seed(true)
+  assert.equal(animeEpisodeStreamAddress(MHA, 4, 1), null, 'the OVA sits at place four')
+  assert.equal(animeEpisodeStreamAddress(MHA, 9, 1), null, 'past the last member')
+  assert.equal(animeEpisodeStreamAddress(JOJO, 2, 1), null, 'two cours claim season two')
+})
+check("a title that fronts no group keeps Kitsu's own numbering", () => {
+  seed(true)
+  assert.equal(animeEpisodeStreamAddress(FRIEREN, 2, 30), `${FRIEREN}:30`)
+  assert.equal(animeEpisodeStreamAddress(SOLO_2, 2, 1), `${SOLO_2}:1`, 'asking again is harmless')
+  assert.equal(animeEpisodeStreamAddress(SOLO, undefined, 4), `${SOLO}:4`)
 })
 
 console.log(`\n${pass} passed`)

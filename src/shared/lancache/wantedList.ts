@@ -5,6 +5,12 @@
 
 import type { HistoryEntry, TrackedItem } from '../media-hub/types'
 
+export type AnimeAddress = (
+  showId: string,
+  season: number | null,
+  episode: number
+) => string | null
+
 export interface WantedTitle {
   /** movie | series | anime — the add-on route segment. */
   type: string
@@ -73,7 +79,13 @@ export function lanCacheContentKey(input: {
  */
 export function computeWantedList(
   tracked: readonly TrackedItem[],
-  history: readonly HistoryEntry[]
+  history: readonly HistoryEntry[],
+  /** The `<kitsu id>:<episode>` the add-ons know an anime episode by, or
+   *  null when the season has no entry of its own that can be shown to be
+   *  it — main's animeEpisodeStreamAddress. A later season of a merged show
+   *  is a different Kitsu entry from the show's; without this every season
+   *  is addressed as the first. Absent: the show's own id, as before. */
+  animeAddress: AnimeAddress = (showId, _season, episode) => `${showId}:${episode}`
 ): WantedTitle[] {
   const wanted: WantedTitle[] = []
   const seen = new Set<string>()
@@ -82,6 +94,33 @@ export function computeWantedList(
     if (seen.has(entry.contentKey) || wanted.length >= MAX_WANTED) return
     seen.add(entry.contentKey)
     wanted.push(entry)
+  }
+
+  // Anime addressing: kitsuId:episode, no season segment. Kitsu ids are
+  // season-scoped, so the key drops the season, matching the resolver's
+  // tier-2 lookup (the local-cache tier keeps the season) — and is filed
+  // under the season's own entry, which is what the resolver asks with.
+  const pushAnime = (
+    id: string,
+    season: number | null | undefined,
+    episode: number,
+    title: string,
+    reason: WantedTitle['reason']
+  ): void => {
+    const resolveId = animeAddress(id, season ?? null, episode)
+    if (!resolveId) return
+    push({
+      type: 'anime',
+      resolveId,
+      contentKey: lanCacheContentKey({
+        catalogId: resolveId.slice(0, resolveId.lastIndexOf(':')),
+        kind: 'anime',
+        seasonNumber: null,
+        episodeNumber: episode
+      }),
+      title,
+      reason
+    })
   }
 
   // Last watched position per series/anime, from history (newest first).
@@ -104,10 +143,9 @@ export function computeWantedList(
     if (!position || position.episode === null) continue
     for (let ahead = 1; ahead <= EPISODES_AHEAD; ahead++) {
       const nextEpisode = position.episode + ahead
-      if (entry.type === 'anime' || position.season === null) {
-        // Anime addressing: kitsuId:episode, no season segment. Kitsu ids
-        // are season-scoped, so the key drops the season, matching the
-        // resolver's tier-2 lookup (the local-cache tier keeps the season).
+      if (entry.type === 'anime') {
+        pushAnime(entry.id, position.season, nextEpisode, entry.title ?? '', 'watching')
+      } else if (position.season === null) {
         push({
           type: entry.type,
           resolveId: `${entry.id}:${nextEpisode}`,
@@ -154,7 +192,9 @@ export function computeWantedList(
     const startEpisode = (position?.episode ?? 0) + 1
     for (let ahead = 0; ahead < EPISODES_AHEAD; ahead++) {
       const episode = startEpisode + ahead
-      if (item.type === 'anime' || (position && position.season === null)) {
+      if (item.type === 'anime') {
+        pushAnime(item.id, position?.season ?? 1, episode, item.title, 'prefetch')
+      } else if (position && position.season === null) {
         push({
           type: item.type,
           resolveId: `${item.id}:${episode}`,

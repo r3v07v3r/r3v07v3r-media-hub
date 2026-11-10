@@ -99,6 +99,7 @@ import {
 } from './settingsStore'
 import { streamReleaseName } from '../../shared/media-hub/streamQuality'
 import { lanCacheContentKey } from '../../shared/lancache/wantedList'
+import { animeEpisodeStreamAddress } from './animeSeasons'
 import { knownTitles } from './titleNames'
 
 export const TORBOX = 'https://api.torbox.app/v1/api'
@@ -408,6 +409,33 @@ function showKey(type: string, id: string): string {
   return prefixed ? parts.slice(0, 2).join(':') : parts[0]
 }
 
+/**
+ * The id the add-ons are searched with for this episode. The renderer
+ * addresses an anime episode as `<show id>:<episode>`, but a later season
+ * of a merged show is a Kitsu entry of its own, and the show's id with that
+ * episode number is the FIRST season's episode — Solo Leveling S02E01
+ * played S01E01. See animeEpisodeStreamId (serviceIds.ts).
+ *
+ * Applied to both stream:resolve's id and play:stream's resolveId, so every
+ * memory keyed on them (the last copy that played, the release group, the
+ * language findings, the rejected copies) keeps one key per real episode.
+ * Idempotent: a season's own id fronts no group and comes back as it is.
+ * Throws for a later season no member can be shown to be: no copy at all
+ * rather than another season's.
+ */
+function streamAddressFor(type: string, id: string, season: number | null | undefined): string {
+  const raw = String(id)
+  if (type !== 'anime') return raw
+  const show = showKey(type, raw)
+  const episode = Number(raw.slice(show.length + 1))
+  if (show === raw || !Number.isInteger(episode) || episode <= 0) return raw
+  const address = animeEpisodeStreamAddress(show, season, episode)
+  if (address) return address
+  throw new Error(
+    `Season ${season} of this show isn't matched to its own anime entry, so there's nothing to search for its episodes yet.`
+  )
+}
+
 /** Asks TorBox to download a release it has not cached yet, so it becomes
  *  playable a few minutes later — createtorrent without play:stream's
  *  `add_only_if_cached`, which is exactly what makes it a real request. */
@@ -547,7 +575,8 @@ export function registerTorBoxIpc(): void {
   handle<StreamResolvePayload, StreamResolveResult>(
     MEDIA_HUB_CHANNELS.streamResolve,
     async (_e, payload) => {
-      const { type, id, title, altTitles } = payload
+      const { type, title, altTitles } = payload
+      const id = streamAddressFor(type, payload.id, payload.cacheKey?.seasonNumber)
       // Every name the title goes by, for the guards below: what the
       // renderer sent, plus what the cached record knows (an index-backed
       // card carries no originalTitle, and a romaji-named release must
@@ -652,10 +681,12 @@ export function registerTorBoxIpc(): void {
           lan: async () => {
             const meta = cacheMetaFor(payload, title)
             // Must match the key the feeder queued (wantedList.ts
-            // lanCacheContentKey), so anime drops its season here too.
+            // lanCacheContentKey), so anime drops its season here too —
+            // and is filed under the season's own Kitsu id, the one `id`
+            // now names, or a later season shares the first one's keys.
             const lanKey = meta
               ? lanCacheContentKey({
-                  catalogId: meta.catalogId ?? '',
+                  catalogId: type === 'anime' ? showKey(type, id) : (meta.catalogId ?? ''),
                   kind: type,
                   seasonNumber: meta.seasonNumber,
                   episodeNumber: meta.episodeNumber
@@ -1005,7 +1036,14 @@ export function registerTorBoxIpc(): void {
   )
 
   handle<PlayStreamPayload, PlaybackResult>(MEDIA_HUB_CHANNELS.playStream, (_e, payload) =>
-    playWithLanguageFallback(payload)
+    playWithLanguageFallback(
+      payload.type && payload.resolveId
+        ? {
+            ...payload,
+            resolveId: streamAddressFor(payload.type, payload.resolveId, payload.season)
+          }
+        : payload
+    )
   )
 
   // "Wrong copy": the copy in the player is not the episode it claims to be.
