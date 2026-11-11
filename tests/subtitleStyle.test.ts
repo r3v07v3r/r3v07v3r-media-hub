@@ -13,6 +13,7 @@ import assert from 'node:assert/strict'
 import {
   DEFAULT_SUBTITLE_STYLE,
   effectiveSubtitlePosition,
+  storedSubtitlePosition,
   isSubtitleStyleDefault,
   normalizeSubtitleStyle,
   subtitleStyleProperties,
@@ -124,5 +125,23 @@ assert.equal(effectiveSubtitlePosition(40, 86), 40, 'top half: the bar does not 
 assert.equal(effectiveSubtitlePosition(50, 86), 50, 'the middle counts as top half')
 assert.equal(effectiveSubtitlePosition(60, 15), SUBTITLE_POSITION_MIN, 'never above the minimum')
 assert.equal(effectiveSubtitlePosition(100, Number.NaN), 100, 'nonsense reads as no bar')
+
+// A drag places the text where the pointer is: every shown position maps
+// to a stored one that shows it there, with or without the bar, so the text
+// never jumps while crossing the middle.
+for (const clearance of [null, 86, 70]) {
+  const top = clearance === null ? SUBTITLE_POSITION_MAX : Math.floor(clearance)
+  for (let shown = SUBTITLE_POSITION_MIN; shown <= top; shown++) {
+    const stored = storedSubtitlePosition(shown, clearance)
+    assert.equal(
+      effectiveSubtitlePosition(stored, clearance),
+      shown,
+      `shown ${shown} with clearance ${clearance}`
+    )
+  }
+}
+assert.equal(storedSubtitlePosition(37, 86), 51, 'still bottom-anchored just under the middle')
+assert.equal(storedSubtitlePosition(36, 86), 36, 'top-anchored once the lifted text is higher')
+assert.equal(storedSubtitlePosition(95, 86), 100, 'below the bar top reads as the bar top')
 
 console.log('subtitleStyle: ok')

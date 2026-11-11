@@ -43,6 +43,7 @@ import type { SubtitleResult } from '@shared/media-hub/types'
 import {
   DEFAULT_SUBTITLE_STYLE,
   effectiveSubtitlePosition,
+  storedSubtitlePosition,
   isSubtitleStyleDefault,
   SUBTITLE_COLORS,
   SUBTITLE_POSITION_MAX,
@@ -776,7 +777,7 @@ function PlayerControls() {
   const shownPosition = effectiveSubtitlePosition(subtitleStyle.position, subtitleClearance)
   const subtitleBaselinePx = (viewportHeight * shownPosition) / 100 - (viewportHeight * 22) / 720
   const subtitleBandPx = Math.max(28, ((viewportHeight * 55) / 720) * subtitleStyle.scale * 2)
-  const dragStart = useRef<{ y: number; position: number } | null>(null)
+  const dragStart = useRef<{ y: number; shown: number } | null>(null)
   const dragFrame = useRef<number | null>(null)
   const pendingPosition = useRef<number | null>(null)
   const pushPosition = useCallback(
@@ -800,31 +801,20 @@ function PlayerControls() {
       if (event.button !== 0) return
       event.stopPropagation()
       event.currentTarget.setPointerCapture(event.pointerId)
-      // Below the picture (over 100) sits on the bar while it is open, the
-      // same as 100, so the drag starts from there rather than through a
-      // stretch where the text does not move.
-      dragStart.current = {
-        y: event.clientY,
-        position:
-          subtitleClearance !== null
-            ? Math.min(subtitleStyle.position, 100)
-            : subtitleStyle.position
-      }
+      // The drag works in where the text is on screen, not the stored
+      // number: the pointer moves the text, and storedSubtitlePosition works
+      // out which stored Height (and which anchor) puts it there.
+      dragStart.current = { y: event.clientY, shown: shownPosition }
       setDraggingSubtitles(true)
     },
-    [subtitleClearance, subtitleStyle.position]
+    [shownPosition]
   )
   const onHandlePointerMove = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
       const start = dragStart.current
       if (!start) return
       const delta = ((event.clientY - start.y) / viewportHeight) * 100
-      // With the bar open there is nothing below its top edge to drag to.
-      const max = subtitleClearance !== null ? 100 : SUBTITLE_POSITION_MAX
-      const next = Math.round(
-        Math.max(SUBTITLE_POSITION_MIN, Math.min(max, start.position + delta))
-      )
-      pushPosition(next)
+      pushPosition(storedSubtitlePosition(start.shown + delta, subtitleClearance))
     },
     [pushPosition, subtitleClearance, viewportHeight]
   )

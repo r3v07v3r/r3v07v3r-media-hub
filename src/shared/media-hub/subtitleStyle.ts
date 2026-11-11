@@ -138,3 +138,20 @@ export function effectiveSubtitlePosition(position: number, clearance: number | 
   const lifted = Math.min(position, 100) - (100 - Math.floor(clearance))
   return Math.max(SUBTITLE_POSITION_MIN, Math.min(position, lifted))
 }
+
+/**
+ * The stored position that shows the subtitles at `shown` right now — the
+ * inverse of effectiveSubtitlePosition, for a drag that must keep the text
+ * under the pointer. With the bar open the two anchors overlap on screen
+ * (a bottom-anchored position lifted by the bar can sit as high as a
+ * top-anchored one), so the switch to top-anchored happens where the lifted
+ * text reaches the middle, not where the stored number does: the text moves
+ * continuously and only the anchor it is measured from changes.
+ */
+export function storedSubtitlePosition(shown: number, clearance: number | null): number {
+  const lift = clearance === null || !Number.isFinite(clearance) ? 0 : 100 - Math.floor(clearance)
+  const max = lift > 0 ? 100 - lift : SUBTITLE_POSITION_MAX
+  const target = Math.round(Math.max(SUBTITLE_POSITION_MIN, Math.min(max, shown)))
+  if (lift <= 0) return target
+  return target + lift > SUBTITLE_TOP_HALF ? Math.min(100, target + lift) : target
+}
