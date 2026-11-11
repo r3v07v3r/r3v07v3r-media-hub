@@ -830,14 +830,15 @@ function PlayerControls() {
       if (!step) return
       event.preventDefault()
       event.stopPropagation()
-      applySubtitleStyle({
-        position: Math.max(
-          SUBTITLE_POSITION_MIN,
-          Math.min(SUBTITLE_POSITION_MAX, subtitleStyle.position + step)
-        )
-      })
+      // A step of the text on screen, like the drag, so a press always moves
+      // it the way the arrow points, across the middle included.
+      const next = storedSubtitlePosition(shownPosition + step, subtitleClearance)
+      // At an end (the bar's top, the minimum) nothing moves, and a Height
+      // below the picture is left as it is rather than pulled up to 100.
+      if (effectiveSubtitlePosition(next, subtitleClearance) === shownPosition) return
+      applySubtitleStyle({ position: next })
     },
-    [applySubtitleStyle, subtitleStyle.position]
+    [applySubtitleStyle, shownPosition, subtitleClearance]
   )
 
   // Tell the tracking services what is happening, on TRANSITIONS only.
