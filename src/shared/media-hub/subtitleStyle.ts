@@ -40,11 +40,15 @@ export const SUBTITLE_SCALE_STEP = 0.1
  *  window source, or just the window background otherwise. Capping this at
  *  100 (as an earlier version of this did) meant a letterboxed title could
  *  never get its subtitles off the picture and into the black bar under
- *  it, which is the whole reason someone reaches for this slider. Below
- *  ~50 the text is in the middle of the picture, which is a legitimate
- *  choice for a badly cropped source and a strange default. */
-export const SUBTITLE_POSITION_MIN = 50
+ *  it, which is the whole reason someone reaches for this slider. The low
+ *  end reaches the top of the window, for a source with burned-in text at
+ *  the bottom; at or above SUBTITLE_TOP_HALF the subtitles count as placed
+ *  from the top and the bottom bar no longer moves them. */
+export const SUBTITLE_POSITION_MIN = 10
 export const SUBTITLE_POSITION_MAX = 150
+/** At or above the middle of the window (sub-pos at or under this) the
+ *  subtitles are measured from the top, below it from the bottom. */
+export const SUBTITLE_TOP_HALF = 50
 
 export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
   scale: 1,
@@ -114,15 +118,23 @@ export function subtitleStyleProperties(style: SubtitleStyle): Record<string, st
 }
 
 /**
- * Where the subtitles sit right now: the stored position, or higher when the
- * player's bottom bar is open and would cover them. `clearance` is the bar's
- * top edge as a percentage of the window height (mpv's sub-pos scale, 100 =
- * the bottom), or null while the bar is hidden. The stored position is never
- * changed by this; it is what the subtitles go back to when the bar fades.
- * Shared by the bridge (which sets mpv's sub-pos) and the overlay (which
- * draws the drag handle at the same place), so the two cannot disagree.
+ * Where the subtitles sit right now. `clearance` is the bottom bar's top edge
+ * as a percentage of the window height (mpv's sub-pos scale, 100 = the
+ * bottom), or null while the bar is hidden.
+ *
+ * Subtitles in the bottom half are placed relative to the bottom: while the
+ * bar is open that bottom is the bar's top edge, so they rise by the bar's
+ * height and keep the same gap above it that they had above the window's
+ * edge, then drop back when it fades. A position below the picture (over
+ * 100) has no gap to keep and sits on the bar. Subtitles in the top half are
+ * placed from the top and the bar does not move them. The stored position
+ * is never changed by this. Shared by the bridge (which sets mpv's sub-pos)
+ * and the overlay (which puts the drag handle at the same place), so the two
+ * cannot disagree.
  */
 export function effectiveSubtitlePosition(position: number, clearance: number | null): number {
   if (clearance === null || !Number.isFinite(clearance)) return position
-  return Math.max(SUBTITLE_POSITION_MIN, Math.min(position, Math.floor(clearance)))
+  if (position <= SUBTITLE_TOP_HALF) return position
+  const lifted = Math.min(position, 100) - (100 - Math.floor(clearance))
+  return Math.max(SUBTITLE_POSITION_MIN, Math.min(position, lifted))
 }

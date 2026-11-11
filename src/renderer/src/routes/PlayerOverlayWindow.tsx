@@ -728,11 +728,12 @@ function PlayerControls() {
 
   // --- Subtitles clear of the bar, and draggable ---------------------------
   //
-  // While the bottom bar is open, subtitles that would sit under it move up
-  // to its top edge so they stay readable, and go back when the bar fades.
-  // Suspended while the Subtitles menu is open or the handle is being
-  // dragged: both are the person placing the subtitles, and the Height
-  // slider or the drag must show where they really are.
+  // While the bottom bar is open, subtitles in the bottom half rise by its
+  // height so they keep their gap above it, and go back when it fades; ones
+  // in the top half stay where they are (effectiveSubtitlePosition). Kept
+  // during a drag of the handle, so what is dragged is the gap above the bar
+  // and the text does not jump on grab. Suspended while the Subtitles menu is
+  // open, where the Height slider must show the stored position.
   useEffect(() => {
     const onResize = (): void => setViewportHeight(window.innerHeight)
     window.addEventListener('resize', onResize)
@@ -753,7 +754,7 @@ function PlayerControls() {
     return () => observer.disconnect()
   }, [])
   const barOpen = controlsVisible || pinned
-  const liftSuspended = menu === 'subtitles' || draggingSubtitles
+  const liftSuspended = menu === 'subtitles'
   // A whole percent below the bar's top edge: mpv places the baseline at
   // sub-pos and keeps its own small margin above that, so one percent of
   // clearance reads as a clear gap rather than a touch.
@@ -799,22 +800,33 @@ function PlayerControls() {
       if (event.button !== 0) return
       event.stopPropagation()
       event.currentTarget.setPointerCapture(event.pointerId)
-      dragStart.current = { y: event.clientY, position: subtitleStyle.position }
+      // Below the picture (over 100) sits on the bar while it is open, the
+      // same as 100, so the drag starts from there rather than through a
+      // stretch where the text does not move.
+      dragStart.current = {
+        y: event.clientY,
+        position:
+          subtitleClearance !== null
+            ? Math.min(subtitleStyle.position, 100)
+            : subtitleStyle.position
+      }
       setDraggingSubtitles(true)
     },
-    [subtitleStyle.position]
+    [subtitleClearance, subtitleStyle.position]
   )
   const onHandlePointerMove = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
       const start = dragStart.current
       if (!start) return
       const delta = ((event.clientY - start.y) / viewportHeight) * 100
+      // With the bar open there is nothing below its top edge to drag to.
+      const max = subtitleClearance !== null ? 100 : SUBTITLE_POSITION_MAX
       const next = Math.round(
-        Math.max(SUBTITLE_POSITION_MIN, Math.min(SUBTITLE_POSITION_MAX, start.position + delta))
+        Math.max(SUBTITLE_POSITION_MIN, Math.min(max, start.position + delta))
       )
       pushPosition(next)
     },
-    [pushPosition, viewportHeight]
+    [pushPosition, subtitleClearance, viewportHeight]
   )
   const onHandlePointerUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (!dragStart.current) return
@@ -1588,17 +1600,15 @@ function PlayerControls() {
         </div>
       )}
 
-      {/* The subtitles' own handle: a band drawn where mpv is putting them,
-          shown with the bar. Dragging it moves them (the stored Height, so
-          the next title keeps it); while the bar is open and would cover
-          them they are shown lifted, and the band follows. mpv draws the
-          text itself, so this band is the only thing on the picture there
-          is to take hold of. */}
+      {/* The subtitles' own handle: an invisible band over where mpv is
+          putting them, there with the bar. Grabbing the text drags it (the
+          stored Height, so the next title keeps it); only the cursor and,
+          mid-drag, a small readout show it is there. mpv draws the text
+          itself, so this band is the only thing on the picture there is to
+          take hold of. */}
       {barOpen && (
         <div
-          className={`${styles.subtitleHandle} ${
-            draggingSubtitles ? styles.subtitleHandleDragging : ''
-          }`}
+          className={styles.subtitleHandle}
           style={{ top: Math.max(0, subtitleBaselinePx - subtitleBandPx), height: subtitleBandPx }}
           role="slider"
           tabIndex={0}
@@ -1614,15 +1624,13 @@ function PlayerControls() {
           onClick={(event) => event.stopPropagation()}
           onDoubleClick={(event) => event.stopPropagation()}
         >
-          <span className={styles.subtitleHandleTag}>
-            {draggingSubtitles
-              ? `Subtitles · ${subtitleStyle.position}${
-                  subtitleStyle.position > 100 ? ' · below picture' : ''
-                }`
-              : subtitleClearance !== null && shownPosition !== subtitleStyle.position
-                ? 'Subtitles · lifted clear of the bar · drag to move'
-                : 'Subtitles · drag to move'}
-          </span>
+          {draggingSubtitles && (
+            <span className={styles.subtitleHandleTag}>
+              {`Subtitles · ${subtitleStyle.position}${
+                subtitleStyle.position > 100 ? ' · below picture' : ''
+              }`}
+            </span>
+          )}
         </div>
       )}
 

@@ -108,15 +108,21 @@ assert.equal(isSubtitleStyleDefault({ ...DEFAULT_SUBTITLE_STYLE, color: 'yellow'
 console.log('subtitle style tests passed')
 
 // ---------------------------------------------------------------------
-// The lift clear of the bottom bar: never below the stored position,
-// never above the minimum, and the stored position itself when there is
-// no bar.
+// The lift clear of the bottom bar: bottom-half subtitles keep their gap
+// above whichever bottom is showing, top-half ones stay put, and the stored
+// position itself when there is no bar.
 // ---------------------------------------------------------------------
 assert.equal(effectiveSubtitlePosition(100, null), 100)
-assert.equal(effectiveSubtitlePosition(100, 86), 86, 'lifted to the bar top')
-assert.equal(effectiveSubtitlePosition(80, 86), 80, 'already clear of the bar: unchanged')
-assert.equal(effectiveSubtitlePosition(120, 86.9), 86, 'whole percents only')
-assert.equal(effectiveSubtitlePosition(100, 10), SUBTITLE_POSITION_MIN, 'never above the minimum')
+assert.equal(effectiveSubtitlePosition(100, 86), 86, 'at the bottom: onto the bar top')
+assert.equal(effectiveSubtitlePosition(80, 86), 66, 'a gap above the bottom is kept above the bar')
+assert.equal(
+  effectiveSubtitlePosition(120, 86.9),
+  86,
+  'below the picture: onto the bar, whole percents'
+)
+assert.equal(effectiveSubtitlePosition(40, 86), 40, 'top half: the bar does not move it')
+assert.equal(effectiveSubtitlePosition(50, 86), 50, 'the middle counts as top half')
+assert.equal(effectiveSubtitlePosition(60, 15), SUBTITLE_POSITION_MIN, 'never above the minimum')
 assert.equal(effectiveSubtitlePosition(100, Number.NaN), 100, 'nonsense reads as no bar')
 
 console.log('subtitleStyle: ok')
