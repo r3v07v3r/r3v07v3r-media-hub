@@ -13,6 +13,7 @@ import assert from 'node:assert/strict'
 import {
   DEFAULT_SUBTITLE_STYLE,
   effectiveSubtitlePosition,
+  storedSubtitlePosition,
   isSubtitleStyleDefault,
   normalizeSubtitleStyle,
   subtitleStyleProperties,
@@ -108,15 +109,39 @@ assert.equal(isSubtitleStyleDefault({ ...DEFAULT_SUBTITLE_STYLE, color: 'yellow'
 console.log('subtitle style tests passed')
 
 // ---------------------------------------------------------------------
-// The lift clear of the bottom bar: never below the stored position,
-// never above the minimum, and the stored position itself when there is
-// no bar.
+// The lift clear of the bottom bar: bottom-half subtitles keep their gap
+// above whichever bottom is showing, top-half ones stay put, and the stored
+// position itself when there is no bar.
 // ---------------------------------------------------------------------
 assert.equal(effectiveSubtitlePosition(100, null), 100)
-assert.equal(effectiveSubtitlePosition(100, 86), 86, 'lifted to the bar top')
-assert.equal(effectiveSubtitlePosition(80, 86), 80, 'already clear of the bar: unchanged')
-assert.equal(effectiveSubtitlePosition(120, 86.9), 86, 'whole percents only')
-assert.equal(effectiveSubtitlePosition(100, 10), SUBTITLE_POSITION_MIN, 'never above the minimum')
+assert.equal(effectiveSubtitlePosition(100, 86), 86, 'at the bottom: onto the bar top')
+assert.equal(effectiveSubtitlePosition(80, 86), 66, 'a gap above the bottom is kept above the bar')
+assert.equal(
+  effectiveSubtitlePosition(120, 86.9),
+  86,
+  'below the picture: onto the bar, whole percents'
+)
+assert.equal(effectiveSubtitlePosition(40, 86), 40, 'top half: the bar does not move it')
+assert.equal(effectiveSubtitlePosition(50, 86), 50, 'the middle counts as top half')
+assert.equal(effectiveSubtitlePosition(60, 15), SUBTITLE_POSITION_MIN, 'never above the minimum')
 assert.equal(effectiveSubtitlePosition(100, Number.NaN), 100, 'nonsense reads as no bar')
+
+// A drag places the text where the pointer is: every shown position maps
+// to a stored one that shows it there, with or without the bar, so the text
+// never jumps while crossing the middle.
+for (const clearance of [null, 86, 70]) {
+  const top = clearance === null ? SUBTITLE_POSITION_MAX : Math.floor(clearance)
+  for (let shown = SUBTITLE_POSITION_MIN; shown <= top; shown++) {
+    const stored = storedSubtitlePosition(shown, clearance)
+    assert.equal(
+      effectiveSubtitlePosition(stored, clearance),
+      shown,
+      `shown ${shown} with clearance ${clearance}`
+    )
+  }
+}
+assert.equal(storedSubtitlePosition(37, 86), 51, 'still bottom-anchored just under the middle')
+assert.equal(storedSubtitlePosition(36, 86), 36, 'top-anchored once the lifted text is higher')
+assert.equal(storedSubtitlePosition(95, 86), 100, 'below the bar top reads as the bar top')
 
 console.log('subtitleStyle: ok')

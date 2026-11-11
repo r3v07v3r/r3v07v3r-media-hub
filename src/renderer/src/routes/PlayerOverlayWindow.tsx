@@ -43,6 +43,7 @@ import type { SubtitleResult } from '@shared/media-hub/types'
 import {
   DEFAULT_SUBTITLE_STYLE,
   effectiveSubtitlePosition,
+  storedSubtitlePosition,
   isSubtitleStyleDefault,
   SUBTITLE_COLORS,
   SUBTITLE_POSITION_MAX,
@@ -728,11 +729,12 @@ function PlayerControls() {
 
   // --- Subtitles clear of the bar, and draggable ---------------------------
   //
-  // While the bottom bar is open, subtitles that would sit under it move up
-  // to its top edge so they stay readable, and go back when the bar fades.
-  // Suspended while the Subtitles menu is open or the handle is being
-  // dragged: both are the person placing the subtitles, and the Height
-  // slider or the drag must show where they really are.
+  // While the bottom bar is open, subtitles in the bottom half rise by its
+  // height so they keep their gap above it, and go back when it fades; ones
+  // in the top half stay where they are (effectiveSubtitlePosition). Kept
+  // during a drag of the handle, so what is dragged is the gap above the bar
+  // and the text does not jump on grab. Suspended while the Subtitles menu is
+  // open, where the Height slider must show the stored position.
   useEffect(() => {
     const onResize = (): void => setViewportHeight(window.innerHeight)
     window.addEventListener('resize', onResize)
@@ -753,7 +755,7 @@ function PlayerControls() {
     return () => observer.disconnect()
   }, [])
   const barOpen = controlsVisible || pinned
-  const liftSuspended = menu === 'subtitles' || draggingSubtitles
+  const liftSuspended = menu === 'subtitles'
   // A whole percent below the bar's top edge: mpv places the baseline at
   // sub-pos and keeps its own small margin above that, so one percent of
   // clearance reads as a clear gap rather than a touch.
@@ -775,7 +777,7 @@ function PlayerControls() {
   const shownPosition = effectiveSubtitlePosition(subtitleStyle.position, subtitleClearance)
   const subtitleBaselinePx = (viewportHeight * shownPosition) / 100 - (viewportHeight * 22) / 720
   const subtitleBandPx = Math.max(28, ((viewportHeight * 55) / 720) * subtitleStyle.scale * 2)
-  const dragStart = useRef<{ y: number; position: number } | null>(null)
+  const dragStart = useRef<{ y: number; shown: number } | null>(null)
   const dragFrame = useRef<number | null>(null)
   const pendingPosition = useRef<number | null>(null)
   const pushPosition = useCallback(
@@ -799,22 +801,22 @@ function PlayerControls() {
       if (event.button !== 0) return
       event.stopPropagation()
       event.currentTarget.setPointerCapture(event.pointerId)
-      dragStart.current = { y: event.clientY, position: subtitleStyle.position }
+      // The drag works in where the text is on screen, not the stored
+      // number: the pointer moves the text, and storedSubtitlePosition works
+      // out which stored Height (and which anchor) puts it there.
+      dragStart.current = { y: event.clientY, shown: shownPosition }
       setDraggingSubtitles(true)
     },
-    [subtitleStyle.position]
+    [shownPosition]
   )
   const onHandlePointerMove = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
       const start = dragStart.current
       if (!start) return
       const delta = ((event.clientY - start.y) / viewportHeight) * 100
-      const next = Math.round(
-        Math.max(SUBTITLE_POSITION_MIN, Math.min(SUBTITLE_POSITION_MAX, start.position + delta))
-      )
-      pushPosition(next)
+      pushPosition(storedSubtitlePosition(start.shown + delta, subtitleClearance))
     },
-    [pushPosition, viewportHeight]
+    [pushPosition, subtitleClearance, viewportHeight]
   )
   const onHandlePointerUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (!dragStart.current) return
@@ -828,14 +830,15 @@ function PlayerControls() {
       if (!step) return
       event.preventDefault()
       event.stopPropagation()
-      applySubtitleStyle({
-        position: Math.max(
-          SUBTITLE_POSITION_MIN,
-          Math.min(SUBTITLE_POSITION_MAX, subtitleStyle.position + step)
-        )
-      })
+      // A step of the text on screen, like the drag, so a press always moves
+      // it the way the arrow points, across the middle included.
+      const next = storedSubtitlePosition(shownPosition + step, subtitleClearance)
+      // At an end (the bar's top, the minimum) nothing moves, and a Height
+      // below the picture is left as it is rather than pulled up to 100.
+      if (effectiveSubtitlePosition(next, subtitleClearance) === shownPosition) return
+      applySubtitleStyle({ position: next })
     },
-    [applySubtitleStyle, subtitleStyle.position]
+    [applySubtitleStyle, shownPosition, subtitleClearance]
   )
 
   // Tell the tracking services what is happening, on TRANSITIONS only.
@@ -1588,17 +1591,15 @@ function PlayerControls() {
         </div>
       )}
 
-      {/* The subtitles' own handle: a band drawn where mpv is putting them,
-          shown with the bar. Dragging it moves them (the stored Height, so
-          the next title keeps it); while the bar is open and would cover
-          them they are shown lifted, and the band follows. mpv draws the
-          text itself, so this band is the only thing on the picture there
-          is to take hold of. */}
+      {/* The subtitles' own handle: an invisible band over where mpv is
+          putting them, there with the bar. Grabbing the text drags it (the
+          stored Height, so the next title keeps it); only the cursor and,
+          mid-drag, a small readout show it is there. mpv draws the text
+          itself, so this band is the only thing on the picture there is to
+          take hold of. */}
       {barOpen && (
         <div
-          className={`${styles.subtitleHandle} ${
-            draggingSubtitles ? styles.subtitleHandleDragging : ''
-          }`}
+          className={styles.subtitleHandle}
           style={{ top: Math.max(0, subtitleBaselinePx - subtitleBandPx), height: subtitleBandPx }}
           role="slider"
           tabIndex={0}
@@ -1614,15 +1615,13 @@ function PlayerControls() {
           onClick={(event) => event.stopPropagation()}
           onDoubleClick={(event) => event.stopPropagation()}
         >
-          <span className={styles.subtitleHandleTag}>
-            {draggingSubtitles
-              ? `Subtitles · ${subtitleStyle.position}${
-                  subtitleStyle.position > 100 ? ' · below picture' : ''
-                }`
-              : subtitleClearance !== null && shownPosition !== subtitleStyle.position
-                ? 'Subtitles · lifted clear of the bar · drag to move'
-                : 'Subtitles · drag to move'}
-          </span>
+          {draggingSubtitles && (
+            <span className={styles.subtitleHandleTag}>
+              {`Subtitles · ${subtitleStyle.position}${
+                subtitleStyle.position > 100 ? ' · below picture' : ''
+              }`}
+            </span>
+          )}
         </div>
       )}
 

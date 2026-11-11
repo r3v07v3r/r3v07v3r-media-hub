@@ -306,9 +306,11 @@ Playback is mpv, embedded inside the app's own window on Windows; there is no tr
   OpenSubtitles join the search when connected. All are searched together; SubtitleDB rows come
   first, then SubDL's, because their downloads are unmetered, and rows matched to the exact release
   playing (SubtitleDB by the torrent's info hash, OpenSubtitles by file hash) go to the top for
-  frame-accurate sync. While the player's bottom bar is open, subtitles that would sit under it move
-  up to clear it and go back when it fades, and a dashed band over them is a handle: drag it to set
-  their height (the same Height the Subtitles menu has), which the next title keeps. Series and anime episodes are looked
+  frame-accurate sync. Subtitles in the bottom half of the window are placed from the bottom: while the
+  player's bottom bar is open they rise by its height, keeping the same gap above it, and go back
+  when it fades. Subtitles in the top half are placed from the top and stay put. Grab the text
+  itself (no outline is drawn) and drag to set their height (the same Height the Subtitles menu
+  has), which the next title keeps. Series and anime episodes are looked
   up by the show's IMDb id with the season and episode, and OpenSubtitles tries the title when that
   finds nothing, so later anime seasons and shows known by a Japanese name find subtitles too. An
   anime's IMDb id comes from Simkl, so that needs a Simkl Client ID (no sign-in); without one the

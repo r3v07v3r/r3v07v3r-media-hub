@@ -791,33 +791,24 @@
    is over it: a dashed edge and a small tag, so it reads as "this can be
    moved" without sitting on the film. Width leaves the sides of the
    picture clickable for pause. */
+/* Invisible on purpose: the subtitle text itself is what people grab, and
+   an outline over the picture for the whole film is clutter. The cursor
+   says it can be dragged; a keyboard focus ring is the only drawn edge. */
 .subtitleHandle {
   position: absolute;
   left: 50%;
   width: min(72%, 1100px);
   transform: translateX(-50%);
   box-sizing: border-box;
-  border: 1px dashed rgba(255, 255, 255, 0.28);
   border-radius: 8px;
   cursor: ns-resize;
   touch-action: none;
-  opacity: 0.55;
-  transition:
-    opacity 160ms ease,
-    border-color 160ms ease;
-}
-
-.subtitleHandle:hover,
-.subtitleHandle:focus-visible,
-.subtitleHandleDragging {
-  opacity: 1;
-  border-color: rgba(255, 255, 255, 0.7);
   outline: none;
 }
 
-.subtitleHandleDragging {
-  border-style: solid;
-  background: rgba(255, 255, 255, 0.05);
+.subtitleHandle:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.5);
+  outline-offset: 2px;
 }
 
 .subtitleHandleTag {
