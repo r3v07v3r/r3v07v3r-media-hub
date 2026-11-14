@@ -1668,12 +1668,15 @@ export interface TraktPollResult {
 export interface MalStatus {
   connected: boolean
   clientId: string
+  /** The app carries its own MAL client ID, so Connect needs no fields. */
+  builtInApp?: boolean
   user?: Record<string, unknown>
   error?: string
 }
 
 export interface MalStartPayload {
-  clientId: string
+  /** Omitted: sign in with the saved or the app's own client ID. */
+  clientId?: string
   clientSecret?: string
 }
 
