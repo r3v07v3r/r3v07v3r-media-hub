@@ -25,7 +25,7 @@ function StatusLine({ status }: { status: Status }) {
         : styles.statusIdle
   return (
     <span className={`${styles.statusMessage} ${cls}`}>
-      {status.kind === 'busy' ? 'Working…' : status.message}
+      {status.kind === 'busy' ? (status.message ?? 'Working…') : status.message}
     </span>
   )
 }
@@ -528,10 +528,11 @@ export function SimklSection() {
 /**
  * MyAnimeList — anime tracking, kept separate from Simkl since the
  * backend syncs anime progress against MAL specifically (see
- * main/media-hub/malSync.ts). Unlike Simkl this is a direct client
- * credential connect (no device-code polling), plus an optional
- * preview/apply reconcile step to catch drift between MAL and local
- * watch history.
+ * main/media-hub/malSync.ts). Connect opens MAL's sign-in page in the
+ * browser; when the app carries its own MAL client ID (malApp.ts) that is
+ * the whole of it, otherwise the person's own client ID is asked for. Plus
+ * an optional preview/apply reconcile step to catch drift between MAL and
+ * local watch history.
  */
 export function MalSection() {
   const [clientId, setClientId] = useState('')
@@ -540,6 +541,7 @@ export function MalSection() {
   const [connectStatus, setConnectStatus] = useState<Status>({ kind: 'idle' })
   const [preview, setPreview] = useState<MalReconcilePreview | null>(null)
   const [reconcileStatus, setReconcileStatus] = useState<Status>({ kind: 'idle' })
+  const builtInApp = status?.builtInApp ?? false
 
   useEffect(() => {
     const api = window.api?.mediaHub
@@ -552,13 +554,14 @@ export function MalSection() {
 
   async function connect() {
     const api = window.api?.mediaHub
-    if (!api || !clientId.trim()) return
-    setConnectStatus({ kind: 'busy' })
+    if (!api || (!builtInApp && !clientId.trim())) return
+    setConnectStatus({ kind: 'busy', message: 'Finish signing in on MyAnimeList in your browser…' })
     try {
-      await api.mal.start({
-        clientId: clientId.trim(),
-        clientSecret: clientSecret.trim() || undefined
-      })
+      await api.mal.start(
+        clientId.trim()
+          ? { clientId: clientId.trim(), clientSecret: clientSecret.trim() || undefined }
+          : {}
+      )
       setConnectStatus({ kind: 'ok', message: 'Connected.' })
       setClientSecret('')
       api.mal
@@ -691,6 +694,18 @@ export function MalSection() {
             </p>
           )}
         </>
+      ) : builtInApp ? (
+        <div className={styles.serviceActions}>
+          <button
+            type="button"
+            className={styles.testButton}
+            onClick={connect}
+            disabled={connectStatus.kind === 'busy'}
+          >
+            {connectStatus.kind === 'busy' ? 'Connecting…' : 'Connect'}
+          </button>
+          <StatusLine status={connectStatus} />
+        </div>
       ) : (
         <>
           <div className={styles.serviceFields}>

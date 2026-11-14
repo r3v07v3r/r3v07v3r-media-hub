@@ -64,6 +64,7 @@ import {
   writeSettings
 } from './settingsStore'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
+import { MAL_APP_CLIENT_ID } from './malApp'
 
 const MAL_REDIRECT_PORT = 48765
 const MAL_REDIRECT_URI = `http://127.0.0.1:${MAL_REDIRECT_PORT}/mal/callback`
@@ -482,20 +483,38 @@ function waitForMalCallback(expectedState: string, timeoutMs = 120000): Promise<
 export function registerMalIpc(): void {
   handle<undefined, MalStatus>(MEDIA_HUB_CHANNELS.malStatus, async () => {
     const creds = malCredentials()
-    if (!creds.accessToken) return { connected: false, clientId: creds.clientId }
+    const builtInApp = Boolean(MAL_APP_CLIENT_ID)
+    if (!creds.accessToken) return { connected: false, clientId: creds.clientId, builtInApp }
     try {
       const user = await malRequest<Record<string, unknown>>('/users/@me?fields=name')
-      return { connected: true, clientId: creds.clientId, user }
+      return { connected: true, clientId: creds.clientId, builtInApp, user }
     } catch (error) {
-      return { connected: false, clientId: creds.clientId, error: (error as Error).message }
+      return {
+        connected: false,
+        clientId: creds.clientId,
+        builtInApp,
+        error: (error as Error).message
+      }
     }
   })
 
   handle<MalStartPayload, { connected: true; user?: Record<string, unknown> }>(
     MEDIA_HUB_CHANNELS.malStart,
     async (_event, payload) => {
-      const clientId = String(payload?.clientId || '').trim()
-      const clientSecret = String(payload?.clientSecret || '').trim()
+      // An ID typed in wins. Otherwise a reconnect starts from the saved ID
+      // while a sign-in made with it is still stored (so abandoning it never
+      // leaves a stored refresh token paired with another client), and
+      // anything else signs in with the app's own (malApp.ts), which takes
+      // no secret.
+      const typed = String(payload?.clientId || '').trim()
+      const saved = malCredentials()
+      const keepSaved = !typed && Boolean(saved.accessToken || saved.refreshToken) && saved.clientId
+      const clientId = typed || (keepSaved ? saved.clientId : MAL_APP_CLIENT_ID)
+      const clientSecret = typed
+        ? String(payload?.clientSecret || '').trim()
+        : keepSaved
+          ? saved.clientSecret
+          : ''
       if (clientId.length < 8) throw new Error('Enter the client ID from your MyAnimeList API app.')
 
       const s = readSettings()
