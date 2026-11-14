@@ -33,6 +33,7 @@ import {
   isRegularEpisode
 } from '../../shared/media-hub/catalog-logic'
 import { releaseTextMentionsExecutable } from '../../shared/media-hub/unsafeFiles'
+import { lastingImageUrl } from '../../shared/media-hub/expiringImageUrl'
 import { fillMissing } from '../../shared/media-hub/catalogMerge'
 import {
   languageMatches,
@@ -907,8 +908,11 @@ export function normalizeKitsuAnime(record: RawApiPayload, lightweight = false):
     ...(original ? { originalTitle: original } : {}),
     ...(subtype ? { subtype } : {}),
     type: 'anime',
-    poster: a.posterImage?.large || a.posterImage?.original || '',
-    background: a.coverImage?.large || a.coverImage?.original || '',
+    // Never a presigned link: Kitsu's newer uploads come back as one that
+    // expires in 15 minutes, and every record built here is kept far longer.
+    // A blank is filled from AniList downstream (animeArtwork.ts).
+    poster: lastingImageUrl(a.posterImage?.large, a.posterImage?.original),
+    background: lastingImageUrl(a.coverImage?.large, a.coverImage?.original),
     logo: '',
     year: String(a.startDate || '').slice(0, 4),
     status: a.status || '',

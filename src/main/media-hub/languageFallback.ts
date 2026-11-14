@@ -46,6 +46,40 @@ export function sourceKey(stream: StreamCandidate): string {
 }
 
 /**
+ * True once a whole round of copies of an episode has been opened and none
+ * had the wanted audio: the pick plus LANGUAGE_RETRY_LIMIT of them, at least,
+ * all known to lack it and none known to have it.
+ *
+ * Past that point another round is not a search, it is a show that has no
+ * such audio yet — Dragon Ball Super: Beerus while it airs in Japanese only.
+ * Each round opened four new copies one after another, each starting the
+ * episode over in front of the person watching, and every play began
+ * another, because the copies already known to lack it are skipped and
+ * there were dozens more releases to work through.
+ */
+export function languageSearchExhausted(known: LanguageFindings): boolean {
+  const fits = Object.values(known)
+  if (fits.some((fit) => fit?.audio === true)) return false
+  return fits.filter((fit) => fit?.audio === false).length >= 1 + LANGUAGE_RETRY_LIMIT
+}
+
+/**
+ * Whether play:stream should keep opening copies after one has opened in
+ * the wrong language. Not once this episode's search is exhausted, and not
+ * for a show whose other episode exhausted one (`showLacksAudio`, see
+ * torbox.ts) — there the first copy that opens is kept.
+ *
+ * Only the LANGUAGE hunt stops: the rest of the order is still there for a
+ * copy that fails to open, so playback never fails on one dead link.
+ */
+export function languageHuntAllowed(
+  known: LanguageFindings,
+  { showLacksAudio = false }: { showLacksAudio?: boolean } = {}
+): boolean {
+  return !showLacksAudio && !languageSearchExhausted(known)
+}
+
+/**
  * The copies to open, in order: the ranked pick, then the alternates the
  * ranking put after it, skipping any already known to lack the wanted
  * audio — there is nothing to learn from opening those again. Capped at the
@@ -53,6 +87,10 @@ export function sourceKey(stream: StreamCandidate): string {
  * the audio goes last, so that when every unknown copy fails to open there
  * is still one known to play; play:stream only opens it when nothing before
  * it did.
+ *
+ * Once this episode's search is exhausted (languageSearchExhausted) that
+ * closest copy goes FIRST instead: it is the one to play, and the unknown
+ * copies behind it are only there in case it will not open.
  */
 export function languageTryOrder(
   first: StreamCandidate,
@@ -80,7 +118,10 @@ export function languageTryOrder(
       .map((stream) => ({ stream, fit: known[sourceKey(stream)] }))
   )
   const order = untried.slice(0, 1 + LANGUAGE_RETRY_LIMIT)
-  if (fallback) order.push(fallback)
+  if (fallback) {
+    if (languageSearchExhausted(known)) order.unshift(fallback)
+    else order.push(fallback)
+  }
   return order.length ? order : [first]
 }
 

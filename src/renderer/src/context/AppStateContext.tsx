@@ -321,6 +321,10 @@ interface AppStateValue {
   /** One choice on one show row. The row leaves at once; the changes for
    *  the services go out a few seconds after the last choice. */
   decideSyncShow: (row: ShowSyncRow, action: ShowSyncAction, service?: EpisodeSyncService) => void
+  /** Every row at once, as if Use beside `side` were clicked on each: shows
+   *  (undo for here, here-match-service for a service) and films (Use Local /
+   *  Use Simkl). Decided one at a time, with one message at the end. */
+  decideAllSync: (side: 'local' | EpisodeSyncService) => Promise<void>
 
   // The flat "browse everything" pool (movies + series + anime, real
   // catalog:list data when available, the previous session's remembered
@@ -1430,6 +1434,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setSyncShows([])
     setSyncReviewOpen(false)
   }
+  // The library a bulk choice (decideAllSync) checks before each row: a
+  // switch part way stops it, so the previous profile's rows are never
+  // decided against the new one's history.
+  const libraryKeyRef = useRef(libraryKey)
+  useEffect(() => {
+    libraryKeyRef.current = libraryKey
+  }, [libraryKey])
 
   // The launch check below runs once, 8 s in; by then the profile has loaded,
   // and the record of which rows were already announced is that profile's.
@@ -1646,6 +1657,112 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         })
     },
     [watchedIdsResult, homeFeed, pushNotification]
+  )
+
+  const decideAllSync = useCallback(
+    async (side: 'local' | EpisodeSyncService): Promise<void> => {
+      const api = window.api?.mediaHub?.tracking
+      if (!api) return
+      const name = side === 'local' ? 'Here' : side === 'simkl' ? 'Simkl' : 'Trakt'
+      // What this side's Use would do on each row, the same choices the
+      // per-row buttons make; a row this side has no part in is left.
+      const shows = syncShows.filter((row) => side === 'local' || row.services[side])
+      const films =
+        side === 'local'
+          ? syncDiscrepancies.filter((d) => d.pushable !== false)
+          : side === 'simkl'
+            ? syncDiscrepancies
+            : []
+      if (shows.length === 0 && films.length === 0) return
+      const showIds = new Set(shows.map((r) => r.id))
+      const filmIds = new Set(films.map((d) => d.id))
+      setSyncShows((prev) => prev.filter((r) => !showIds.has(r.id)))
+      setSyncDiscrepancies((prev) => prev.filter((d) => !filmIds.has(d.id)))
+
+      // One at a time: each decision writes the same tables in main, and a
+      // list of a hundred shows should not be a hundred racing writes.
+      const failedShows: ShowSyncRow[] = []
+      const failedFilms: WatchStatusDiscrepancy[] = []
+      const cannotSend = new Map<EpisodeSyncService, number>()
+      let removedHere = false
+      // Checked before every call and before anything is put back: after a
+      // profile switch the rest is dropped, not sent to the new profile.
+      const startedFor = libraryKey
+      const switched = (): boolean => libraryKeyRef.current !== startedFor
+      for (const row of shows) {
+        if (switched()) return
+        try {
+          const result = await api.episodeDecide(
+            side === 'local'
+              ? { id: row.id, action: 'undo' }
+              : { id: row.id, action: 'here-match-service', service: side }
+          )
+          if (!result.ok) {
+            failedShows.push(row)
+            continue
+          }
+          for (const blocked of result.cannotSend) {
+            cannotSend.set(blocked.service, (cannotSend.get(blocked.service) ?? 0) + 1)
+          }
+          if (result.removedHere) removedHere = true
+        } catch {
+          failedShows.push(row)
+        }
+      }
+      for (const d of films) {
+        if (switched()) return
+        try {
+          const result = await api.reconcileResolve({
+            discrepancy: d,
+            resolution: side === 'local' ? 'use-local' : 'use-remote'
+          })
+          if (side === 'local' && !result?.queued) failedFilms.push(d)
+        } catch {
+          failedFilms.push(d)
+        }
+      }
+
+      if (switched()) return
+      // Read the shows section again: a row with another service's part
+      // comes back with only that part, and a failed one where it stands.
+      await api
+        .episodeReview()
+        .then((next) => setSyncShows(next.shows))
+        .catch(() =>
+          setSyncShows((prev) => [
+            ...prev,
+            ...failedShows.filter((r) => !prev.some((p) => p.id === r.id))
+          ])
+        )
+      if (switched()) return
+      if (failedFilms.length > 0) {
+        setSyncDiscrepancies((prev) => [
+          ...prev,
+          ...failedFilms.filter((d) => !prev.some((p) => p.id === d.id))
+        ])
+      }
+      if (removedHere || films.length > 0) {
+        watchedIdsResult.refresh()
+        homeFeed.refresh()
+      }
+
+      const failed = failedShows.length + failedFilms.length
+      const done = shows.length + films.length - failed
+      pushNotification({
+        tone: failed > 0 ? 'error' : 'info',
+        message:
+          failed > 0
+            ? `Used ${name} for ${done} of ${done + failed}; ${failed} could not be changed and stay in the list.`
+            : `Used ${name} for ${done} ${done === 1 ? 'title' : 'titles'}.`
+      })
+      for (const [service, count] of cannotSend) {
+        pushNotification({
+          tone: 'info',
+          message: `${count} ${count === 1 ? 'show has' : 'shows have'} seasons that cannot be sent to ${service === 'simkl' ? 'Simkl' : 'Trakt'}, so those were left as they are there.`
+        })
+      }
+    },
+    [syncShows, syncDiscrepancies, libraryKey, watchedIdsResult, homeFeed, pushNotification]
   )
 
   // The other half of that: a queued batch going out (or not) is the only
@@ -3519,7 +3636,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       clearControlCentreAnchor,
       resolveSyncDiscrepancy,
       syncShows,
-      decideSyncShow
+      decideSyncShow,
+      decideAllSync
     }),
     [
       profiles,
@@ -3619,7 +3737,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       clearControlCentreAnchor,
       resolveSyncDiscrepancy,
       syncShows,
-      decideSyncShow
+      decideSyncShow,
+      decideAllSync
     ]
   )
 

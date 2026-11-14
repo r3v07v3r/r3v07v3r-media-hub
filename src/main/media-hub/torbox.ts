@@ -81,6 +81,8 @@ import {
 } from './playbackSession'
 import { assertCurrent, isSuperseded, PlaybackSupersededError } from './playbackSupersession'
 import {
+  languageHuntAllowed,
+  languageSearchExhausted,
   languageTryOrder,
   pickFallback,
   sourceKey,
@@ -464,6 +466,17 @@ function languageFindingsKey(type: string, id: string): string {
   const { audio, subtitles } = playbackLanguages()
   return `langfit:v2:${type}:${id}:${normalizeLanguage(audio)}:${normalizeLanguage(subtitles)}`
 }
+
+/** Set when a whole round of one episode's copies had none with the wanted
+ *  audio (languageSearchExhausted), so the show's other episodes open their
+ *  ranked pick without the hunt. Per show and audio language. Two weeks,
+ *  then one episode searches again — a dub can arrive mid-run — and a copy
+ *  that turns out to have the audio clears it at once. */
+function showLacksAudioKey(type: string, id: string): string {
+  const { audio } = playbackLanguages()
+  return `langabsent:v1:${type}:${showKey(type, id)}:${normalizeLanguage(audio)}`
+}
+const SHOW_LACKS_AUDIO_TTL_MS = 14 * 24 * 60 * 60 * 1000
 
 /** What each copy of this episode was found to hold, for the current
  *  languages. */
@@ -1129,25 +1142,46 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
     payload.type && payload.resolveId ? languageFindingsKey(payload.type, payload.resolveId) : ''
   const db = getDatabase()
   const known: LanguageFindings = (memoKey && db.getCache<LanguageFindings>(memoKey)) || {}
+  const showMemoKey =
+    payload.type && payload.resolveId ? showLacksAudioKey(payload.type, payload.resolveId) : ''
   const order = languageTryOrder(payload.stream, alternates, known)
+  // Whether to keep opening copies after one opened in the wrong language.
+  // The order is kept whole either way: past the first copy it is what a
+  // copy that will not open falls through to.
+  const hunt = languageHuntAllowed(known, {
+    showLacksAudio: Boolean(showMemoKey && db.getCache<boolean>(showMemoKey))
+  })
+  // Read before the loop adds this play's findings: the show is only marked
+  // by a search that ran out HERE, never renewed from an old one (a replay
+  // of an exhausted episode would otherwise keep the mark alive for good).
+  const exhaustedBefore = languageSearchExhausted(known)
   // Set when the copy in the player is a provisional one this call may end
   // up keeping — see holdLanguageSettle.
   const heldSince = takeHeldLanguageSettle()
 
-  // A retry whose search found nothing new: the only copy left is the one
-  // already in the player, known to lack the audio. Settle on it rather
-  // than reopen it — a reopen re-buffers, and can fail a play that was
-  // working.
-  const only = order.length === 1 ? sourceKey(order[0]) : ''
+  // A retry whose search found nothing new — or that is not searching any
+  // more — and whose first copy is the one already in the player, known to
+  // lack the audio. Settle on it rather than reopen it — a reopen
+  // re-buffers, and can fail a play that was working.
+  //
+  // Not hunting, it is whatever copy of this episode is playing, wherever the
+  // order puts it: the renderer's wider search after a one-copy shortcut
+  // (AppStateContext's shortcutOnly retry) lists unknown copies ahead of the
+  // one in the player, and opening the first of them restarted the episode
+  // — exactly what a show known to lack the audio is meant not to do.
+  const only = order.length === 1 || !hunt ? sourceKey(order[0]) : ''
   const inPlayer = lastOpened
-  if (
-    only &&
-    inPlayer?.key === only &&
-    known[only]?.audio === false &&
+  const playingKnownShort =
+    inPlayer &&
+    inPlayer.key &&
+    inPlayer.payload.type === payload.type &&
+    inPlayer.payload.resolveId === payload.resolveId &&
+    known[inPlayer.key]?.audio === false &&
     activeStreamUrl() === inPlayer.result.url
-  ) {
-    await settleLanguageShortfall(inPlayer.result.tracks, known[only], heldSince)
-    return { ...inPlayer.result, languageFit: known[only] }
+  if (playingKnownShort && (!hunt || inPlayer.key === only)) {
+    const fit = known[inPlayer.key]
+    await settleLanguageShortfall(inPlayer.result.tracks, fit, heldSince)
+    return { ...inPlayer.result, languageFit: fit }
   }
 
   const tried: { stream: StreamCandidate; fit: LanguageFit }[] = []
@@ -1193,9 +1227,16 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
     tried.push({ stream, fit })
     current = { stream, result, fit }
     open = stream
-    if (fit.audio) break
+    // Not hunting: the first copy that opens is the one, whatever it holds.
+    if (fit.audio || !hunt) break
   }
   if (memoKey && Object.keys(known).length) db.putCache(memoKey, known, LAST_STREAM_TTL_MS)
+  if (showMemoKey) {
+    if (current?.fit.audio) db.deleteCache(showMemoKey)
+    else if (!exhaustedBefore && languageSearchExhausted(known)) {
+      db.putCache(showMemoKey, true, SHOW_LACKS_AUDIO_TTL_MS)
+    }
+  }
   if (!current) throw firstError ?? new Error('None of the copies of this title would open.')
 
   // The copy to end on: the one with the audio, else the closest. Opened

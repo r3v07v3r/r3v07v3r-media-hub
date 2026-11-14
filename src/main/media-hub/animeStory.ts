@@ -28,6 +28,7 @@ import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { isValidCatalogKind } from './security'
 import { mapWithLimit, type TaskPriority } from './taskScheduler'
+import { withAnilistArtwork } from './animeArtwork'
 
 const STORY_TTL_MS = 24 * 60 * 60 * 1000
 
@@ -59,7 +60,15 @@ export async function storyForAnime(
       {},
       { priority }
     )
-    const value: AnimeStoryResult = { links: animeStoryLinks(payload), checked: true }
+    const links = animeStoryLinks(payload)
+    const items = await withAnilistArtwork(
+      links.map((link) => link.item),
+      priority
+    )
+    const value: AnimeStoryResult = {
+      links: links.map((link, index) => ({ ...link, item: items[index] })),
+      checked: true
+    }
     db.putCache(key, value, STORY_TTL_MS)
     return value
   } catch (error) {
