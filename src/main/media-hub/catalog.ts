@@ -88,6 +88,7 @@ import { titleCollection } from './collection'
 import { contentRating } from './contentRating'
 import { watchRegion } from './watchProviders'
 import { metaCacheKey } from './titleNames'
+import { withAnilistArtwork, withAnilistArtworkOne } from './animeArtwork'
 
 /**
  * Cinemeta answers on two hosts with the same ids. v3 first, as it always
@@ -493,7 +494,9 @@ async function kitsuCatalog(priority: TaskPriority): Promise<CatalogItem[]> {
   // here: this function is on the response path of the renderer's
   // catalog:list request as well as the six-hourly refresh job's, and
   // that pass takes minutes.
-  return dedupeCatalog(pages)
+  // A new show whose Kitsu art is only a presigned link arrives without a
+  // poster; AniList's is looked up for those few (see animeArtwork.ts).
+  return withAnilistArtwork(dedupeCatalog(pages), priority)
 }
 
 /**
@@ -931,10 +934,13 @@ async function resolveMetadata(
         ),
         kitsuCategories(kitsuId, priority)
       ])
-      item = normalizeKitsuAnime({
-        ...result.data,
-        attributes: { ...result.data?.attributes, genres }
-      })
+      item = await withAnilistArtworkOne(
+        normalizeKitsuAnime({
+          ...result.data,
+          attributes: { ...result.data?.attributes, genres }
+        }),
+        priority
+      )
     } else {
       const result = await cinemetaJson<{ meta?: RawApiPayload }>(
         `/meta/${type}/${encodeURIComponent(resolvedId)}.json`,
@@ -1141,7 +1147,7 @@ async function kitsuSearch(query: string): Promise<CatalogItem[]> {
   // one is 20 items with somebody watching a search box, not 1000 items
   // nobody asked for.
   try {
-    return await groupAnimeCatalog(items, 'interactive')
+    return await groupAnimeCatalog(await withAnilistArtwork(items, 'interactive'), 'interactive')
   } catch (error) {
     // Same reasoning: a grouping pass that fails (a franchise-mapping
     // lookup blowing up in some new way none of its own try/catches
@@ -1322,7 +1328,7 @@ async function relatedAnime(id: string): Promise<CatalogItem[]> {
       {},
       { priority: 'interactive', label: 'related anime' }
     )
-    const entries = filterAnimeRelationships(result)
+    const entries = await withAnilistArtwork(filterAnimeRelationships(result), 'interactive')
     db.putCache(key, entries, 24 * 60 * 60 * 1000)
     return entries
   } catch (error) {

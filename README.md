@@ -1036,7 +1036,8 @@ and the half-hourly watchlist pull under `job:planned-sync`.
   (`api.aniskip.com`), YouTube for trailers (`youtube-nocookie.com`, with the video from YouTube's
   and Google's media hosts), Cloudflare's speed-test endpoint when you run the connection test, and
   GitHub for updates and the Anime4K pack. Artwork loads straight from the image hosts the catalog
-  names: `simkl.in`, `images.metahub.space`, Kitsu's media hosts and IMDb's `m.media-amazon.com`.
+  names: `simkl.in`, `images.metahub.space`, Kitsu's media hosts, AniList's `s4.anilist.co`
+  (for new anime whose Kitsu art is only an expiring link) and IMDb's `m.media-amazon.com`.
   The Torrentio (`torrentio.strem.fun`) and Comet (`cometfortheweebs.midnightignite.me`) add-ons are
   queried for releases when you play from TorBox, and every half hour while an r3-cache server is
   paired, for titles it should pre-fetch; only the title's id is sent, never your TorBox token.
