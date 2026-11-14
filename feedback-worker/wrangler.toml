@@ -1,0 +1,25 @@
+name = "r3-feedback"
+main = "src/index.ts"
+compatibility_date = "2025-06-01"
+
+# Where every report is kept. Private to the Cloudflare account: the Worker
+# has no route that reads it back.
+[[d1_databases]]
+binding = "DB"
+database_name = "r3-feedback"
+database_id = "7970e5b8-3654-4fbe-be37-b167113a4083"
+migrations_dir = "migrations"
+
+# 30 requests a minute per address. The address is the limiter's key and is
+# never stored.
+[[ratelimits]]
+name = "REPORT_LIMITER"
+namespace_id = "4101"
+
+  [ratelimits.simple]
+  limit = 30
+  period = 60
+
+# Daily housekeeping: old logs dropped, very old reports deleted.
+[triggers]
+crons = ["17 3 * * *"]
