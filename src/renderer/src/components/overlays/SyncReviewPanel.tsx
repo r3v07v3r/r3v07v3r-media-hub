@@ -231,6 +231,69 @@ function ShowRow({ row }: { row: ShowSyncRow }) {
   )
 }
 
+/** Use … for everything: a button per side that has rows here — Here always,
+ *  each service with a part in a show, Simkl for the films — that does what
+ *  that side's Use does on every row. A first click arms it and says how
+ *  many it covers; a second within a few seconds applies it. */
+function UseAllBar() {
+  const { syncShows, syncDiscrepancies, decideAllSync } = useAppState()
+  const [armed, setArmed] = useState<'local' | EpisodeSyncService | null>(null)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    if (!armed) return
+    const timer = setTimeout(() => setArmed(null), 4000)
+    return () => clearTimeout(timer)
+  }, [armed])
+
+  const services = (Object.keys(SERVICE_NAMES) as EpisodeSyncService[]).filter(
+    (service) =>
+      syncShows.some((row) => row.services[service]) ||
+      (service === 'simkl' && syncDiscrepancies.length > 0)
+  )
+  const countFor = (side: 'local' | EpisodeSyncService): number =>
+    side === 'local'
+      ? syncShows.length + syncDiscrepancies.filter((d) => d.pushable !== false).length
+      : syncShows.filter((row) => row.services[side]).length +
+        (side === 'simkl' ? syncDiscrepancies.length : 0)
+  const sides: Array<'local' | EpisodeSyncService> = ['local', ...services]
+  if (syncShows.length + syncDiscrepancies.length < 2) return null
+
+  return (
+    <div className={styles.useAll}>
+      <span className={styles.useAllLabel}>For everything</span>
+      {sides.map((side) => {
+        const name = side === 'local' ? 'Local' : SERVICE_NAMES[side]
+        const count = countFor(side)
+        const isArmed = armed === side
+        return (
+          <button
+            key={side}
+            type="button"
+            disabled={busy || count === 0}
+            className={`${styles.actionButton} ${side === 'local' ? styles.actionButtonPrimary : ''} ${isArmed ? styles.actionButtonArmed : ''}`}
+            title={
+              side === 'local'
+                ? 'Use beside Here on every show (what came in from the services is removed, here and there) and Use Local on every film'
+                : `Use beside ${name} on every show that has it${side === 'simkl' ? ', and Use Simkl on every film' : ''}`
+            }
+            onClick={() => {
+              if (!isArmed) {
+                setArmed(side)
+                return
+              }
+              setArmed(null)
+              setBusy(true)
+              void decideAllSync(side).finally(() => setBusy(false))
+            }}
+          >
+            {isArmed ? `Apply to ${count}?` : `Use ${name}`}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 /** Rendered from GlobalOverlays.tsx, driven by AppStateContext's
  *  syncDiscrepancies/syncShows/syncReviewOpen. Two sections.
  *
@@ -296,6 +359,7 @@ export function SyncReviewPanel() {
             <Icon name="x" size={13} />
           </button>
         </div>
+        <UseAllBar />
         <div className={styles.list}>
           {syncDiscrepancies.length === 0 && syncShows.length === 0 && (
             <div className={styles.row}>
