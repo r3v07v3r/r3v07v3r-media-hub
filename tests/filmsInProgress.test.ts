@@ -94,6 +94,22 @@ check('a rewatch started after an old watched mark is in progress again', () => 
   again.close()
 })
 
+check('stopped between the 80% watched mark and 90%: still watched, not a rewatch', () => {
+  const file = tempDbPath()
+  const db = createDatabase(file, TEST_PROFILE)
+  db.savePlaybackPosition('tt1', undefined, 4700, 6000)
+  db.markWatched({ id: 'tt1', type: 'movie', title: 'One' })
+  db.close()
+  // The player keeps saving after its 80% mark: the bookmark is newer.
+  const raw = new DatabaseSync(file)
+  raw.exec(`UPDATE watch_history SET watched_at='2026-01-01T00:00:00.000Z' WHERE content_id='tt1'`)
+  raw.close()
+  const again = createDatabase(file, TEST_PROFILE)
+  again.savePlaybackPosition('tt1', undefined, 5100, 6000)
+  assert.deepEqual(again.filmsInProgress(), [])
+  again.close()
+})
+
 check('clearing the bookmark (Remove saves position 0) takes it out', () => {
   const db = createDatabase(tempDbPath(), TEST_PROFILE)
   db.savePlaybackPosition('tt1', undefined, 1500, 6000)

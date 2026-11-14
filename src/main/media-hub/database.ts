@@ -1833,7 +1833,13 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
             SELECT 1 FROM watch_history h
              WHERE h.profile_id=p.profile_id AND h.content_id=p.content_id
                AND h.season IS NULL AND h.episode IS NULL
-               AND h.watched_at >= p.updated_at)
+               AND (h.watched_at >= p.updated_at
+                    -- The player marks a film watched at 80% (WATCHED_FRACTION)
+                    -- but keeps its bookmark until 90%, saving it after the
+                    -- mark. A bookmark that far in is that same viewing, not
+                    -- a rewatch.
+                    OR (p.duration_seconds > 0
+                        AND p.position_seconds >= 0.8 * p.duration_seconds)))
         ORDER BY p.updated_at DESC`
     )
   }
