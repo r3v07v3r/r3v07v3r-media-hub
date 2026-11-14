@@ -240,6 +240,7 @@ import { isTraktPushable } from './trakt'
 import { traktPullKey, traktPullStateFor } from './traktHistoryPull'
 import { kitsuIdLookup } from './idBridge'
 import { backupBeforeRewrite } from './autoBackup'
+import { SIMKL_APP_CLIENT_ID } from './simklApp'
 import {
   compareEpisodeSets,
   decideShow,
@@ -3648,10 +3649,15 @@ export function registerTrackingIpc(): void {
   handle<string | undefined, SimklPinStart>(
     MEDIA_HUB_CHANNELS.simklStart,
     async (_e, rawClientId) => {
-      // A caller's ID, else the one already saved (a reconnect must not swap
-      // the client its stored refresh token belongs to before the new sign-in
-      // is approved), else the app's own (simklCredentials falls back to it).
-      const clientId = String(rawClientId || '').trim() || simklCredentials().clientId
+      // A caller's ID; else, while a sign-in is still stored, the ID it was
+      // made with (a reconnect must not swap the client its refresh token
+      // belongs to before the new sign-in is approved); else the app's own.
+      // An ID left behind after Disconnect is not kept: it may be a legacy
+      // one the app has since replaced.
+      const saved = simklCredentials()
+      const clientId =
+        String(rawClientId || '').trim() ||
+        (saved.accessToken || saved.refreshToken ? saved.clientId : SIMKL_APP_CLIENT_ID)
       // OAuth 2.0 first: it is what Simkl registers every app as now. Only an
       // ID it calls invalid_client (a legacy one) goes on to the PIN flow.
       try {
