@@ -1163,16 +1163,25 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
   // more — and whose first copy is the one already in the player, known to
   // lack the audio. Settle on it rather than reopen it — a reopen
   // re-buffers, and can fail a play that was working.
+  //
+  // Not hunting, it is whatever copy of this episode is playing, wherever the
+  // order puts it: the renderer's wider search after a one-copy shortcut
+  // (AppStateContext's shortcutOnly retry) lists unknown copies ahead of the
+  // one in the player, and opening the first of them restarted the episode
+  // — exactly what a show known to lack the audio is meant not to do.
   const only = order.length === 1 || !hunt ? sourceKey(order[0]) : ''
   const inPlayer = lastOpened
-  if (
-    only &&
-    inPlayer?.key === only &&
-    known[only]?.audio === false &&
+  const playingKnownShort =
+    inPlayer &&
+    inPlayer.key &&
+    inPlayer.payload.type === payload.type &&
+    inPlayer.payload.resolveId === payload.resolveId &&
+    known[inPlayer.key]?.audio === false &&
     activeStreamUrl() === inPlayer.result.url
-  ) {
-    await settleLanguageShortfall(inPlayer.result.tracks, known[only], heldSince)
-    return { ...inPlayer.result, languageFit: known[only] }
+  if (playingKnownShort && (!hunt || inPlayer.key === only)) {
+    const fit = known[inPlayer.key]
+    await settleLanguageShortfall(inPlayer.result.tracks, fit, heldSince)
+    return { ...inPlayer.result, languageFit: fit }
   }
 
   const tried: { stream: StreamCandidate; fit: LanguageFit }[] = []
