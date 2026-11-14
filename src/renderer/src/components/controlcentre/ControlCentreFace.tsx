@@ -23,6 +23,7 @@ import { useAppState } from '@renderer/context/AppStateContext'
 import SettingsPage, { type SettingsCategory } from '@renderer/routes/SettingsPage'
 import styles from './ControlCentre.module.css'
 import { CachingSection } from './sections/CachingSection'
+import { FeedbackSection } from './sections/FeedbackSection'
 import { PipelineSection } from './sections/PipelineSection'
 import { ServicesSection } from './sections/ServicesSection'
 import { UpdatesSection } from './sections/UpdatesSection'
@@ -208,6 +209,7 @@ export function ControlCentreFace() {
                 {entry.id === 'pipeline' ? <PipelineSection onNavigate={setSection} /> : null}
                 {entry.id === 'services' ? <ServicesSection /> : null}
                 {entry.id === 'updates' ? <UpdatesSection /> : null}
+                {entry.id === 'feedback' ? <FeedbackSection /> : null}
               </PanelVisibleContext.Provider>
             </div>
           ))}

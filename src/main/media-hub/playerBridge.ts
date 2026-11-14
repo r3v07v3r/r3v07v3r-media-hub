@@ -65,6 +65,7 @@ import { handle } from './ipcGuard'
 import { hostSpawn } from './hostPlayer'
 import { platformCapabilities } from './platform'
 import { logError } from './logger'
+import { reportProblem } from './feedback/reporter'
 import { readSettings, writeSettings } from './settingsStore'
 import {
   MpvPlayer,
@@ -160,6 +161,19 @@ async function recoverFromHang(): Promise<void> {
   detachEmbedTarget()
   const load = lastLoad
   const snapshot = sessionSnapshot
+  // A tester's freeze is the report most worth having, log and all: the
+  // `Player command timed out` lines just before it say what mpv was doing.
+  reportProblem({
+    kind: 'error',
+    title: 'The player stopped answering and was restarted',
+    fingerprint: 'error:mpv-hang',
+    context: {
+      playing: Boolean(load),
+      secondHangOnTitle: Boolean(load && hangRecoveredUrl === load.url),
+      positionSeconds: Math.round(lastTimePos)
+    },
+    withLog: true
+  })
   if (!load) {
     logError(
       'media-hub:player',

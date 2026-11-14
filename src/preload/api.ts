@@ -6,6 +6,12 @@ import {
   SystemSnapshot
 } from '../shared/ipc-types'
 import { MEDIA_HUB_CHANNELS } from '../shared/media-hub/ipc-channels'
+import type {
+  FeedbackCategory,
+  FeedbackPreview,
+  FeedbackStatus,
+  RendererProblem
+} from '../shared/feedback/types'
 import type { CollectionCandidate, CollectionsState } from '../shared/media-hub/universes'
 import type {
   LanCacheDevicesResponse,
@@ -458,6 +464,29 @@ export function createApi(transport: ApiTransport) {
           transport.invoke(MEDIA_HUB_CHANNELS.torboxDisconnect),
         onUnauthorized: (onEvent: () => void): (() => void) =>
           subscribe<undefined>(MEDIA_HUB_CHANNELS.torboxUnauthorized, () => onEvent())
+      },
+
+      /** Tester feedback and automatic diagnostics, kept in the private
+       *  feedback database (feedback-worker/). Everything is sanitised in
+       *  the main process before it is queued. */
+      feedback: {
+        /** Typed feedback; sent whether or not diagnostics are on. */
+        send: (input: {
+          category: FeedbackCategory
+          text: string
+          includeLog: boolean
+          page?: string
+        }): Promise<{ sent: boolean }> => transport.invoke(MEDIA_HUB_CHANNELS.feedbackSend, input),
+        /** A render error or a run of repeated clicks. Dropped in the main
+         *  process when diagnostics are off. */
+        reportProblem: (problem: RendererProblem): Promise<void> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.feedbackReportProblem, problem),
+        status: (): Promise<FeedbackStatus> => transport.invoke(MEDIA_HUB_CHANNELS.feedbackStatus),
+        setDiagnostics: (enabled: boolean): Promise<FeedbackStatus> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.feedbackSetDiagnostics, { enabled }),
+        /** What a report carries besides its text, exactly as it would go. */
+        preview: (includeLog: boolean): Promise<FeedbackPreview> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.feedbackPreview, { includeLog })
       },
 
       downloads: {

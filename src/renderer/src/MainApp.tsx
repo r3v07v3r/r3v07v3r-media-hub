@@ -1,5 +1,6 @@
 import { Suspense, useEffect, type ReactNode } from 'react'
 import { HashRouter, Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom'
+import { noteScreen } from './lib/feedback/diagnostics'
 import { AppStateProvider, useAppState } from '@renderer/context/AppStateContext'
 import { OverlayProvider } from '@renderer/context/OverlayContext'
 import { AppShell } from '@renderer/components/layout/AppShell'
@@ -63,6 +64,16 @@ function ScrollToTopOnNavigate() {
   return null
 }
 
+/** Tells the tester-report diagnostics about each screen change, so going
+ *  back and forth between two screens is noticed. See lib/feedback. */
+function ScreenTrail() {
+  const location = useLocation()
+  useEffect(() => {
+    noteScreen()
+  }, [location.pathname])
+  return null
+}
+
 /** The desktop's catch-up with the tracking services, on open and on focus —
  *  see useServiceCatchUp. */
 function ServiceCatchUp() {
@@ -105,6 +116,7 @@ export default function MainApp() {
         <AppStateProvider>
           <AppShell>
             <ScrollToTopOnNavigate />
+            <ScreenTrail />
             <ServiceCatchUp />
             <PrefetchRoutes />
             <RoutedErrorBoundary>

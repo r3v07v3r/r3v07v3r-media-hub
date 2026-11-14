@@ -80,6 +80,13 @@ export const CONTROL_CENTRE_SECTIONS = [
     label: 'Community',
     icon: 'heart',
     blurb: 'Watch parties and profiles.'
+  },
+  {
+    id: 'feedback',
+    label: 'Feedback',
+    icon: 'message',
+    /** Also opened from the top bar's feedback button. */
+    blurb: 'Tell us what is wrong or what you would like, and what the app reports on its own.'
   }
 ] as const
 
