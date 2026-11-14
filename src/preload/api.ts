@@ -962,7 +962,7 @@ export function createApi(transport: ApiTransport) {
 
       simkl: {
         status: (): Promise<SimklStatus> => transport.invoke(MEDIA_HUB_CHANNELS.simklStatus),
-        start: (clientId: string): Promise<SimklPinStart> =>
+        start: (clientId?: string): Promise<SimklPinStart> =>
           transport.invoke(MEDIA_HUB_CHANNELS.simklStart, clientId),
         poll: (userCode: string): Promise<SimklPollResult> =>
           transport.invoke(MEDIA_HUB_CHANNELS.simklPoll, userCode),

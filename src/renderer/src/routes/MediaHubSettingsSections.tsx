@@ -323,11 +323,12 @@ export function OmdbSection() {
  * approved it there or the code expires. `simklClientId` lives in the
  * shared settings snapshot, but the live connected/user state doesn't
  * (see MediaHubSettingsSnapshot) — fetched here from simkl.status()
- * directly, same as MAL below.
+ * directly, same as MAL below. The app carries its own Simkl client ID
+ * (main/media-hub/simklApp.ts), so Connect is one click and a browser
+ * sign-in; nobody registers a Simkl app.
  */
 export function SimklSection() {
-  const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
-  const [clientId, setClientId] = useState('')
+  const { refreshMediaHubSettings } = useAppState()
   const [status, setStatus] = useState<SimklStatus | null>(null)
   const [pin, setPin] = useState<SimklPinStart | null>(null)
   const [connectStatus, setConnectStatus] = useState<Status>({ kind: 'idle' })
@@ -340,16 +341,6 @@ export function SimklSection() {
       .then(setStatus)
       .catch(() => {})
   }, [])
-
-  useEffect(() => {
-    // Deferred via a resolved microtask (see MediaServicesSection's load
-    // effect for the same pattern) rather than a synchronous setState in
-    // the effect body — this seeds the client-id field once the shared
-    // settings snapshot arrives/changes; the field stays freely editable
-    // after that.
-    const id = mediaHubSettings?.simklClientId ?? ''
-    Promise.resolve().then(() => setClientId(id))
-  }, [mediaHubSettings?.simklClientId])
 
   // Polls simkl.poll() every `interval` seconds against the active pin
   // until the person approves the code on Simkl's site (connected: true)
@@ -411,11 +402,16 @@ export function SimklSection() {
 
   async function startConnect() {
     const api = window.api?.mediaHub
-    if (!api || !clientId.trim()) return
+    if (!api) return
     setConnectStatus({ kind: 'busy' })
     try {
-      const result = await api.simkl.start(clientId.trim())
+      const result = await api.simkl.start()
       setPin(result)
+      // Open the approval page straight away; the code stays on screen for
+      // when the browser was already on another tab.
+      const url =
+        result.verification_uri_complete || result.verification_url || result.verification_uri
+      if (url) window.api?.mediaHub?.openExternal(url)
       setConnectStatus({ kind: 'idle' })
     } catch (error) {
       setConnectStatus({
@@ -493,26 +489,14 @@ export function SimklSection() {
         </div>
       ) : (
         <>
-          <div className={styles.serviceFields}>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Simkl Client ID</span>
-              <input
-                className={styles.fieldInput}
-                type="text"
-                placeholder="Simkl app client ID"
-                value={clientId}
-                onChange={(e) => setClientId(e.target.value)}
-              />
-            </label>
-          </div>
           <div className={styles.serviceActions} style={{ marginTop: 10 }}>
             <button
               type="button"
               className={styles.testButton}
               onClick={startConnect}
-              disabled={!clientId.trim() || connectStatus.kind === 'busy'}
+              disabled={connectStatus.kind === 'busy'}
             >
-              {connectStatus.kind === 'busy' ? 'Starting…' : 'Connect'}
+              {connectStatus.kind === 'busy' ? 'Starting…' : 'Connect to Simkl'}
             </button>
             <StatusLine status={connectStatus} />
           </div>

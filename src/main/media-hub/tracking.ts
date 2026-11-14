@@ -240,6 +240,7 @@ import { isTraktPushable } from './trakt'
 import { traktPullKey, traktPullStateFor } from './traktHistoryPull'
 import { kitsuIdLookup } from './idBridge'
 import { backupBeforeRewrite } from './autoBackup'
+import { SIMKL_APP_CLIENT_ID } from './simklApp'
 import {
   compareEpisodeSets,
   decideShow,
@@ -3645,44 +3646,47 @@ export function registerTrackingIpc(): void {
     }
   })
 
-  handle<string, SimklPinStart>(MEDIA_HUB_CHANNELS.simklStart, async (_e, rawClientId) => {
-    const clientId = String(rawClientId || '').trim()
-    if (clientId.length < 8) throw new Error('Enter the client ID from your Simkl developer app.')
-    // OAuth 2.0 first: it is what Simkl registers every app as now. Only an
-    // ID it calls invalid_client (a legacy one) goes on to the PIN flow.
-    try {
-      const device = await simklDeviceStart(clientId)
-      simklDeviceCodes.set(device.user_code, {
-        clientId,
-        deviceCode: device.device_code,
-        expiresAt: Date.now() + device.expires_in * 1000
+  handle<string | undefined, SimklPinStart>(
+    MEDIA_HUB_CHANNELS.simklStart,
+    async (_e, rawClientId) => {
+      // The app's own Simkl app unless a caller names another.
+      const clientId = String(rawClientId || '').trim() || SIMKL_APP_CLIENT_ID
+      // OAuth 2.0 first: it is what Simkl registers every app as now. Only an
+      // ID it calls invalid_client (a legacy one) goes on to the PIN flow.
+      try {
+        const device = await simklDeviceStart(clientId)
+        simklDeviceCodes.set(device.user_code, {
+          clientId,
+          deviceCode: device.device_code,
+          expiresAt: Date.now() + device.expires_in * 1000
+        })
+        const s = readSettings()
+        s.simklClientId = clientId
+        writeSettings(s)
+        return {
+          user_code: device.user_code,
+          verification_uri: device.verification_uri,
+          verification_uri_complete: device.verification_uri_complete,
+          expires_in: device.expires_in,
+          interval: device.interval
+        }
+      } catch (error) {
+        if ((error as { code?: string }).code !== 'invalid_client') throw error
+      }
+      const result = await fetchJson<SimklPinStart>(simklUrl('/oauth/pin', clientId), {
+        headers: {
+          // TODO(media-hub-integration): copied verbatim from the original
+          // app's User-Agent string — see simklClient.ts's header comment for
+          // why this isn't rebranded to this project's name.
+          'User-Agent': `r3v07v3r-media-hub/${app.getVersion()}`
+        }
       })
       const s = readSettings()
       s.simklClientId = clientId
       writeSettings(s)
-      return {
-        user_code: device.user_code,
-        verification_uri: device.verification_uri,
-        verification_uri_complete: device.verification_uri_complete,
-        expires_in: device.expires_in,
-        interval: device.interval
-      }
-    } catch (error) {
-      if ((error as { code?: string }).code !== 'invalid_client') throw error
+      return result
     }
-    const result = await fetchJson<SimklPinStart>(simklUrl('/oauth/pin', clientId), {
-      headers: {
-        // TODO(media-hub-integration): copied verbatim from the original
-        // app's User-Agent string — see simklClient.ts's header comment for
-        // why this isn't rebranded to this project's name.
-        'User-Agent': `r3v07v3r-media-hub/${app.getVersion()}`
-      }
-    })
-    const s = readSettings()
-    s.simklClientId = clientId
-    writeSettings(s)
-    return result
-  })
+  )
 
   handle<string, SimklPollResult>(MEDIA_HUB_CHANNELS.simklPoll, async (_e, userCode) => {
     const device = simklDeviceCodes.get(userCode)

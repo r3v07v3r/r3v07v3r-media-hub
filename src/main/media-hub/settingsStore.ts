@@ -23,6 +23,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import { electronModule } from './electronModule'
+import { SIMKL_APP_CLIENT_ID } from './simklApp'
 import {
   isLegacySealed,
   openLegacySecrets,
@@ -624,7 +625,7 @@ export function traktCredentials(): TraktCredentials {
 export function simklCredentials(): SimklCredentials {
   const settings = readSettings()
   return {
-    clientId: settings.simklClientId || '',
+    clientId: settings.simklClientId || SIMKL_APP_CLIENT_ID,
     accessToken: decrypt(settings.simklAccessToken),
     refreshToken: decrypt(settings.simklRefreshToken),
     expiresAt: Number(settings.simklTokenExpiresAt) || 0
