@@ -81,6 +81,7 @@ import {
 } from './playbackSession'
 import { assertCurrent, isSuperseded, PlaybackSupersededError } from './playbackSupersession'
 import {
+  languageSearchExhausted,
   languageTryOrder,
   pickFallback,
   sourceKey,
@@ -464,6 +465,17 @@ function languageFindingsKey(type: string, id: string): string {
   const { audio, subtitles } = playbackLanguages()
   return `langfit:v2:${type}:${id}:${normalizeLanguage(audio)}:${normalizeLanguage(subtitles)}`
 }
+
+/** Set when a whole round of one episode's copies had none with the wanted
+ *  audio (languageSearchExhausted), so the show's other episodes open their
+ *  ranked pick without the hunt. Per show and audio language. Two weeks,
+ *  then one episode searches again — a dub can arrive mid-run — and a copy
+ *  that turns out to have the audio clears it at once. */
+function showLacksAudioKey(type: string, id: string): string {
+  const { audio } = playbackLanguages()
+  return `langabsent:v1:${type}:${showKey(type, id)}:${normalizeLanguage(audio)}`
+}
+const SHOW_LACKS_AUDIO_TTL_MS = 14 * 24 * 60 * 60 * 1000
 
 /** What each copy of this episode was found to hold, for the current
  *  languages. */
@@ -1129,7 +1141,11 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
     payload.type && payload.resolveId ? languageFindingsKey(payload.type, payload.resolveId) : ''
   const db = getDatabase()
   const known: LanguageFindings = (memoKey && db.getCache<LanguageFindings>(memoKey)) || {}
-  const order = languageTryOrder(payload.stream, alternates, known)
+  const showMemoKey =
+    payload.type && payload.resolveId ? showLacksAudioKey(payload.type, payload.resolveId) : ''
+  const order = languageTryOrder(payload.stream, alternates, known, {
+    showLacksAudio: Boolean(showMemoKey && db.getCache<boolean>(showMemoKey))
+  })
   // Set when the copy in the player is a provisional one this call may end
   // up keeping — see holdLanguageSettle.
   const heldSince = takeHeldLanguageSettle()
@@ -1196,6 +1212,12 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
     if (fit.audio) break
   }
   if (memoKey && Object.keys(known).length) db.putCache(memoKey, known, LAST_STREAM_TTL_MS)
+  if (showMemoKey) {
+    if (current?.fit.audio) db.deleteCache(showMemoKey)
+    else if (languageSearchExhausted(known)) {
+      db.putCache(showMemoKey, true, SHOW_LACKS_AUDIO_TTL_MS)
+    }
+  }
   if (!current) throw firstError ?? new Error('None of the copies of this title would open.')
 
   // The copy to end on: the one with the audio, else the closest. Opened

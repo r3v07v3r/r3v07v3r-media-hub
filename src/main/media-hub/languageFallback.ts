@@ -49,15 +49,43 @@ export function sourceKey(stream: StreamCandidate): string {
  * The copies to open, in order: the ranked pick, then the alternates the
  * ranking put after it, skipping any already known to lack the wanted
  * audio — there is nothing to learn from opening those again. Capped at the
- * pick plus LANGUAGE_RETRY_LIMIT. The closest of the copies known to lack
+ * pick plus LANGUAGE_RETRY_LIMIT, or the pick alone for a show known to lack
+ * the audio; once a whole round of this episode's copies came up empty, only
+ * the closest of them is opened (languageSearchExhausted). The closest of the copies known to lack
  * the audio goes last, so that when every unknown copy fails to open there
  * is still one known to play; play:stream only opens it when nothing before
  * it did.
  */
+/**
+ * True once a whole round of copies of an episode has been opened and none
+ * had the wanted audio: the pick plus LANGUAGE_RETRY_LIMIT of them, at least,
+ * all known to lack it and none known to have it.
+ *
+ * Past that point another round is not a search, it is a show that has no
+ * such audio yet — Dragon Ball Super: Beerus while it airs in Japanese only.
+ * Each round opened four new copies one after another, each starting the
+ * episode over in front of the person watching, and every play began
+ * another, because the copies already known to lack it are skipped and
+ * there were dozens more releases to work through.
+ */
+export function languageSearchExhausted(known: LanguageFindings): boolean {
+  const fits = Object.values(known)
+  if (fits.some((fit) => fit?.audio === true)) return false
+  return fits.filter((fit) => fit?.audio === false).length >= 1 + LANGUAGE_RETRY_LIMIT
+}
+
+export interface LanguageTryOptions {
+  /** Another episode of this show already exhausted a whole round (see
+   *  languageSearchExhausted): open the ranked pick alone rather than
+   *  hunting through copies that almost certainly lack it too. */
+  showLacksAudio?: boolean
+}
+
 export function languageTryOrder(
   first: StreamCandidate,
   alternates: StreamCandidate[],
-  known: LanguageFindings
+  known: LanguageFindings,
+  { showLacksAudio = false }: LanguageTryOptions = {}
 ): StreamCandidate[] {
   const seen = new Set<string>()
   const unique = [first, ...alternates].filter((stream) => {
@@ -79,7 +107,11 @@ export function languageTryOrder(
       .filter((stream) => known[sourceKey(stream)]?.audio === false)
       .map((stream) => ({ stream, fit: known[sourceKey(stream)] }))
   )
-  const order = untried.slice(0, 1 + LANGUAGE_RETRY_LIMIT)
+  // A copy known to HAVE the audio is still opened first, whatever else is
+  // known: that is the one way out of a show that gained a dub.
+  const sure = untried.filter((stream) => known[sourceKey(stream)]?.audio === true)
+  if (!sure.length && fallback && languageSearchExhausted(known)) return [fallback]
+  const order = untried.slice(0, 1 + (showLacksAudio ? 0 : LANGUAGE_RETRY_LIMIT))
   if (fallback) order.push(fallback)
   return order.length ? order : [first]
 }
