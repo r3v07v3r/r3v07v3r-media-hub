@@ -15,7 +15,7 @@
 
 import { app } from 'electron'
 import type { HistoryEntry } from '../../shared/media-hub/types'
-import { fetchJson } from './httpClient'
+import { fetchJson, type HttpError } from './httpClient'
 import type { TaskPriority } from './taskScheduler'
 import { logError } from './logger'
 import {
@@ -187,6 +187,8 @@ export async function simklDevicePoll(
 export function storeSimklSignIn(accessToken: string, oauth?: SimklTokenResponse): void {
   const settings = readSettings()
   delete settings.simklAccountMark
+  // The allowance is the account's; a sign-in may be another account.
+  delete settings.simklLimitedUntil
   settings.simklAccessToken = encrypt(accessToken)
   applyOAuthLifetime(settings, oauth)
   writeSettings(settings)
@@ -199,6 +201,7 @@ export function clearSimklTokens(): void {
   delete settings.simklRefreshToken
   delete settings.simklTokenExpiresAt
   delete settings.simklAccountMark
+  delete settings.simklLimitedUntil
   writeSettings(settings)
 }
 
@@ -267,6 +270,87 @@ async function refreshSimklIfDue(): Promise<void> {
   await refreshing
 }
 
+// ---------------------------------------------------------------------
+// Daily limit. On AUTH V2 every signed-in request counts against the
+// account's own daily allowance (500 free, 1,000 PRO, 10,000 VIP), shared
+// with every other app that account has connected, and resetting at
+// midnight US Eastern. Spent, Simkl answers 429 with Retry-After = seconds to
+// that reset. Sending on would only collect more refusals (and a POST past
+// the limit risks a throttling block), so the app stops sending until the
+// reset, says so, and then sends what it held. The per-second limit is a 429
+// too, but asks for seconds, not hours, and is left to the retry paths.
+
+/** A 429 asking for at least this long is the daily allowance, not the
+ *  per-second rate. */
+const DAILY_LIMIT_MIN_WAIT_MS = 10 * 60 * 1000
+
+type SimklLimitListener = (limitedUntil: number | null) => void
+const limitListeners = new Set<SimklLimitListener>()
+let limitTimer: ReturnType<typeof setTimeout> | null = null
+
+/** When the spent allowance resets, or null while there is allowance. */
+export function simklLimitedUntil(): number | null {
+  const until = Number(readSettings().simklLimitedUntil) || 0
+  return until > Date.now() ? until : null
+}
+
+/** Told when the limit is hit and when it lifts. Returns the unsubscribe. */
+export function onSimklLimitChange(listener: SimklLimitListener): () => void {
+  limitListeners.add(listener)
+  return () => limitListeners.delete(listener)
+}
+
+/** Arms the lift for a limit written by an earlier run; call at startup. */
+export function armSimklLimit(): void {
+  const until = simklLimitedUntil()
+  if (until) armLimitTimer(until)
+}
+
+function armLimitTimer(until: number): void {
+  if (limitTimer) clearTimeout(limitTimer)
+  // A few seconds past the reset, so the first request lands after it.
+  // Capped below setTimeout's 24.8-day ceiling; a reset is never that far.
+  const delay = Math.min(Math.max(until - Date.now(), 0) + 5000, 2 ** 31 - 1)
+  limitTimer = setTimeout(() => {
+    limitTimer = null
+    const settings = readSettings()
+    if (Number(settings.simklLimitedUntil) !== until) return
+    delete settings.simklLimitedUntil
+    writeSettings(settings)
+    for (const listener of limitListeners) listener(null)
+  }, delay)
+}
+
+function noteDailyLimit(waitMs: number): number {
+  const until = Date.now() + waitMs
+  const settings = readSettings()
+  // Already known (a request that was in flight when it hit): no new notice.
+  const known = Number(settings.simklLimitedUntil) > Date.now()
+  settings.simklLimitedUntil = until
+  writeSettings(settings)
+  armLimitTimer(until)
+  if (!known) {
+    logError(
+      'simkl:daily-limit',
+      new Error(`daily allowance spent until ${new Date(until).toISOString()}`)
+    )
+    for (const listener of limitListeners) listener(until)
+  }
+  return until
+}
+
+/** The refusal every Simkl caller sees while the allowance is spent: a 429
+ *  like Simkl's own, so the retry paths keep what they hold without
+ *  spending a try on it (historyRetry.ts's retryFailure). */
+function dailyLimitError(until: number): HttpError {
+  const error = new Error(
+    `Simkl's daily request limit for this account is used up. Changes are kept and sent after it resets (${new Date(until).toLocaleString()}).`
+  ) as HttpError
+  error.status = 429
+  error.retryAfterMs = Math.max(0, until - Date.now())
+  return error
+}
+
 /**
  * Authenticated Simkl request (requires both a client ID and a connected
  * account's access token). `scheduling` is for the rare call that needs
@@ -279,9 +363,30 @@ export async function simklRequest<T = unknown>(
   priority: TaskPriority = 'interactive',
   scheduling: { timeoutMs?: number; strictBody?: boolean } = {}
 ): Promise<T> {
+  const limited = simklLimitedUntil()
+  if (limited) throw dailyLimitError(limited)
   await refreshSimklIfDue()
   const { clientId, accessToken } = simklCredentials()
   if (!clientId || !accessToken) throw new Error('Simkl is not connected.')
+  try {
+    return await sendSimkl<T>(pathname, clientId, accessToken, options, priority, scheduling)
+  } catch (error) {
+    const { status, retryAfterMs } = error as HttpError
+    if (status === 429 && (retryAfterMs ?? 0) >= DAILY_LIMIT_MIN_WAIT_MS) {
+      throw dailyLimitError(noteDailyLimit(retryAfterMs ?? 0))
+    }
+    throw error
+  }
+}
+
+function sendSimkl<T>(
+  pathname: string,
+  clientId: string,
+  accessToken: string,
+  options: RequestInit,
+  priority: TaskPriority,
+  scheduling: { timeoutMs?: number; strictBody?: boolean }
+): Promise<T> {
   return fetchJson<T>(
     simklUrl(pathname, clientId),
     {

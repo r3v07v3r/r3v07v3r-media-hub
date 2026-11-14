@@ -196,6 +196,9 @@ import {
   clearSimklTokens,
   simklDevicePoll,
   simklDeviceStart,
+  armSimklLimit,
+  onSimklLimitChange,
+  simklLimitedUntil,
   simklRequest,
   simklUrl,
   simklWatchedSnapshot,
@@ -2365,6 +2368,16 @@ function takeRemovedPlan(profile: string, id: string, now = Date.now()): Tracked
 
 /** Registers every `tracking:*`, `home:personalized`, and `simkl:*` IPC handler. Call once during main-process startup. */
 export function registerTrackingIpc(): void {
+  // Simkl's daily allowance: the renderer is told when it runs out and when
+  // it comes back, and at the reset whatever was held is sent.
+  onSimklLimitChange((limitedUntil) => {
+    sendToRenderer(MEDIA_HUB_CHANNELS.simklLimitChanged, { limitedUntil })
+    if (limitedUntil) return
+    void retryHistoryPushes('background')
+    void flushPendingPushes('background')
+  })
+  armSimklLimit()
+
   handle<undefined, TrackingListResult>(MEDIA_HUB_CHANNELS.trackingList, async () => {
     const db = getDatabase()
     const trackedItems = db.tracked()
@@ -3635,6 +3648,10 @@ export function registerTrackingIpc(): void {
   handle<undefined, SimklStatus>(MEDIA_HUB_CHANNELS.simklStatus, async () => {
     const creds = simklCredentials()
     if (!creds.accessToken) return { connected: false, clientId: creds.clientId }
+    // Signed in but out of requests for today: still connected, and asking
+    // Simkl who the user is would only be refused.
+    const limitedUntil = simklLimitedUntil()
+    if (limitedUntil) return { connected: true, clientId: creds.clientId, limitedUntil }
     try {
       const user = await simklRequest<Record<string, unknown>>('/users/settings', {
         method: 'POST',

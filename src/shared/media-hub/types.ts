@@ -1611,6 +1611,16 @@ export interface SimklStatus {
   clientId: string
   user?: Record<string, unknown>
   error?: string
+  /** Epoch ms: the account's daily Simkl allowance is spent and nothing is
+   *  sent to Simkl until then (Simkl's reset, midnight US Eastern). Changes
+   *  made meanwhile are kept and sent after it. */
+  limitedUntil?: number
+}
+
+/** Pushed when the daily Simkl limit is hit (`limitedUntil` set) and again
+ *  when it lifts (`limitedUntil` null). */
+export interface SimklLimitEvent {
+  limitedUntil: number | null
 }
 
 export interface SimklPinStart {

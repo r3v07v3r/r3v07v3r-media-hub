@@ -82,6 +82,10 @@ export interface MediaHubRawSettings {
    *  expires and leaves both absent. Epoch ms. */
   simklRefreshToken?: string
   simklTokenExpiresAt?: number
+  /** Epoch ms. Set when Simkl refuses a request because the account's daily
+   *  allowance is spent (see simklClient.ts's daily limit); no Simkl request
+   *  goes out until then. Cleared by any sign-in or sign-out. */
+  simklLimitedUntil?: number
   /** Trakt's device flow needs both halves of the app credential, unlike
    *  Simkl's PIN flow — the token exchange takes the secret. Both are stored
    *  through the same safeStorage path as every other credential. */

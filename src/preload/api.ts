@@ -88,6 +88,7 @@ import type {
   ShowSyncRow,
   SimklPinStart,
   SimklPollResult,
+  SimklLimitEvent,
   SimklStatus,
   SkipTimes,
   SourcePreference,
@@ -968,6 +969,10 @@ export function createApi(transport: ApiTransport) {
           transport.invoke(MEDIA_HUB_CHANNELS.simklPoll, userCode),
         disconnect: (): Promise<{ ok: true }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.simklDisconnect),
+        /** The account's daily Simkl allowance ran out (`limitedUntil` set)
+         *  or came back (`limitedUntil` null). */
+        onLimitChanged: (onEvent: (event: SimklLimitEvent) => void): (() => void) =>
+          subscribe<SimklLimitEvent>(MEDIA_HUB_CHANNELS.simklLimitChanged, onEvent),
         scrobble: (
           action: 'start' | 'pause' | 'stop',
           item: SimklPushItem,

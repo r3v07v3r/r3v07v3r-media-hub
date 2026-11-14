@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
+import { SIMKL_CONNECTED_APPS_URL, simklLimitMessage } from '@renderer/lib/simklLimit'
 import { Icon } from '@renderer/components/icons/Icon'
 import { DEFAULT_OLLAMA_BASE_URL, pickInstalledModel } from '@shared/media-hub/ollama'
 import type {
@@ -336,10 +337,15 @@ export function SimklSection() {
   useEffect(() => {
     const api = window.api?.mediaHub
     if (!api) return
-    api.simkl
-      .status()
-      .then(setStatus)
-      .catch(() => {})
+    const load = (): void => {
+      api.simkl
+        .status()
+        .then(setStatus)
+        .catch(() => {})
+    }
+    load()
+    // The daily limit running out or coming back changes what this card says.
+    return api.simkl.onLimitChanged(load)
   }, [])
 
   // Polls simkl.poll() every `interval` seconds against the active pin
@@ -449,6 +455,19 @@ export function SimklSection() {
       <p className={styles.rowDescription} style={{ marginBottom: 10 }}>
         Syncs watch history and marks-watched to your Simkl account.
       </p>
+      {connected && status?.limitedUntil ? (
+        <div className={styles.rowDescription} role="status" style={{ marginBottom: 10 }}>
+          {simklLimitMessage(status.limitedUntil)}{' '}
+          <button
+            type="button"
+            className={styles.testButton}
+            style={{ padding: '2px 8px' }}
+            onClick={() => window.api?.mediaHub?.openExternal(SIMKL_CONNECTED_APPS_URL)}
+          >
+            See usage on Simkl
+          </button>
+        </div>
+      ) : null}
       {connected ? (
         <div className={styles.serviceActions}>
           <button type="button" className={styles.testButton} onClick={disconnect}>

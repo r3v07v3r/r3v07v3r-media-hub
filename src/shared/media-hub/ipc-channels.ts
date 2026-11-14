@@ -323,6 +323,7 @@ export const MEDIA_HUB_CHANNELS = {
   simklStart: 'mediahub:simkl:start',
   simklPoll: 'mediahub:simkl:poll',
   simklDisconnect: 'mediahub:simkl:disconnect',
+  simklLimitChanged: 'mediahub:simkl:limit-changed', // push event
   /** start / pause / stop, which is the shape Simkl's scrobble endpoints
    *  actually are — a state machine rather than a heartbeat. */
   simklScrobble: 'mediahub:simkl:scrobble',
