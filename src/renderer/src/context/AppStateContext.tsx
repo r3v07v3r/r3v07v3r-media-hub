@@ -1,5 +1,6 @@
 'use client'
 
+import { SIMKL_CONNECTED_APPS_URL, simklLimitMessage } from '@renderer/lib/simklLimit'
 import {
   createContext,
   useCallback,
@@ -1385,6 +1386,24 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       pushNotification({ tone: event.kind === 'asked' ? 'info' : 'success', message })
     })
   }, [pushNotification, openControlCentre])
+
+  // Simkl's daily allowance ran out (main stops sending until the reset and
+  // keeps what was changed meanwhile). Said once when it happens; the Simkl
+  // card in Settings carries it for as long as it lasts.
+  useEffect(() => {
+    const mediaHub = window.api?.mediaHub
+    return mediaHub?.simkl.onLimitChanged((event) => {
+      if (!event.limitedUntil) return
+      pushNotification({
+        tone: 'warning',
+        message: simklLimitMessage(event.limitedUntil),
+        action: {
+          label: 'See usage',
+          run: () => void mediaHub.openExternal(SIMKL_CONNECTED_APPS_URL)
+        }
+      })
+    })
+  }, [pushNotification])
 
   // Watch-status reconciliation — see tracking.ts's own header comment on
   // why this only ever runs occasionally and never on the critical path

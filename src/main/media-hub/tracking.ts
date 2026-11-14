@@ -196,6 +196,9 @@ import {
   clearSimklTokens,
   simklDevicePoll,
   simklDeviceStart,
+  armSimklLimit,
+  onSimklLimitChange,
+  simklLimitedUntil,
   simklRequest,
   simklUrl,
   simklWatchedSnapshot,
@@ -240,6 +243,7 @@ import { isTraktPushable } from './trakt'
 import { traktPullKey, traktPullStateFor } from './traktHistoryPull'
 import { kitsuIdLookup } from './idBridge'
 import { backupBeforeRewrite } from './autoBackup'
+import { SIMKL_APP_CLIENT_ID } from './simklApp'
 import {
   compareEpisodeSets,
   decideShow,
@@ -2364,6 +2368,16 @@ function takeRemovedPlan(profile: string, id: string, now = Date.now()): Tracked
 
 /** Registers every `tracking:*`, `home:personalized`, and `simkl:*` IPC handler. Call once during main-process startup. */
 export function registerTrackingIpc(): void {
+  // Simkl's daily allowance: the renderer is told when it runs out and when
+  // it comes back, and at the reset whatever was held is sent.
+  onSimklLimitChange((limitedUntil) => {
+    sendToRenderer(MEDIA_HUB_CHANNELS.simklLimitChanged, { limitedUntil })
+    if (limitedUntil) return
+    void retryHistoryPushes('background')
+    void flushPendingPushes('background')
+  })
+  armSimklLimit()
+
   handle<undefined, TrackingListResult>(MEDIA_HUB_CHANNELS.trackingList, async () => {
     const db = getDatabase()
     const trackedItems = db.tracked()
@@ -3634,6 +3648,10 @@ export function registerTrackingIpc(): void {
   handle<undefined, SimklStatus>(MEDIA_HUB_CHANNELS.simklStatus, async () => {
     const creds = simklCredentials()
     if (!creds.accessToken) return { connected: false, clientId: creds.clientId }
+    // Signed in but out of requests for today: still connected, and asking
+    // Simkl who the user is would only be refused.
+    const limitedUntil = simklLimitedUntil()
+    if (limitedUntil) return { connected: true, clientId: creds.clientId, limitedUntil }
     try {
       const user = await simklRequest<Record<string, unknown>>('/users/settings', {
         method: 'POST',
@@ -3645,44 +3663,54 @@ export function registerTrackingIpc(): void {
     }
   })
 
-  handle<string, SimklPinStart>(MEDIA_HUB_CHANNELS.simklStart, async (_e, rawClientId) => {
-    const clientId = String(rawClientId || '').trim()
-    if (clientId.length < 8) throw new Error('Enter the client ID from your Simkl developer app.')
-    // OAuth 2.0 first: it is what Simkl registers every app as now. Only an
-    // ID it calls invalid_client (a legacy one) goes on to the PIN flow.
-    try {
-      const device = await simklDeviceStart(clientId)
-      simklDeviceCodes.set(device.user_code, {
-        clientId,
-        deviceCode: device.device_code,
-        expiresAt: Date.now() + device.expires_in * 1000
+  handle<string | undefined, SimklPinStart>(
+    MEDIA_HUB_CHANNELS.simklStart,
+    async (_e, rawClientId) => {
+      // A caller's ID; else, while a sign-in is still stored, the ID it was
+      // made with (a reconnect must not swap the client its refresh token
+      // belongs to before the new sign-in is approved); else the app's own.
+      // An ID left behind after Disconnect is not kept: it may be a legacy
+      // one the app has since replaced.
+      const saved = simklCredentials()
+      const clientId =
+        String(rawClientId || '').trim() ||
+        (saved.accessToken || saved.refreshToken ? saved.clientId : SIMKL_APP_CLIENT_ID)
+      // OAuth 2.0 first: it is what Simkl registers every app as now. Only an
+      // ID it calls invalid_client (a legacy one) goes on to the PIN flow.
+      try {
+        const device = await simklDeviceStart(clientId)
+        simklDeviceCodes.set(device.user_code, {
+          clientId,
+          deviceCode: device.device_code,
+          expiresAt: Date.now() + device.expires_in * 1000
+        })
+        const s = readSettings()
+        s.simklClientId = clientId
+        writeSettings(s)
+        return {
+          user_code: device.user_code,
+          verification_uri: device.verification_uri,
+          verification_uri_complete: device.verification_uri_complete,
+          expires_in: device.expires_in,
+          interval: device.interval
+        }
+      } catch (error) {
+        if ((error as { code?: string }).code !== 'invalid_client') throw error
+      }
+      const result = await fetchJson<SimklPinStart>(simklUrl('/oauth/pin', clientId), {
+        headers: {
+          // TODO(media-hub-integration): copied verbatim from the original
+          // app's User-Agent string — see simklClient.ts's header comment for
+          // why this isn't rebranded to this project's name.
+          'User-Agent': `r3v07v3r-media-hub/${app.getVersion()}`
+        }
       })
       const s = readSettings()
       s.simklClientId = clientId
       writeSettings(s)
-      return {
-        user_code: device.user_code,
-        verification_uri: device.verification_uri,
-        verification_uri_complete: device.verification_uri_complete,
-        expires_in: device.expires_in,
-        interval: device.interval
-      }
-    } catch (error) {
-      if ((error as { code?: string }).code !== 'invalid_client') throw error
+      return result
     }
-    const result = await fetchJson<SimklPinStart>(simklUrl('/oauth/pin', clientId), {
-      headers: {
-        // TODO(media-hub-integration): copied verbatim from the original
-        // app's User-Agent string — see simklClient.ts's header comment for
-        // why this isn't rebranded to this project's name.
-        'User-Agent': `r3v07v3r-media-hub/${app.getVersion()}`
-      }
-    })
-    const s = readSettings()
-    s.simklClientId = clientId
-    writeSettings(s)
-    return result
-  })
+  )
 
   handle<string, SimklPollResult>(MEDIA_HUB_CHANNELS.simklPoll, async (_e, userCode) => {
     const device = simklDeviceCodes.get(userCode)
