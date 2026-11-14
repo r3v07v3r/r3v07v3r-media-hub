@@ -202,6 +202,22 @@ import {
   storeSimklSignIn
 } from './simklClient'
 
+/** The connected account's profile, read once a sign-in is stored. Only a
+ *  courtesy: the sign-in has already succeeded and its code is spent, so a
+ *  failed lookup must not turn into a failed poll (the next poll would ask
+ *  about a code that no longer exists and report the sign-in as failed). */
+async function simklUserAfterSignIn(): Promise<Record<string, unknown> | undefined> {
+  try {
+    return await simklRequest<Record<string, unknown>>('/users/settings', {
+      method: 'POST',
+      body: '{}'
+    })
+  } catch (error) {
+    logError('simkl:sign-in user lookup', error)
+    return undefined
+  }
+}
+
 /** OAuth 2.0 sign-ins in progress, by the user code the renderer shows. The
  *  device code stays here: it is a credential for the few minutes it lives,
  *  and nothing in the renderer needs it. */
@@ -304,16 +320,13 @@ function queueRemotePushes(
     .finally(release)
 }
 
-/** Which accounts are connected right now — the tail of each token is
- *  enough to tell one from another, and nothing here is logged. */
+/** Which accounts are connected right now, by account mark rather than by
+ *  token: a refresh swaps the token but keeps the mark (see
+ *  carryAccountMarkThroughRefresh), so a push queued just before one still
+ *  runs, while a sign-in or sign-out still changes it. */
 function connectedAccountsStamp(): string {
-  return [
-    simklCredentials().accessToken,
-    traktCredentials().accessToken,
-    malCredentials().accessToken
-  ]
-    .map((token) => String(token ?? '').slice(-12))
-    .join('|')
+  const marks = trackingAccountMarks()
+  return [marks.simkl, marks.trakt, marks.mal].join('|')
 }
 
 async function syncSimklHistory(
@@ -3687,11 +3700,7 @@ export function registerTrackingIpc(): void {
       // Same reasons as the PIN path below.
       clearPendingPushes()
       forgetSimklWatchedCache()
-      const user = await simklRequest<Record<string, unknown>>('/users/settings', {
-        method: 'POST',
-        body: '{}'
-      })
-      return { connected: true, user }
+      return { connected: true, user: await simklUserAfterSignIn() }
     }
     const { clientId } = simklCredentials()
     if (!clientId) throw new Error('Simkl client ID is missing.')
@@ -3718,11 +3727,7 @@ export function registerTrackingIpc(): void {
       // refetch), which is the acceptable half of that trade.
       clearPendingPushes()
       forgetSimklWatchedCache()
-      const user = await simklRequest<Record<string, unknown>>('/users/settings', {
-        method: 'POST',
-        body: '{}'
-      })
-      return { connected: true, user }
+      return { connected: true, user: await simklUserAfterSignIn() }
     }
     return {
       connected: false,
