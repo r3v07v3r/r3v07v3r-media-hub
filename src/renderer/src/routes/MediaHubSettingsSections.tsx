@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
+import { TRAKT_OFFERED } from '@renderer/lib/traktOffered'
 import { DEFAULT_OLLAMA_BASE_URL, pickInstalledModel } from '@shared/media-hub/ollama'
 import type {
   MalReconcilePreview,
@@ -1583,6 +1584,10 @@ export function TraktSection() {
 
   const connected = status?.connected ?? false
   const configured = status?.configured ?? false
+
+  // Not on offer (traktOffered.ts), so the card is only for an install that
+  // already has Trakt set up, which still needs somewhere to disconnect.
+  if (!TRAKT_OFFERED && !configured) return null
 
   return (
     <section className={`${styles.section} glass-panel`} aria-labelledby="settings-trakt">

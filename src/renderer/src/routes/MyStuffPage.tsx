@@ -15,6 +15,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { RequiresSetup } from '@renderer/components/layout/RequiresSetup'
 import { useServiceReadiness } from '@renderer/hooks/useServiceReadiness'
+import { TRACKERS_NAMED } from '@renderer/lib/traktOffered'
 import { useCatalogByIds } from '@renderer/lib/mediaHub/useCatalogByIds'
 import { Icon } from '@renderer/components/icons/Icon'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
@@ -543,7 +544,7 @@ function ListsView({
             emptyMessage={
               watchlist.length > 0
                 ? 'Try widening a filter or clearing them all.'
-                : 'Anything you mark Plan to Watch appears here, along with your Simkl, Trakt and MyAnimeList lists.'
+                : `Anything you mark Plan to Watch appears here, along with your ${TRACKERS_NAMED} lists.`
             }
           />
           {/* Planning works locally without any of them; this only says where

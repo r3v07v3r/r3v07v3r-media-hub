@@ -16,6 +16,7 @@ import {
   setupButtonLabel,
   type SetupService
 } from '@renderer/lib/setupPlaces'
+import { TRAKT_OFFERED } from '@renderer/lib/traktOffered'
 import styles from './RequiresSetup.module.css'
 
 interface Props {
@@ -36,7 +37,7 @@ interface Props {
 }
 
 export function RequiresSetup({
-  services,
+  services: wanted,
   what,
   detail,
   compact = false,
@@ -44,6 +45,9 @@ export function RequiresSetup({
   sentence: sentenceOverride
 }: Props) {
   const { openControlCentre } = useAppState()
+  // Nobody is sent to set up a service that is not on offer (traktOffered.ts);
+  // a control that needs only that one says nothing.
+  const services = wanted.filter((service) => service !== 'trakt' || TRAKT_OFFERED)
   if (services.length === 0) return null
   const sentence =
     sentenceOverride ??

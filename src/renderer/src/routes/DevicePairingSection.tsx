@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { encode } from 'uqr'
 import { RequiresSetup } from '@renderer/components/layout/RequiresSetup'
 import { useServiceReadiness } from '@renderer/hooks/useServiceReadiness'
+import { TRAKT_OFFERED } from '@renderer/lib/traktOffered'
 import styles from './Settings.module.css'
 
 // The "Link a phone" card: shows a one-time QR code the phone app scans to
@@ -128,8 +129,8 @@ export function DevicePairingSection() {
       <p className={styles.serviceNote}>
         Sign the R3 phone app in to the same services as this computer. Show a code, then press Scan
         code in the phone app’s Settings. The code works once, for three minutes, on your own Wi-Fi.
-        Trakt and MyAnimeList are not sent: a sign-in can’t be shared between devices, and signing
-        in to them on the phone is still to come.
+        {TRAKT_OFFERED ? 'Trakt and MyAnimeList are' : 'MyAnimeList is'} not sent: a sign-in can’t
+        be shared between devices, and signing in on the phone is still to come.
       </p>
 
       {link && state === 'waiting' ? (

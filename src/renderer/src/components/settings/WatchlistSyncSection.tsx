@@ -24,6 +24,7 @@ import { RequiresSetup } from '@renderer/components/layout/RequiresSetup'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { missingServices, useServiceReadiness } from '@renderer/hooks/useServiceReadiness'
 import { SETUP_PLACES } from '@renderer/lib/setupPlaces'
+import { SCROBBLERS_NAMED, TRACKERS_NAMED } from '@renderer/lib/traktOffered'
 import styles from '@renderer/routes/Settings.module.css'
 import own from './WatchlistSyncSection.module.css'
 
@@ -148,8 +149,8 @@ export function WatchlistSyncSection() {
         <div className={styles.rowText}>
           <span className={styles.rowTitle}>Plan to watch, from every connected service</span>
           <span className={styles.rowDescription}>
-            Simkl, Trakt and MyAnimeList lists are pulled in and merged into Planned. Runs on its
-            own in the background; this is for when you have just added things on the web.
+            {TRACKERS_NAMED} lists are pulled in and merged into Planned. Runs on its own in the
+            background; this is for when you have just added things on the web.
           </span>
         </div>
         {noTracker.length > 0 ? (
@@ -208,9 +209,9 @@ export function WatchlistSyncSection() {
         <div className={styles.rowText}>
           <span className={styles.rowTitle}>Scrobble while playing</span>
           <span className={styles.rowDescription}>
-            Tells Simkl and Trakt what is playing as you play, pause and stop it; a finished episode
-            or film is recorded either way. Simkl allows 500 requests a day per account, shared with
-            a phone linked to this computer, and every scrobble counts against it.
+            Tells {SCROBBLERS_NAMED} what is playing as you play, pause and stop it; a finished
+            episode or film is recorded either way. Simkl allows 500 requests a day per account,
+            shared with a phone linked to this computer, and every scrobble counts against it.
           </span>
         </div>
         {noScrobbler.length > 0 ? (

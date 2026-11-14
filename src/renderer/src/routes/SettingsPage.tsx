@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
+import { TRAKT_OFFERED } from '@renderer/lib/traktOffered'
 import { Icon } from '@renderer/components/icons/Icon'
 import { RequiresSetup } from '@renderer/components/layout/RequiresSetup'
 import { useAsyncAction } from '@renderer/hooks/useAsyncAction'
@@ -1489,14 +1490,16 @@ export default function SettingsPage({
                     ) : undefined
                   }
                 />
-                <ActionRow
-                  icon="clock"
-                  title="Import a Trakt export"
-                  description="Reads your watched history and ratings from the zip Trakt emails you: on trakt.tv, Settings → Data → Raw Export → Export now. No Trakt sign-in needed. Keeps the original dates, and is safe to run again with a newer export."
-                  label="Import…"
-                  busy={backupBusy === 'trakt'}
-                  onClick={handleImportTraktExport}
-                />
+                {TRAKT_OFFERED && (
+                  <ActionRow
+                    icon="clock"
+                    title="Import a Trakt export"
+                    description="Reads your watched history and ratings from the zip Trakt emails you: on trakt.tv, Settings → Data → Raw Export → Export now. No Trakt sign-in needed. Keeps the original dates, and is safe to run again with a newer export."
+                    label="Import…"
+                    busy={backupBusy === 'trakt'}
+                    onClick={handleImportTraktExport}
+                  />
+                )}
               </section>
 
               <MoreOptionsSection />

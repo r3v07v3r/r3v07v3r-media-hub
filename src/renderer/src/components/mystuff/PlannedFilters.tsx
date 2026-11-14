@@ -10,6 +10,7 @@
 
 import type { MediaItem } from '@renderer/types'
 import { availableGenres, RATING_THRESHOLDS } from '@renderer/lib/mediaHub/categoryFilters'
+import { TRAKT_OFFERED } from '@renderer/lib/traktOffered'
 import { EMPTY_PLANNED_FILTERS, type PlannedFilterState } from './plannedFilterRules'
 import styles from './PlannedFilters.module.css'
 
@@ -20,13 +21,16 @@ const KINDS: { id: PlannedFilterState['kind']; label: string }[] = [
   { id: 'anime', label: 'Anime' }
 ]
 
-const SOURCES: { id: PlannedFilterState['source']; label: string }[] = [
+const ALL_SOURCES: { id: PlannedFilterState['source']; label: string }[] = [
   { id: 'all', label: 'Anywhere' },
   { id: 'here', label: 'Added here' },
   { id: 'simkl', label: 'Simkl' },
   { id: 'trakt', label: 'Trakt' },
   { id: 'mal', label: 'MyAnimeList' }
 ]
+
+// Not a place to filter by while it cannot be set up (traktOffered.ts).
+const SOURCES = ALL_SOURCES.filter((source) => source.id !== 'trakt' || TRAKT_OFFERED)
 
 export function PlannedFilters({
   items,
