@@ -7,6 +7,7 @@ import assert from 'node:assert'
 import { languageFit } from '../src/shared/media-hub/language'
 import {
   LANGUAGE_RETRY_LIMIT,
+  languageHuntAllowed,
   languageSearchExhausted,
   languageTryOrder,
   pickFallback,
@@ -123,8 +124,14 @@ check('a full round without the audio is exhausted', () =>
 check('one copy with the audio means it is not', () =>
   assert.equal(languageSearchExhausted({ ...roundFindings, [sourceKey(h)]: english }), false)
 )
-check('after a full round a replay opens only the closest known copy, not four new ones', () =>
-  assert.deepEqual(languageTryOrder(e, [f, g, a, b, c, d], roundFindings), [c])
+check('after a full round a replay starts on the closest known copy, not four new ones', () =>
+  assert.equal(languageTryOrder(e, [f, g, a, b, c, d], roundFindings)[0], c)
+)
+check('...with untried copies kept behind it for a copy that will not open', () =>
+  assert.deepEqual(languageTryOrder(e, [f, g, a, b, c, d], roundFindings), [c, e, f, g])
+)
+check('...and no language hunt past the first copy that opens', () =>
+  assert.equal(languageHuntAllowed(roundFindings), false)
 )
 check('a copy known to have the audio still wins after a full round', () =>
   assert.deepEqual(
@@ -132,20 +139,12 @@ check('a copy known to have the audio still wins after a full round', () =>
     [h, e, f, g, c]
   )
 )
-check('a show known to lack the audio opens the pick alone on a new episode', () =>
-  assert.deepEqual(languageTryOrder(a, [b, c, d], {}, { showLacksAudio: true }), [a])
+check('the hunt runs while nothing is known', () => assert.equal(languageHuntAllowed({}), true))
+check('a show known to lack the audio does not hunt on a new episode', () =>
+  assert.equal(languageHuntAllowed({}, { showLacksAudio: true }), false)
 )
-check('...and the closest known copy behind it when there is one', () =>
-  assert.deepEqual(
-    languageTryOrder(a, [b, c], { [sourceKey(b)]: jaEnSubs }, { showLacksAudio: true }),
-    [a, b]
-  )
-)
-check('a show known to lack it still takes a copy known to have it first', () =>
-  assert.deepEqual(
-    languageTryOrder(a, [b, c], { [sourceKey(c)]: english }, { showLacksAudio: true }),
-    [c]
-  )
+check('...but keeps the whole order for copies that will not open', () =>
+  assert.deepEqual(languageTryOrder(a, [b, c, d], {}), [a, b, c, d])
 )
 
 console.log('\npickFallback')

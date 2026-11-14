@@ -81,6 +81,7 @@ import {
 } from './playbackSession'
 import { assertCurrent, isSuperseded, PlaybackSupersededError } from './playbackSupersession'
 import {
+  languageHuntAllowed,
   languageSearchExhausted,
   languageTryOrder,
   pickFallback,
@@ -1143,18 +1144,26 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
   const known: LanguageFindings = (memoKey && db.getCache<LanguageFindings>(memoKey)) || {}
   const showMemoKey =
     payload.type && payload.resolveId ? showLacksAudioKey(payload.type, payload.resolveId) : ''
-  const order = languageTryOrder(payload.stream, alternates, known, {
+  const order = languageTryOrder(payload.stream, alternates, known)
+  // Whether to keep opening copies after one opened in the wrong language.
+  // The order is kept whole either way: past the first copy it is what a
+  // copy that will not open falls through to.
+  const hunt = languageHuntAllowed(known, {
     showLacksAudio: Boolean(showMemoKey && db.getCache<boolean>(showMemoKey))
   })
+  // Read before the loop adds this play's findings: the show is only marked
+  // by a search that ran out HERE, never renewed from an old one (a replay
+  // of an exhausted episode would otherwise keep the mark alive for good).
+  const exhaustedBefore = languageSearchExhausted(known)
   // Set when the copy in the player is a provisional one this call may end
   // up keeping — see holdLanguageSettle.
   const heldSince = takeHeldLanguageSettle()
 
-  // A retry whose search found nothing new: the only copy left is the one
-  // already in the player, known to lack the audio. Settle on it rather
-  // than reopen it — a reopen re-buffers, and can fail a play that was
-  // working.
-  const only = order.length === 1 ? sourceKey(order[0]) : ''
+  // A retry whose search found nothing new — or that is not searching any
+  // more — and whose first copy is the one already in the player, known to
+  // lack the audio. Settle on it rather than reopen it — a reopen
+  // re-buffers, and can fail a play that was working.
+  const only = order.length === 1 || !hunt ? sourceKey(order[0]) : ''
   const inPlayer = lastOpened
   if (
     only &&
@@ -1209,12 +1218,13 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
     tried.push({ stream, fit })
     current = { stream, result, fit }
     open = stream
-    if (fit.audio) break
+    // Not hunting: the first copy that opens is the one, whatever it holds.
+    if (fit.audio || !hunt) break
   }
   if (memoKey && Object.keys(known).length) db.putCache(memoKey, known, LAST_STREAM_TTL_MS)
   if (showMemoKey) {
     if (current?.fit.audio) db.deleteCache(showMemoKey)
-    else if (languageSearchExhausted(known)) {
+    else if (!exhaustedBefore && languageSearchExhausted(known)) {
       db.putCache(showMemoKey, true, SHOW_LACKS_AUDIO_TTL_MS)
     }
   }
