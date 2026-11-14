@@ -592,6 +592,14 @@ export interface PlaybackPositionResult {
   volume?: number | null
 }
 
+export interface FilmInProgress {
+  contentId: string
+  positionSeconds: number
+  durationSeconds: number | null
+  /** When the bookmark last moved: ISO. */
+  updatedAt: string
+}
+
 export interface EpisodePlaybackPosition extends PlaybackPositionResult {
   season: number | null
   episode: number | null
@@ -908,6 +916,13 @@ export interface MediaHubDatabase {
    *  — savePlaybackPosition clears it either side of that — so a row this old
    *  is something started and left, not something in progress. */
   abandonedContentIds(before: string): string[]
+  /** Every film somebody has started and not finished: a whole-title
+   *  bookmark (no season, no episode) with no watched mark written since it
+   *  last moved. Newest first. The bookmark rules (20 seconds in to 90%
+   *  through, see savePlaybackPosition) are what make it "in progress".
+   *  Rows for a show played without an episode come back too; the caller
+   *  keeps the ones the catalog says are films. */
+  filmsInProgress(): FilmInProgress[]
   /** `durable: true` for the few rows in here that are a record of
    *  something a person decided rather than something refetched — see the
    *  `durable` helper in createDatabase. catalog_cache is a general
@@ -1168,6 +1183,7 @@ interface PreparedQueries {
   getPosition: StatementSync
   abandoned: StatementSync
   listPositions: StatementSync
+  filmsInProgress: StatementSync
 }
 
 /**
@@ -1808,6 +1824,17 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     ),
     listPositions: sql.prepare(
       'SELECT season,episode,position_seconds,duration_seconds FROM playback_positions WHERE profile_id=? AND content_id=?'
+    ),
+    filmsInProgress: sql.prepare(
+      `SELECT p.content_id,p.position_seconds,p.duration_seconds,p.updated_at
+         FROM playback_positions p
+        WHERE p.profile_id=@profile AND p.season IS NULL AND p.episode IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM watch_history h
+             WHERE h.profile_id=p.profile_id AND h.content_id=p.content_id
+               AND h.season IS NULL AND h.episode IS NULL
+               AND h.watched_at >= p.updated_at)
+        ORDER BY p.updated_at DESC`
     )
   }
 
@@ -2990,6 +3017,21 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           durationSeconds: (row.duration_seconds as number | null) ?? null
         }))
       } catch {
+        return []
+      }
+    },
+
+    filmsInProgress() {
+      try {
+        return (q.filmsInProgress.all({ profile: currentProfileId }) as Row[]).map((row) => ({
+          contentId: String(row.content_id),
+          positionSeconds: row.position_seconds as number,
+          durationSeconds: (row.duration_seconds as number | null) ?? null,
+          updatedAt: String(row.updated_at)
+        }))
+      } catch {
+        // Best-effort like the other bookmark reads: the row loses its
+        // films, Home still paints.
         return []
       }
     },

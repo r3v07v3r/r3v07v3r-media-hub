@@ -65,6 +65,12 @@ function buildRails(data: HomePersonalizedResult | null): Rail[] {
  *  about it, so none is shown and a fast pass never flickers the page. */
 const UPDATING_NOTE_DELAY_MS = 1000
 
+/** "42 min left" for a film part way through; "Resume" when its length is unknown. */
+function filmRemaining(positionSeconds: number, durationSeconds?: number | null): string {
+  if (!durationSeconds || durationSeconds <= 0) return 'Resume'
+  return `${Math.max(1, Math.round((durationSeconds - positionSeconds) / 60))} min left`
+}
+
 export default function Home() {
   const navigate = useNavigate()
   const openSettings = { label: 'Open Settings', onClick: () => navigate('/settings') }
@@ -83,7 +89,11 @@ export default function Home() {
     () =>
       (data?.continueWatching ?? []).map((entry) => ({
         ...toPosterItem(entry),
-        subtitle: `S${entry.continueSeason} · E${entry.continueEpisode}`
+        // A film's row is its resume bookmark, not an episode.
+        subtitle:
+          typeof entry.positionSeconds === 'number'
+            ? filmRemaining(entry.positionSeconds, entry.durationSeconds)
+            : `S${entry.continueSeason} · E${entry.continueEpisode}`
       })),
     [data]
   )

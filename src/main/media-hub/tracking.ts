@@ -87,8 +87,10 @@ import {
 import {
   airingStatus,
   continueWatchingList,
+  filmContinueWatchingRows,
   homeDetailWants,
   homeWatchedCounts,
+  mergeContinueWatching,
   plannedList
 } from './core'
 import { catalogData, indexTrackedTitle, metadata } from './catalog'
@@ -3016,13 +3018,19 @@ export function registerTrackingIpc(): void {
     MEDIA_HUB_CHANNELS.trackingSavePosition,
     (_e, { id, playback, positionSeconds, durationSeconds, volume }) => {
       const kept = underShow({ id }, playback || {})
-      getDatabase().savePlaybackPosition(
-        kept.item.id,
-        kept.playback,
-        positionSeconds,
-        durationSeconds,
-        volume
-      )
+      const db = getDatabase()
+      // A whole-title bookmark appearing or going is a film entering or
+      // leaving Continue Watching, so Home is told. Only then: the player
+      // saves every 20 seconds, and a refetch each time would be waste.
+      const wholeTitle = kept.playback?.season == null && kept.playback?.episode == null
+      const before = wholeTitle
+        ? db.getPlaybackPosition(kept.item.id, kept.playback) !== null
+        : false
+      db.savePlaybackPosition(kept.item.id, kept.playback, positionSeconds, durationSeconds, volume)
+      if (wholeTitle) {
+        const after = db.getPlaybackPosition(kept.item.id, kept.playback) !== null
+        if (before !== after) notifyLibraryChanged('film-position', 'history')
+      }
       return { ok: true }
     }
   )
@@ -3591,7 +3599,25 @@ export function registerTrackingIpc(): void {
     // kinds, which left the Series and Anime pages (each filtering this one
     // list) short of what was actually in progress. The details are already
     // fetched for every started show, so the cap saved nothing.
-    const continueWatching = continueWatchingList(details, history)
+    // Films started and left part way. A film has no episodes for
+    // continueWatchingList to count; its resume bookmark is what says it is
+    // in progress. Detail comes from the index first, and only the films it
+    // does not hold are looked up.
+    const films = db.filmsInProgress()
+    const filmIds = films.map((film) => film.contentId)
+    const indexed = filmIds.length ? db.indexByIds(filmIds).items : []
+    const indexedFilms = new Set(
+      indexed.filter((item) => item.type === 'movie').map((item) => String(item.id))
+    )
+    const looked = await mapWithLimit(
+      filmIds.filter((id) => !indexedFilms.has(id)),
+      (id) => metadata('movie', id, 'visible')
+    )
+    const filmRows = filmContinueWatchingRows(films, [
+      ...indexed,
+      ...looked.filter((x): x is CatalogItem => Boolean(x))
+    ])
+    const continueWatching = mergeContinueWatching(continueWatchingList(details, history), filmRows)
       // A show that is here only because a later season of it is on the
       // list says which season that is — see ContinueWatchingEntry.trackedId.
       .map((row) => {

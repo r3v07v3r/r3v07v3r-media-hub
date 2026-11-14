@@ -443,25 +443,37 @@ export function continueWatchingEntryToItem(entry: ContinueWatchingEntry) {
   const media = catalogItemToMediaItem(entry, {
     trackedIds: new Set(entry.trackedId ? [] : [entry.id])
   })
-  const progressFraction = entry.totalCount > 0 ? entry.watchedCount / entry.totalCount : 0
-  const durationSeconds = (media.runtimeMinutes ?? 45) * 60
-  const completed = entry.totalCount > 0 && entry.watchedCount >= entry.totalCount
+  // A film's row carries its real resume bookmark (see
+  // ContinueWatchingEntry.positionSeconds); everything below is exact for
+  // it, where a show's figures are the season fraction described above.
+  const film = typeof entry.positionSeconds === 'number'
+  const durationSeconds = film
+    ? entry.durationSeconds && entry.durationSeconds > 0
+      ? entry.durationSeconds
+      : (media.runtimeMinutes ?? 120) * 60
+    : (media.runtimeMinutes ?? 45) * 60
+  const progressFraction = film
+    ? Math.min(1, Math.max(0, (entry.positionSeconds as number) / durationSeconds))
+    : entry.totalCount > 0
+      ? entry.watchedCount / entry.totalCount
+      : 0
+  const completed = !film && entry.totalCount > 0 && entry.watchedCount >= entry.totalCount
 
   return {
     media: {
       ...media,
-      seasonNumber: entry.continueSeason,
-      episodeNumber: entry.continueEpisode,
+      // No season/episode on a film: the row's "S1 · Ep 2" line reads
+      // seasonNumber, and a 0 there would print.
+      ...(film ? {} : { seasonNumber: entry.continueSeason, episodeNumber: entry.continueEpisode }),
       progressPercentage: Math.round(progressFraction * 100),
-      remainingMinutes: Math.max(
-        0,
-        Math.round((media.runtimeMinutes ?? 45) * (1 - progressFraction))
-      ),
+      remainingMinutes: Math.max(0, Math.round((durationSeconds / 60) * (1 - progressFraction))),
       watched: completed,
       completed
     },
     lastPlayedAt: entry.lastWatchedAt,
-    playbackPositionSeconds: Math.round(durationSeconds * progressFraction),
+    playbackPositionSeconds: film
+      ? Math.round(entry.positionSeconds as number)
+      : Math.round(durationSeconds * progressFraction),
     durationSeconds,
     ...(entry.trackedId ? { trackedId: entry.trackedId } : {})
   }
