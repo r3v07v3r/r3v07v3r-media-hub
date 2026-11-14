@@ -408,6 +408,13 @@ export const MEDIA_HUB_CHANNELS = {
   downloadBlocked: 'mediahub:download:blocked', // push event — a file was refused
   downloadBlockedList: 'mediahub:download:blocked-list',
 
+  // Tester feedback and automatic diagnostics — see main/media-hub/feedback/.
+  feedbackSend: 'mediahub:feedback:send',
+  feedbackReportProblem: 'mediahub:feedback:report-problem',
+  feedbackStatus: 'mediahub:feedback:status',
+  feedbackSetDiagnostics: 'mediahub:feedback:set-diagnostics',
+  feedbackPreview: 'mediahub:feedback:preview',
+
   // Profiles
   profilesList: 'mediahub:profiles:list',
   profilesGetActive: 'mediahub:profiles:get-active',

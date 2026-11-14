@@ -15,6 +15,7 @@
 import { ipcMain, IpcMainInvokeEvent } from 'electron'
 import { assertTrustedSender } from '../ipc/trustedSender'
 import { logError } from './logger'
+import { noteAction } from './feedback/actionRepeats'
 import type { MediaHubChannel } from '../../shared/media-hub/ipc-channels'
 
 type Listener<TArgs, TResult> = (
@@ -29,6 +30,7 @@ export function handle<TArgs = undefined, TResult = unknown>(
 ): void {
   ipcMain.handle(channel, async (event, payload?: TArgs) => {
     assertTrustedSender(event)
+    noteAction(channel, payload)
     try {
       return await listener(event, payload as TArgs)
     } catch (error) {

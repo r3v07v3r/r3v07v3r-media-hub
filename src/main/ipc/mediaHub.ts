@@ -24,6 +24,7 @@ import { registerLanCacheIpc } from '../media-hub/lanCache'
 import { registerDevicePairingIpc } from '../media-hub/devicePairing'
 import { publishTrustedMediaHosts } from './settings'
 import { registerDownloadGuardIpc } from '../media-hub/downloadGuard'
+import { registerFeedbackIpc } from '../media-hub/feedback/feedbackIpc'
 import { registerMalIpc } from '../media-hub/malSync'
 import { registerNetworkIpc } from '../media-hub/network'
 import { detectOllama, registerOllamaIpc } from '../media-hub/ollamaService'
@@ -74,4 +75,5 @@ export function registerMediaHubIpc(): void {
   // awaited: it is one request to loopback and nothing else waits on it.
   void detectOllama()
   registerDownloadGuardIpc()
+  registerFeedbackIpc()
 }

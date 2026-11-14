@@ -28,3 +28,27 @@ export function ControlCentreButton() {
     </button>
   )
 }
+
+/**
+ * Opens the control centre on Feedback, one click from anywhere. Beside the
+ * control centre's own button because it opens the same panel; it is a
+ * shortcut, not a second surface.
+ */
+export function FeedbackButton() {
+  const { controlCentreOpen, controlCentreSection, openControlCentre, setControlCentreOpen } =
+    useAppState()
+  const showing = controlCentreOpen && controlCentreSection === 'feedback'
+
+  return (
+    <button
+      type="button"
+      className={styles.controlCentreButton}
+      aria-pressed={showing}
+      aria-label="Send feedback"
+      title="Send feedback"
+      onClick={() => (showing ? setControlCentreOpen(false) : openControlCentre('feedback'))}
+    >
+      <Icon name="message" size={18} />
+    </button>
+  )
+}
