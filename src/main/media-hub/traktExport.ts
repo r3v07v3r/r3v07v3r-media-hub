@@ -80,7 +80,9 @@ export function readTraktExport(archive: Buffer): TraktExportRows {
     let rows: unknown
     try {
       rows = JSON.parse(
-        inflateZipEntry(archive, entry, MAX_ENTRY_BYTES).toString('utf-8').replace(/^Feff/, '')
+        inflateZipEntry(archive, entry, MAX_ENTRY_BYTES)
+          .toString('utf-8')
+          .replace(/^\ufeff/, '')
       )
     } catch {
       rows = null

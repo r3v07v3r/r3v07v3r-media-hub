@@ -132,7 +132,7 @@ for (const name of [
 
 // --- Ratings alone are an export too ----------------------------------------
 {
-  const read = readTraktExport(makeZip([json('ratings-movies.json', [])]))
+  const read = readTraktExport(makeZip([{ name: 'ratings-movies.json', body: '\ufeff' + '[]' }]))
   assert.equal(read.plays.rows.length, 0)
   assert.equal(read.ratings.rows.length, 0)
 }
