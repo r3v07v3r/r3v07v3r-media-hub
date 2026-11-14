@@ -92,7 +92,18 @@ function installId(): string {
 }
 
 /** The names the patterns cannot guess: this account's and this computer's. */
-function knownNames(): { user: string[]; computer: string[] } {
+function knownNames(): { user: string[]; computer: string[]; chosen: string[] } {
+  const chosen: string[] = []
+  try {
+    // Names somebody typed into the app. Read from settings each time, so
+    // a renamed profile is covered at once.
+    const settings = readSettings()
+    for (const profile of settings.profiles ?? []) if (profile?.name) chosen.push(profile.name)
+    if (settings.partyDisplayName) chosen.push(settings.partyDisplayName)
+    for (const room of settings.rooms ?? []) if (room?.name) chosen.push(room.name)
+  } catch {
+    // Settings unreadable: the patterns still run.
+  }
   const user: string[] = []
   const computer: string[] = []
   try {
@@ -108,7 +119,7 @@ function knownNames(): { user: string[]; computer: string[] } {
   }
   if (process.env['COMPUTERNAME']) computer.push(process.env['COMPUTERNAME'])
   if (process.env['USERDOMAIN']) computer.push(process.env['USERDOMAIN'])
-  return { user, computer }
+  return { user, computer, chosen }
 }
 
 export function clean(value: unknown, maxLength?: number): string {
@@ -133,7 +144,15 @@ export function fingerprintOf(kind: FeedbackKind, title: string, stack = ''): st
 
 /** The end of the app log, cleaned, for attaching or previewing. */
 export function cleanLogTail(): string {
-  return clean(readLogTail(FEEDBACK_LIMITS.log * 2), FEEDBACK_LIMITS.log)
+  // Cleaned first, then cut from the FRONT: the newest lines are the ones
+  // that matter, the crash just written or the player timeouts before a
+  // hang. Cutting from the end (as clean()'s maxLength does) kept the
+  // older half and threw those away.
+  const text = clean(readLogTail(FEEDBACK_LIMITS.log * 2))
+  if (text.length <= FEEDBACK_LIMITS.log) return text
+  const tail = text.slice(-FEEDBACK_LIMITS.log)
+  const firstLine = tail.indexOf('\n')
+  return `[earlier lines cut]\n${firstLine >= 0 ? tail.slice(firstLine + 1) : tail}`
 }
 
 function loadQueue(): QueuedReport[] {

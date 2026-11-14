@@ -64,6 +64,18 @@ check("a computer named after the app does not blank the app's own folder", () =
   )
 })
 
+check('names chosen in the app (profiles, party, rooms) are blanked, longest first', () => {
+  assert.equal(
+    sanitizeText(
+      '"Switch profile — currently Alice Example" pressed 3 times; Alice joined Movie Club',
+      {
+        names: { chosen: ['Alice', 'Alice Example', 'Movie Club'] }
+      }
+    ),
+    '"Switch profile — currently <name>" pressed 3 times; <name> joined <name>'
+  )
+})
+
 check('network shares lose the server name', () => {
   assert.equal(sanitizeText('\\\\NAS-01\\Media\\Films'), '\\\\<server>\\Media\\Films')
 })

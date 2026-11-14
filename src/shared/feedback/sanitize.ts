@@ -53,7 +53,14 @@ export interface SanitizeOptions {
    *  the computer's name, which the main process knows and the patterns
    *  below cannot guess. Values shorter than 3 characters are ignored —
    *  blanking "a" would shred the text. */
-  names?: { user?: string[]; computer?: string[] }
+  names?: {
+    user?: string[]
+    computer?: string[]
+    /** Names people chose inside the app: profile names, the watch-party
+     *  display name, room names. Shown on buttons ("Switch profile —
+     *  currently Alice"), so a repeated-click report would carry them. */
+    chosen?: string[]
+  }
   /** Longest result; anything past it is cut with a marker. */
   maxLength?: number
 }
@@ -160,6 +167,11 @@ export function sanitizeText(value: unknown, options: SanitizeOptions = {}): str
   }
   literal(options.names?.user, '<user>')
   literal(options.names?.computer, '<computer>')
+  // Longest first, so "Alice Smith" goes whole before "Alice" is tried.
+  literal(
+    [...(options.names?.chosen ?? [])].sort((a, b) => b.length - a.length),
+    '<name>'
+  )
   text = text.replace(MARKED, (_m, index: string) => keep[Number(index)] ?? '')
   const max = options.maxLength
   if (max && text.length > max) text = `${text.slice(0, max)}… [cut ${text.length - max} chars]`
