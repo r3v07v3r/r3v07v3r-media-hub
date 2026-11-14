@@ -1434,6 +1434,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setSyncShows([])
     setSyncReviewOpen(false)
   }
+  // The library a bulk choice (decideAllSync) checks before each row: a
+  // switch part way stops it, so the previous profile's rows are never
+  // decided against the new one's history.
+  const libraryKeyRef = useRef(libraryKey)
+  useEffect(() => {
+    libraryKeyRef.current = libraryKey
+  }, [libraryKey])
 
   // The launch check below runs once, 8 s in; by then the profile has loaded,
   // and the record of which rows were already announced is that profile's.
@@ -1678,7 +1685,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       const failedFilms: WatchStatusDiscrepancy[] = []
       const cannotSend = new Map<EpisodeSyncService, number>()
       let removedHere = false
+      // Checked before every call and before anything is put back: after a
+      // profile switch the rest is dropped, not sent to the new profile.
+      const startedFor = libraryKey
+      const switched = (): boolean => libraryKeyRef.current !== startedFor
       for (const row of shows) {
+        if (switched()) return
         try {
           const result = await api.episodeDecide(
             side === 'local'
@@ -1698,6 +1710,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         }
       }
       for (const d of films) {
+        if (switched()) return
         try {
           const result = await api.reconcileResolve({
             discrepancy: d,
@@ -1709,6 +1722,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
+      if (switched()) return
       // Read the shows section again: a row with another service's part
       // comes back with only that part, and a failed one where it stands.
       await api
@@ -1720,6 +1734,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             ...failedShows.filter((r) => !prev.some((p) => p.id === r.id))
           ])
         )
+      if (switched()) return
       if (failedFilms.length > 0) {
         setSyncDiscrepancies((prev) => [
           ...prev,
@@ -1747,7 +1762,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         })
       }
     },
-    [syncShows, syncDiscrepancies, watchedIdsResult, homeFeed, pushNotification]
+    [syncShows, syncDiscrepancies, libraryKey, watchedIdsResult, homeFeed, pushNotification]
   )
 
   // The other half of that: a queued batch going out (or not) is the only
