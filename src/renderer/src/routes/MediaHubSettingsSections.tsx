@@ -1372,6 +1372,9 @@ export function OllamaSection() {
   )
 }
 
+/** Where a Trakt account asks for its export: the zip the file import reads. */
+const TRAKT_EXPORT_PAGE = 'https://app.trakt.tv/settings/data'
+
 /**
  * Trakt — device-code sign-in, the same shape as Simkl's above.
  *
@@ -1534,6 +1537,36 @@ export function TraktSection() {
     }
   }
 
+  // The way in with no API app: the zip Trakt emails from its own Export
+  // page, read from a file. Shares the import's status line, since only one
+  // of the two is ever on screen.
+  async function runExportImport() {
+    const api = window.api?.mediaHub
+    if (!api) return
+    setImportStatus({ kind: 'busy' })
+    try {
+      const summary = await api.trakt.importExport()
+      // A cancelled picker.
+      if (!summary) {
+        setImportStatus({ kind: 'idle' })
+        return
+      }
+      if (summary.plays || summary.ratings) reloadLibrary()
+      setImportStatus({
+        kind: 'ok',
+        message:
+          summary.plays || summary.ratings
+            ? `Added ${summary.plays} ${summary.plays === 1 ? 'viewing' : 'viewings'} and ${summary.ratings} ${summary.ratings === 1 ? 'rating' : 'ratings'}.${summary.skipped ? ` ${summary.skipped} could not be matched.` : ''}`
+            : 'Everything in that export was already here.'
+      })
+    } catch (error) {
+      setImportStatus({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'That export could not be read.'
+      })
+    }
+  }
+
   async function disconnect() {
     const api = window.api?.mediaHub
     if (!api) return
@@ -1658,6 +1691,41 @@ export function TraktSection() {
             </button>
             <StatusLine status={connectStatus} />
           </div>
+          <span className={styles.rowDescription}>
+            The client ID and secret come from a Trakt API app, which needs a developer account. No
+            app? Bring your watched history and ratings in from a file instead:
+          </span>
+          <ol className={styles.rowDescription} style={{ margin: 0, paddingLeft: 20 }}>
+            <li>
+              On Trakt, open{' '}
+              <button
+                type="button"
+                className={styles.testButton}
+                style={{ padding: '2px 8px' }}
+                onClick={() => window.api?.mediaHub?.openExternal(TRAKT_EXPORT_PAGE)}
+              >
+                Settings → Data
+              </button>{' '}
+              and press Export now under Raw Export.
+            </li>
+            <li>Trakt emails you a link. Download the zip and leave it as it is.</li>
+            <li>Press Import a Trakt export and choose that zip.</li>
+          </ol>
+          <div className={styles.serviceActions}>
+            <button
+              type="button"
+              className={styles.testButton}
+              onClick={runExportImport}
+              disabled={importStatus.kind === 'busy'}
+            >
+              Import a Trakt export
+            </button>
+            <StatusLine status={importStatus} />
+          </div>
+          <span className={styles.rowDescription}>
+            A one-off copy that keeps the original dates. Nothing is sent to Trakt and it does not
+            keep in step afterwards — run it again with a newer export to top it up.
+          </span>
         </div>
       )}
     </section>

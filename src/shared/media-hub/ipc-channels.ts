@@ -335,6 +335,9 @@ export const MEDIA_HUB_CHANNELS = {
   traktPoll: 'mediahub:trakt:poll',
   /** Pulls a connected Trakt account's history and ratings into this profile. */
   traktImport: 'mediahub:trakt:import',
+  /** Reads the zip from Trakt's Settings → Data → Export, chosen in a native
+   *  picker. Needs no connection. Null when the picker was cancelled. */
+  traktImportExport: 'mediahub:trakt:import-export',
   traktDisconnect: 'mediahub:trakt:disconnect',
 
   // MyAnimeList

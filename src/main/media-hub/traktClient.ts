@@ -13,7 +13,9 @@
 // takes one, so both halves are asked for in Settings and the secret is stored
 // through the same safeStorage path as every other credential.
 
-import { app } from 'electron'
+import { promises as fsp } from 'node:fs'
+
+import { app, BrowserWindow, dialog } from 'electron'
 
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type {
@@ -68,6 +70,7 @@ import {
   type TraktPullReport
 } from './traktHistoryPull'
 import { withWatchedAt } from './episodeSync'
+import { readTraktExport } from './traktExport'
 
 const API = 'https://api.trakt.tv'
 
@@ -949,6 +952,50 @@ export async function importTraktLibrary(options: TraktImportOptions = {}): Prom
   return summary
 }
 
+/**
+ * Brings the viewings and ratings in a Trakt export file into this profile:
+ * the way in for somebody with no API app to sign in through
+ * (traktExport.ts). `archive` is the zip's bytes, from a file the native
+ * picker chose.
+ *
+ * Filed and written exactly as importTraktLibrary files and writes what the
+ * API answers — anime under its show, gaps filled, nothing overwritten, safe
+ * to run again — and needs no connection, so nothing here reads or moves the
+ * account's place in the half-hourly pull.
+ */
+export async function importTraktExport(
+  archive: Buffer,
+  options: TraktImportOptions = {}
+): Promise<ImportSummary> {
+  const db = getDatabase()
+  // Captured before the id lookups below, for importTraktLibrary's reason.
+  const profile = db.activeProfile()
+  const { plays, ratings } = readTraktExport(archive)
+
+  const seriesImdbIds = Array.from(
+    new Set(
+      [...plays.rows, ...ratings.rows].filter((row) => row.type === 'series').map((row) => row.id)
+    )
+  )
+  const animeTargets = await imdbToAnimeTargets(seriesImdbIds)
+  if (db.activeProfile() !== profile) {
+    throw new Error('Profile changed while importing — nothing was written.')
+  }
+
+  const filedPlays = remapAnimePlays(plays.rows, animeTargets)
+  const newPlays = options.skipHeld ? playsNotHeld(filedPlays, options.skipHeld()) : filedPlays
+  const filedRatings = remapAnimeRatings(ratings.rows, animeTargets)
+  if (newPlays.length || filedRatings.length) backupBeforeRewrite('trakt-import')
+
+  const summary: ImportSummary = {
+    plays: db.importWatched(newPlays),
+    ratings: db.importRatings(filedRatings),
+    skipped: plays.skipped + ratings.skipped
+  }
+  if (summary.plays || summary.ratings) requestRecommendationsRebuild()
+  return summary
+}
+
 let pullInFlight: Promise<TraktPullReport> | null = null
 
 /**
@@ -1054,6 +1101,28 @@ export function registerTraktIpc(): void {
   handle<undefined, ImportSummary>(MEDIA_HUB_CHANNELS.traktImport, async () => {
     const { removalsHeldBack } = await import('./tracking')
     return importTraktLibrary({
+      skipHeld: () => heldViewings(getDatabase().history(), removalsHeldBack('trakt'))
+    })
+  })
+
+  // The same viewings are left out as above: an account that was once
+  // connected has everything played here in its export too.
+  handle<undefined, ImportSummary | null>(MEDIA_HUB_CHANNELS.traktImportExport, async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const options = {
+      title: 'Import a Trakt export',
+      properties: ['openFile' as const],
+      filters: [{ name: 'Trakt export', extensions: ['zip'] }]
+    }
+    const result = win
+      ? await dialog.showOpenDialog(win, options)
+      : await dialog.showOpenDialog(options)
+    const filePath = result.filePaths?.[0]
+    if (result.canceled || !filePath) return null
+
+    const archive = await fsp.readFile(filePath)
+    const { removalsHeldBack } = await import('./tracking')
+    return importTraktExport(archive, {
       skipHeld: () => heldViewings(getDatabase().history(), removalsHeldBack('trakt'))
     })
   })

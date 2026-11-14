@@ -817,9 +817,9 @@ export default function SettingsPage({
   // profile being edited.
   const [editingProfile, setEditingProfile] = useState<string | 'new' | null>(null)
   // Which of the two backup actions is in flight, so only that button says so.
-  const [backupBusy, setBackupBusy] = useState<'export' | 'import' | 'imdb' | 'letterboxd' | null>(
-    null
-  )
+  const [backupBusy, setBackupBusy] = useState<
+    'export' | 'import' | 'imdb' | 'letterboxd' | 'trakt' | null
+  >(null)
   const [networkInfo, setNetworkInfo] = useState<NetworkInfoResult | null>(null)
   const [speedTest, setSpeedTest] = useState<{
     kind: 'idle' | 'busy' | 'ok' | 'error'
@@ -1044,6 +1044,34 @@ export default function SettingsPage({
           result.plays || result.ratings
             ? `Added ${result.plays} ${result.plays === 1 ? 'viewing' : 'viewings'} and ${result.ratings} ${result.ratings === 1 ? 'rating' : 'ratings'}.${
                 result.skipped ? ` ${result.skipped} rows could not be matched.` : ''
+              }`
+            : 'Everything in that export was already here.'
+      })
+      reloadLibrary()
+    } catch (error) {
+      pushNotification({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'That export could not be read.'
+      })
+    } finally {
+      setBackupBusy(null)
+    }
+  }
+
+  async function handleImportTraktExport() {
+    const api = window.api?.mediaHub
+    if (!api) return
+    setBackupBusy('trakt')
+    try {
+      const result = await api.trakt.importExport()
+      // A cancelled picker, like the imports above.
+      if (!result) return
+      pushNotification({
+        tone: 'success',
+        message:
+          result.plays || result.ratings
+            ? `Added ${result.plays} ${result.plays === 1 ? 'viewing' : 'viewings'} and ${result.ratings} ${result.ratings === 1 ? 'rating' : 'ratings'}.${
+                result.skipped ? ` ${result.skipped} could not be matched.` : ''
               }`
             : 'Everything in that export was already here.'
       })
@@ -1460,6 +1488,14 @@ export default function SettingsPage({
                       />
                     ) : undefined
                   }
+                />
+                <ActionRow
+                  icon="clock"
+                  title="Import a Trakt export"
+                  description="Reads your watched history and ratings from the zip Trakt emails you: on trakt.tv, Settings → Data → Raw Export → Export now. No Trakt sign-in needed. Keeps the original dates, and is safe to run again with a newer export."
+                  label="Import…"
+                  busy={backupBusy === 'trakt'}
+                  onClick={handleImportTraktExport}
                 />
               </section>
 

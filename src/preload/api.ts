@@ -991,6 +991,10 @@ export function createApi(transport: ApiTransport) {
         poll: (): Promise<TraktPollResult> => transport.invoke(MEDIA_HUB_CHANNELS.traktPoll),
         /** Pulls this account's history and ratings in. Repeatable — see db.importWatched. */
         import: (): Promise<ImportSummary> => transport.invoke(MEDIA_HUB_CHANNELS.traktImport),
+        /** The same from a Trakt export zip, with nobody signed in. Null when
+         *  the file picker was cancelled. */
+        importExport: (): Promise<ImportSummary | null> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.traktImportExport),
         disconnect: (): Promise<{ ok: true }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.traktDisconnect)
       },
