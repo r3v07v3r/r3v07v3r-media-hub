@@ -75,6 +75,12 @@ export interface MediaHubRawSettings {
   torboxToken?: string
   simklClientId?: string
   simklAccessToken?: string
+  /** Only an OAuth 2.0 connection (Simkl's AUTH V2 device flow) has these:
+   *  its access token lasts seven days and is swapped with the refresh
+   *  token (180 days, sliding). A legacy PIN connection's token never
+   *  expires and leaves both absent. Epoch ms. */
+  simklRefreshToken?: string
+  simklTokenExpiresAt?: number
   /** Trakt's device flow needs both halves of the app credential, unlike
    *  Simkl's PIN flow — the token exchange takes the secret. Both are stored
    *  through the same safeStorage path as every other credential. */
@@ -96,6 +102,7 @@ export interface MediaHubRawSettings {
    *  sign-out. */
   traktAccountMark?: string
   malAccountMark?: string
+  simklAccountMark?: string
   tmdbApiKey?: string
   omdbApiKey?: string
   osApiKey?: string
@@ -587,6 +594,9 @@ export function clearTorBoxToken(): void {
 export interface SimklCredentials {
   clientId: string
   accessToken: string
+  /** Empty on a legacy PIN connection — see simklRefreshToken. */
+  refreshToken: string
+  expiresAt: number
 }
 
 export interface TraktCredentials {
@@ -615,7 +625,9 @@ export function simklCredentials(): SimklCredentials {
   const settings = readSettings()
   return {
     clientId: settings.simklClientId || '',
-    accessToken: decrypt(settings.simklAccessToken)
+    accessToken: decrypt(settings.simklAccessToken),
+    refreshToken: decrypt(settings.simklRefreshToken),
+    expiresAt: Number(settings.simklTokenExpiresAt) || 0
   }
 }
 
@@ -650,10 +662,19 @@ export function simklCredentials(): SimklCredentials {
  * disk, and changing it would silently orphan every one of them — reading
  * as somebody else's account and quietly discarding decisions a person
  * already made.
+ *
+ * An OAuth 2.0 connection's token is refreshed every week, and a refresh
+ * is the same account, so it pins its mark through refreshes the way
+ * Trakt's and MAL's do (carryAccountMarkThroughRefresh).
  */
 export function simklAccountMark(): string {
-  const { accessToken } = simklCredentials()
+  const settings = readSettings()
+  const accessToken = decrypt(settings.simklAccessToken)
   if (!accessToken) return ''
+  return settings.simklAccountMark || simklTokenMark(accessToken)
+}
+
+function simklTokenMark(accessToken: string): string {
   return crypto
     .createHash('sha256')
     .update(`reconcile-account:${accessToken}`)
@@ -736,9 +757,13 @@ function tokenMark(salt: 'trakt-account' | 'mal-account', accessToken: string): 
  */
 export function carryAccountMarkThroughRefresh(
   settings: MediaHubRawSettings,
-  service: 'trakt' | 'mal'
+  service: 'trakt' | 'mal' | 'simkl'
 ): void {
-  if (service === 'trakt') {
+  if (service === 'simkl') {
+    if (settings.simklAccountMark) return
+    const accessToken = decrypt(settings.simklAccessToken)
+    if (accessToken) settings.simklAccountMark = simklTokenMark(accessToken)
+  } else if (service === 'trakt') {
     if (settings.traktAccountMark) return
     const accessToken = decrypt(settings.traktAccessToken)
     if (accessToken) settings.traktAccountMark = tokenMark('trakt-account', accessToken)
@@ -751,8 +776,12 @@ export function carryAccountMarkThroughRefresh(
 
 /** Called on the settings a sign-in or sign-out writes: the next account,
  *  which may be a different person, gets the mark of its own token. */
-export function forgetAccountMark(settings: MediaHubRawSettings, service: 'trakt' | 'mal'): void {
-  if (service === 'trakt') delete settings.traktAccountMark
+export function forgetAccountMark(
+  settings: MediaHubRawSettings,
+  service: 'trakt' | 'mal' | 'simkl'
+): void {
+  if (service === 'simkl') delete settings.simklAccountMark
+  else if (service === 'trakt') delete settings.traktAccountMark
   else delete settings.malAccountMark
 }
 

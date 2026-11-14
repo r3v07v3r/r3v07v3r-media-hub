@@ -1617,6 +1617,8 @@ export interface SimklPinStart {
   user_code: string
   verification_url?: string
   verification_uri?: string
+  /** OAuth 2.0 only: the verification page with the code already filled in. */
+  verification_uri_complete?: string
   expires_in: number
   interval: number
   [key: string]: unknown
@@ -1626,6 +1628,8 @@ export interface SimklPollResult {
   connected: boolean
   user?: Record<string, unknown>
   pending?: boolean
+  /** Simkl asked for slower polling: add 5 s to the interval. */
+  slowDown?: boolean
   message?: string
 }
 

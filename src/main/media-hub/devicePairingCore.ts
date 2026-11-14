@@ -173,7 +173,8 @@ export interface PairingBundle {
   /** The desktop's name, so the phone can say where its settings came from. */
   from: string
   torboxToken?: string
-  simkl?: { clientId: string; accessToken: string }
+  /** No token when the desktop's connection is OAuth 2.0 — see buildBundle. */
+  simkl?: { clientId: string; accessToken?: string }
   tmdbApiKey?: string
   omdbApiKey?: string
   subdlApiKey?: string
@@ -193,7 +194,8 @@ export interface PairingBundle {
 export function bundleContents(bundle: PairingBundle): string[] {
   const names: string[] = []
   if (bundle.torboxToken) names.push('TorBox')
-  if (bundle.simkl) names.push('Simkl')
+  if (bundle.simkl?.accessToken) names.push('Simkl')
+  else if (bundle.simkl) names.push('Simkl client ID')
   if (bundle.tmdbApiKey) names.push('TMDB')
   if (bundle.omdbApiKey) names.push('OMDb')
   if (bundle.subdlApiKey) names.push('SubDL')
@@ -261,8 +263,14 @@ export function buildBundle(
   if (torbox) bundle.torboxToken = torbox
 
   const simklToken = decrypt(settings.simklAccessToken)
-  if (settings.simklClientId && simklToken) {
+  if (settings.simklClientId && simklToken && !decrypt(settings.simklRefreshToken)) {
     bundle.simkl = { clientId: settings.simklClientId, accessToken: simklToken }
+  } else if (settings.simklClientId) {
+    // An OAuth 2.0 connection is not shared: Simkl kills an access token the
+    // moment its grant is refreshed, so a copy dies within the week, and a
+    // phone refreshing the grant itself would kill the desktop's instead.
+    // The phone gets the client ID and signs in on its own.
+    bundle.simkl = { clientId: settings.simklClientId }
   }
   const tmdb = decrypt(settings.tmdbApiKey)
   if (tmdb) bundle.tmdbApiKey = tmdb
@@ -316,7 +324,7 @@ export function normalizeBundle(value: unknown): PairingBundle | null {
     const o = raw.simkl as Record<string, unknown>
     const clientId = str(o.clientId)
     const accessToken = str(o.accessToken)
-    if (clientId && accessToken) bundle.simkl = { clientId, accessToken }
+    if (clientId) bundle.simkl = accessToken ? { clientId, accessToken } : { clientId }
   }
   for (const key of ['tmdbApiKey', 'omdbApiKey', 'subdlApiKey'] as const) {
     const v = str(raw[key])
@@ -364,9 +372,18 @@ export function applyBundle(
     next.torboxToken = encrypt(bundle.torboxToken)
     next.onboardingVersion = 2
   }
-  if (bundle.simkl) {
+  if (bundle.simkl?.accessToken) {
     next.simklClientId = bundle.simkl.clientId
     next.simklAccessToken = encrypt(bundle.simkl.accessToken)
+    // A legacy token, which never expires: nothing of an OAuth 2.0
+    // connection this phone had may be applied to it.
+    delete next.simklRefreshToken
+    delete next.simklTokenExpiresAt
+    delete next.simklAccountMark
+  } else if (bundle.simkl && !next.simklAccessToken) {
+    // Client ID only (the desktop's connection is OAuth 2.0): seeds the
+    // field for the phone's own sign-in, without touching one it has.
+    next.simklClientId = bundle.simkl.clientId
   }
   if (bundle.tmdbApiKey) next.tmdbApiKey = encrypt(bundle.tmdbApiKey)
   if (bundle.omdbApiKey) next.omdbApiKey = encrypt(bundle.omdbApiKey)

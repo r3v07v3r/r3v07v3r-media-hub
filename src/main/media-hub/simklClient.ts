@@ -18,7 +18,14 @@ import type { HistoryEntry } from '../../shared/media-hub/types'
 import { fetchJson } from './httpClient'
 import type { TaskPriority } from './taskScheduler'
 import { logError } from './logger'
-import { simklAccountMark, simklCredentials } from './settingsStore'
+import {
+  carryAccountMarkThroughRefresh,
+  encrypt,
+  readSettings,
+  simklAccountMark,
+  simklCredentials,
+  writeSettings
+} from './settingsStore'
 import { watchedFromAllItems, type SimklMoviesPayload, type SimklShowsPayload } from './simkl'
 import type { SimklLibraryKind } from './simklCatchUpRules'
 import { getDatabase } from './dbState'
@@ -29,6 +36,235 @@ export function simklUrl(pathname: string, clientId: string): string {
   url.searchParams.set('app-name', 'r3v07v3r-media-hub')
   url.searchParams.set('app-version', app.getVersion())
   return url.toString()
+}
+
+// ---------------------------------------------------------------------
+// Sign-in. Simkl has two schemes and a client ID belongs to exactly one:
+//
+// - Legacy (AUTH V1): GET /oauth/pin, poll GET /oauth/pin/:user_code, and
+//   the token never expires. Simkl expects to retire it around April 2027.
+// - OAuth 2.0 (AUTH V2), which every app registered at
+//   simkl.com/settings/developer now is: POST /oauth2/device, poll POST
+//   /oauth2/token (RFC 8628). The access token lasts 7 days and is swapped
+//   with a refresh token that lasts 180 days from its last use and does not
+//   rotate. No client secret for device-flow client types.
+//
+// Each refuses the other's IDs (V1 on /oauth2/device: 401 invalid_client;
+// V2 on /oauth/pin: 400 unauthorized_client), which is how tracking.ts's
+// simkl:start tells them apart.
+
+const userAgent = (): string => `r3v07v3r-media-hub/${app.getVersion()}`
+
+/** Without write the token can read the library but every push fails. */
+const OAUTH2_SCOPE = 'media:read media:write'
+
+/** Refresh this long before expiry, so a request never goes out on a token
+ *  that dies on the way. */
+const REFRESH_WINDOW_MS = 24 * 60 * 60 * 1000
+
+const OAUTH_TIMEOUT_MS = 30_000
+
+interface SimklOAuthError {
+  error?: string
+  error_description?: string
+  message?: string
+}
+
+interface SimklTokenResponse extends SimklOAuthError {
+  access_token?: string
+  refresh_token?: string
+  expires_in?: number
+}
+
+export interface SimklDeviceCode {
+  device_code: string
+  user_code: string
+  verification_uri: string
+  verification_uri_complete?: string
+  expires_in: number
+  interval: number
+}
+
+/** A form POST to Simkl's OAuth 2.0 endpoints, read whatever the status:
+ *  the flow's ordinary answers ("not approved yet") are 400s with a body. */
+async function simklOAuthPost(
+  pathname: string,
+  fields: Record<string, string>
+): Promise<{ status: number; body: SimklTokenResponse & Record<string, unknown> }> {
+  const url = new URL(pathname, 'https://api.simkl.com')
+  url.searchParams.set('app-name', 'r3v07v3r-media-hub')
+  url.searchParams.set('app-version', app.getVersion())
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': userAgent()
+    },
+    body: new URLSearchParams(fields).toString(),
+    signal: AbortSignal.timeout(OAUTH_TIMEOUT_MS)
+  })
+  const body = (await response.json().catch(() => ({}))) ?? {}
+  return { status: response.status, body }
+}
+
+function oauthMessage(body: SimklOAuthError, fallback: string): string {
+  return body.error_description || body.message || body.error || fallback
+}
+
+/** Starts an OAuth 2.0 sign-in. Throws with Simkl's own words, and with
+ *  `.code` set to its error code (invalid_client for a legacy ID). */
+export async function simklDeviceStart(clientId: string): Promise<SimklDeviceCode> {
+  const { status, body } = await simklOAuthPost('/oauth2/device', {
+    client_id: clientId,
+    scope: OAUTH2_SCOPE
+  })
+  if (status !== 200 || typeof body.device_code !== 'string') {
+    const error = new Error(
+      oauthMessage(body, `Simkl answered with status ${status}.`)
+    ) as Error & {
+      code?: string
+    }
+    error.code = body.error
+    throw error
+  }
+  return {
+    device_code: body.device_code,
+    user_code: String(body.user_code ?? ''),
+    verification_uri: String(body.verification_uri ?? 'https://simkl.com/pin'),
+    verification_uri_complete:
+      typeof body.verification_uri_complete === 'string'
+        ? body.verification_uri_complete
+        : undefined,
+    expires_in: Number(body.expires_in) || 900,
+    interval: Math.max(1, Number(body.interval) || 5)
+  }
+}
+
+export type SimklDevicePoll =
+  | { state: 'pending'; slowDown?: boolean }
+  | { state: 'connected' }
+  | { state: 'error'; message: string }
+
+/**
+ * One poll of the token endpoint. Simkl never says "denied" — a person who
+ * declines just leaves the code to expire — so the caller's own timeout is
+ * the only end to a sign-in nobody approves.
+ */
+export async function simklDevicePoll(
+  clientId: string,
+  deviceCode: string
+): Promise<SimklDevicePoll> {
+  let result: Awaited<ReturnType<typeof simklOAuthPost>>
+  try {
+    result = await simklOAuthPost('/oauth2/token', {
+      grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+      client_id: clientId,
+      device_code: deviceCode
+    })
+  } catch {
+    // A dropped poll is not the end of the sign-in; the next one may land.
+    return { state: 'pending' }
+  }
+  const { status, body } = result
+  if (status === 200 && body.access_token) {
+    storeSimklSignIn(body.access_token, body)
+    return { state: 'connected' }
+  }
+  if (body.error === 'authorization_pending') return { state: 'pending' }
+  if (body.error === 'slow_down') return { state: 'pending', slowDown: true }
+  if (body.error === 'expired_token') {
+    return { state: 'error', message: 'The code expired before it was approved. Try again.' }
+  }
+  return { state: 'error', message: oauthMessage(body, `Simkl answered with status ${status}.`) }
+}
+
+/**
+ * Stores a fresh sign-in — either scheme. `oauth` carries an OAuth 2.0
+ * token's refresh half and lifetime; a legacy PIN token has neither, and
+ * whatever an earlier OAuth 2.0 connection left is cleared. A sign-in may be
+ * a different account, so the pinned account mark is dropped either way.
+ */
+export function storeSimklSignIn(accessToken: string, oauth?: SimklTokenResponse): void {
+  const settings = readSettings()
+  delete settings.simklAccountMark
+  settings.simklAccessToken = encrypt(accessToken)
+  applyOAuthLifetime(settings, oauth)
+  writeSettings(settings)
+}
+
+/** Forgets the connection: tokens, lifetime and pinned mark. */
+export function clearSimklTokens(): void {
+  const settings = readSettings()
+  delete settings.simklAccessToken
+  delete settings.simklRefreshToken
+  delete settings.simklTokenExpiresAt
+  delete settings.simklAccountMark
+  writeSettings(settings)
+}
+
+function applyOAuthLifetime(
+  settings: ReturnType<typeof readSettings>,
+  oauth: SimklTokenResponse | undefined
+): void {
+  const lifetime = Number(oauth?.expires_in) * 1000
+  if (oauth?.refresh_token) settings.simklRefreshToken = encrypt(oauth.refresh_token)
+  else if (!oauth) delete settings.simklRefreshToken
+  if (oauth && Number.isFinite(lifetime) && lifetime > 0) {
+    settings.simklTokenExpiresAt = Date.now() + lifetime
+  } else if (!oauth) {
+    delete settings.simklTokenExpiresAt
+  }
+}
+
+let refreshing: Promise<void> | null = null
+
+/**
+ * Swaps an OAuth 2.0 connection's refresh token for a new access token
+ * when it is within a day of expiry. One at a time: Simkl kills the
+ * previous access token the moment a refresh lands, so two racing would
+ * leave one caller holding a dead token.
+ *
+ * Silent on failure, like Trakt's: the old token stays and fails on its
+ * own terms with one clear error. Throws only when the person signed in or
+ * out while it was out, because the request waiting on it was made for the
+ * connection that is gone.
+ */
+async function refreshSimklIfDue(): Promise<void> {
+  const { clientId, refreshToken, expiresAt } = simklCredentials()
+  if (!clientId || !refreshToken || !expiresAt) return
+  if (expiresAt - Date.now() > REFRESH_WINDOW_MS) return
+  if (!refreshing) {
+    refreshing = (async () => {
+      const account = simklAccountMark()
+      let moved = false
+      try {
+        const { status, body } = await simklOAuthPost('/oauth2/token', {
+          grant_type: 'refresh_token',
+          client_id: clientId,
+          refresh_token: refreshToken
+        })
+        moved = simklAccountMark() !== account
+        if (!moved && status === 200 && body.access_token) {
+          const settings = readSettings()
+          carryAccountMarkThroughRefresh(settings, 'simkl')
+          settings.simklAccessToken = encrypt(body.access_token)
+          applyOAuthLifetime(settings, body)
+          writeSettings(settings)
+        } else if (!moved) {
+          logError(
+            'simkl:refresh',
+            new Error(oauthMessage(body, `Simkl answered with status ${status}.`))
+          )
+        }
+      } catch (error) {
+        logError('simkl:refresh', error)
+      }
+      if (moved) throw new Error('Simkl was signed in or out while this request was waiting.')
+    })().finally(() => {
+      refreshing = null
+    })
+  }
+  await refreshing
 }
 
 /**
@@ -43,6 +279,7 @@ export async function simklRequest<T = unknown>(
   priority: TaskPriority = 'interactive',
   scheduling: { timeoutMs?: number; strictBody?: boolean } = {}
 ): Promise<T> {
+  await refreshSimklIfDue()
   const { clientId, accessToken } = simklCredentials()
   if (!clientId || !accessToken) throw new Error('Simkl is not connected.')
   return fetchJson<T>(
