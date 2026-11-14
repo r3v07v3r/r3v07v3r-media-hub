@@ -25,6 +25,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { hasExpressibleSimklId } from '../../shared/media-hub/serviceIds'
 import { logError } from './logger'
 import { comparableTitle } from '../../shared/media-hub/titleSearch'
+import { isExpiringImageUrl, withoutExpiringImages } from '../../shared/media-hub/expiringImageUrl'
 
 interface Migration {
   /** Human label, for the log line — the version number is the index. */
@@ -561,6 +562,94 @@ const indexReleaseDate: Migration = {
   }
 }
 
+/**
+ * Migration 8 — image links that had already expired.
+ *
+ * Kitsu answers for its newer uploads with a presigned link that dies 15
+ * minutes later, and until normalizeKitsuAnime learned to drop them they
+ * were stored as they came: in the index, in tracked and history rows, and
+ * in cached details, story panels and related lists. Every one of them now
+ * answers 401, so a card shows nothing (Dragon Ball Super: Beerus).
+ *
+ * Blanked, not replaced: a blank is what every reader already falls back
+ * from — the index fills a blank from the next full resolve or crawl
+ * (indexRefreshFromMetadata, the crawl's COALESCE), a tracked row's blank
+ * poster is drawn from the index (plannedList) — and those now carry
+ * AniList's art (animeArtwork.ts). Cached detail, story, related and
+ * similar entries are deleted instead, so the next visit fetches them with
+ * that art; anything else in the cache is cleaned in place.
+ */
+const expiringImageLinks: Migration = {
+  name: 'expiring-image-links',
+  apply(sql) {
+    // A cheap pre-filter; isExpiringImageUrl makes the actual call.
+    const like = (column: string): string =>
+      `(${column} LIKE '%X-Amz-%' OR ${column} LIKE '%Signature=%')`
+
+    for (const column of ['poster', 'background', 'logo']) {
+      const update = sql.prepare(`UPDATE catalog_index SET ${column}='' WHERE rowid=?`)
+      for (const r of sql
+        .prepare(`SELECT rowid AS r, ${column} AS v FROM catalog_index WHERE ${like(column)}`)
+        .all()) {
+        const row = r as Record<string, unknown>
+        if (isExpiringImageUrl(row.v)) update.run(Number(row.r))
+      }
+    }
+
+    for (const table of ['tracked', 'disliked']) {
+      const update = sql.prepare(`UPDATE ${table} SET poster='' WHERE rowid=?`)
+      for (const r of sql
+        .prepare(`SELECT rowid AS r, poster AS v FROM ${table} WHERE ${like('poster')}`)
+        .all()) {
+        const row = r as Record<string, unknown>
+        if (isExpiringImageUrl(row.v)) update.run(Number(row.r))
+      }
+    }
+
+    const cleanJson = (table: string, column: string): void => {
+      const update = sql.prepare(`UPDATE ${table} SET ${column}=? WHERE rowid=?`)
+      for (const r of sql
+        .prepare(`SELECT rowid AS r, ${column} AS v FROM ${table} WHERE ${like(column)}`)
+        .all()) {
+        const row = r as Record<string, unknown>
+        let value: unknown
+        try {
+          value = JSON.parse(String(row.v))
+        } catch {
+          continue
+        }
+        const cleaned = withoutExpiringImages(value)
+        if (cleaned !== value) update.run(JSON.stringify(cleaned), Number(row.r))
+      }
+    }
+    for (const table of ['tracked', 'disliked', 'watch_history', 'plays', 'list_items']) {
+      cleanJson(table, 'metadata_json')
+    }
+
+    const refetched = /^(meta|story|related|similar):/
+    const remove = sql.prepare('DELETE FROM catalog_cache WHERE cache_key=?')
+    const rewrite = sql.prepare('UPDATE catalog_cache SET payload_json=? WHERE cache_key=?')
+    for (const r of sql
+      .prepare(
+        `SELECT cache_key AS k, payload_json AS v FROM catalog_cache WHERE ${like('payload_json')}`
+      )
+      .all()) {
+      const row = r as Record<string, unknown>
+      const key = String(row.k)
+      let value: unknown
+      try {
+        value = JSON.parse(String(row.v))
+      } catch {
+        continue
+      }
+      const cleaned = withoutExpiringImages(value)
+      if (cleaned === value) continue
+      if (refetched.test(key)) remove.run(key)
+      else rewrite.run(JSON.stringify(cleaned), key)
+    }
+  }
+}
+
 /** Ordered, and the order IS the version. Append only. */
 const MIGRATIONS: readonly Migration[] = [
   baseline,
@@ -570,7 +659,8 @@ const MIGRATIONS: readonly Migration[] = [
   demoGhostHistoryCleanup,
   titleSearchKey,
   animeGroupLedger,
-  indexReleaseDate
+  indexReleaseDate,
+  expiringImageLinks
 ]
 
 /** How many migrations exist — a database at this version is fully current. */

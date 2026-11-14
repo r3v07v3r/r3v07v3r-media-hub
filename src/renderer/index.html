@@ -27,6 +27,11 @@
          until it was added here — the same silent CSP failure kitsu.app
          went through above.
 
+         s4.anilist.co is AniList's image CDN. Kitsu hands out its newer
+         uploads only as presigned links that expire in 15 minutes, which
+         the backend drops; a new show's poster and banner come from
+         AniList instead (main/media-hub/animeArtwork.ts).
+
          media-src is 'self' only. Nothing in this page plays audio or
          video itself: playback is mpv in a native child window, subtitles
          are handed to mpv (sub-add), and seek-bar previews are <img>
@@ -34,7 +39,7 @@
          base64 VTT <track> src this directive once allowed are both gone. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://image.tmdb.org https://simkl.in https://*.simkl.in https://kitsu.io https://*.kitsu.io https://kitsu.app https://*.kitsu.app https://images.metahub.space https://*.metahub.space https://m.media-amazon.com; media-src 'self'; connect-src 'self'; frame-src https://www.youtube-nocookie.com"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://image.tmdb.org https://simkl.in https://*.simkl.in https://kitsu.io https://*.kitsu.io https://kitsu.app https://*.kitsu.app https://images.metahub.space https://*.metahub.space https://m.media-amazon.com https://s4.anilist.co; media-src 'self'; connect-src 'self'; frame-src https://www.youtube-nocookie.com"
     />
   </head>
 
