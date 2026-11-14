@@ -2368,6 +2368,25 @@ function takeRemovedPlan(profile: string, id: string, now = Date.now()): Tracked
   return held && now - held.at <= REMOVED_PLAN_HOLD_MS ? held.row : null
 }
 
+/**
+ * How long after a film's last bookmark save Home is told it moved: just
+ * over the player's 20-second save interval, so it fires once playback has
+ * stopped or paused rather than on every save.
+ */
+const FILM_POSITION_SETTLE_MS = 25_000
+const filmPositionTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+function settleFilmPosition(id: string): void {
+  const pending = filmPositionTimers.get(id)
+  if (pending) clearTimeout(pending)
+  const timer = setTimeout(() => {
+    filmPositionTimers.delete(id)
+    notifyLibraryChanged('film-position', 'history')
+  }, FILM_POSITION_SETTLE_MS)
+  timer.unref?.()
+  filmPositionTimers.set(id, timer)
+}
+
 /** Registers every `tracking:*`, `home:personalized`, and `simkl:*` IPC handler. Call once during main-process startup. */
 export function registerTrackingIpc(): void {
   // Simkl's daily allowance: the renderer is told when it runs out and when
@@ -3020,8 +3039,11 @@ export function registerTrackingIpc(): void {
       const kept = underShow({ id }, playback || {})
       const db = getDatabase()
       // A whole-title bookmark appearing or going is a film entering or
-      // leaving Continue Watching, so Home is told. Only then: the player
-      // saves every 20 seconds, and a refetch each time would be waste.
+      // leaving Continue Watching, so Home is told at once. A bookmark that
+      // only moved is told once the saves stop (see settleFilmPosition):
+      // the player saves every 20 seconds, and a refetch each time would be
+      // waste, but the card's progress and place in the row have to catch
+      // up once the film is stopped.
       const wholeTitle = kept.playback?.season == null && kept.playback?.episode == null
       const before = wholeTitle
         ? db.getPlaybackPosition(kept.item.id, kept.playback) !== null
@@ -3030,6 +3052,7 @@ export function registerTrackingIpc(): void {
       if (wholeTitle) {
         const after = db.getPlaybackPosition(kept.item.id, kept.playback) !== null
         if (before !== after) notifyLibraryChanged('film-position', 'history')
+        else if (after) settleFilmPosition(String(kept.item.id))
       }
       return { ok: true }
     }
