@@ -131,8 +131,15 @@ async function takeReports(request: Request, env: Env): Promise<Response> {
     return json(400, { error: 'expected reports[1..20]' })
   }
 
-  const reports = list.map(clean).filter((r): r is CleanReport => r !== null)
-  if (reports.length === 0) return json(400, { error: 'no valid reports' })
+  // Positions in the request, so the app can drop exactly what was stored
+  // or refused and keep the rest.
+  const checked = list.map((raw, index) => ({ index, report: clean(raw) }))
+  const invalid = checked.filter((c) => c.report === null).map((c) => c.index)
+  const valid = checked.filter(
+    (c): c is { index: number; report: CleanReport } => c.report !== null
+  )
+  const reports = valid.map((c) => c.report)
+  if (reports.length === 0) return json(400, { error: 'no valid reports', stored: [], invalid })
 
   // One install per batch is what the app sends; a mixed batch is checked
   // against the first id's allowance, which is the stricter reading.
@@ -143,13 +150,14 @@ async function takeReports(request: Request, env: Env): Promise<Response> {
     .bind(installId)
     .first<{ n: number }>()
   const room = DAILY_PER_INSTALL - (today?.n ?? 0)
-  if (room <= 0) return json(429, { error: 'daily limit' })
+  if (room <= 0) return json(429, { error: 'daily limit', stored: [], invalid })
 
   const insert = env.DB.prepare(
     `INSERT INTO reports (occurred_at, kind, category, install_id, app_version, platform, fingerprint, title, body, context, log)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
-  const kept = reports.slice(0, room)
+  const keptEntries = valid.slice(0, room)
+  const kept = keptEntries.map((c) => c.report)
   await env.DB.batch(
     kept.map((r) =>
       insert.bind(
@@ -167,10 +175,17 @@ async function takeReports(request: Request, env: Env): Promise<Response> {
       )
     )
   )
-  // `accepted` lets the app drop exactly what was stored from its queue;
-  // anything rejected as malformed is dropped too, since resending it would
-  // only be rejected again.
-  return json(200, { accepted: kept.length, rejected: list.length - reports.length })
+  // `stored` and `invalid` are positions in the request. The app drops
+  // both from its queue (an invalid report would only be refused again)
+  // and keeps anything past today's allowance for a later day; `limited`
+  // says that happened.
+  return json(200, {
+    accepted: kept.length,
+    rejected: invalid.length,
+    stored: keptEntries.map((c) => c.index),
+    invalid,
+    limited: valid.length > keptEntries.length
+  })
 }
 
 export default {

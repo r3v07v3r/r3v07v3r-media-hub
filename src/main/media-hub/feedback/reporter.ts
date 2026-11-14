@@ -35,7 +35,7 @@ const DEDUPE_MS = 10 * 60_000
 const SEND_TIMEOUT_MS = 15_000
 const FLUSH_EVERY_MS = 15 * 60_000
 
-interface QueuedReport {
+export interface QueuedReport {
   report: FeedbackReport
   queuedAt: number
 }
@@ -271,47 +271,115 @@ function scheduleFlush(delayMs: number): void {
   flushTimer.unref?.()
 }
 
+/** Room left in a request for the JSON around the reports. */
+const ENVELOPE_BYTES = 1_024
+
+function bodyFor(batch: QueuedReport[]): string {
+  return JSON.stringify({ reports: batch.map((item) => item.report) })
+}
+
+/**
+ * The next batch: as many queued reports as fit both the Worker's count
+ * and its byte limit, measured as the UTF-8 JSON actually sent. Counting
+ * alone was not enough: twenty reports that each carry a full log are
+ * well past the byte limit, and a refused batch sent again unchanged
+ * would block everything queued behind it, typed feedback included.
+ */
+export function nextBatch(items: QueuedReport[]): QueuedReport[] {
+  const batch: QueuedReport[] = []
+  for (const item of items) {
+    if (batch.length >= FEEDBACK_LIMITS.batch) break
+    const candidate = [...batch, item]
+    const bytes = Buffer.byteLength(bodyFor(candidate), 'utf8')
+    if (bytes > FEEDBACK_LIMITS.requestBytes - ENVELOPE_BYTES && batch.length > 0) break
+    batch.push(item)
+  }
+  return batch
+}
+
+interface StoreResult {
+  stored?: number[]
+  invalid?: number[]
+  limited?: boolean
+}
+
+async function sendQueued(): Promise<void> {
+  try {
+    while (Date.now() >= heldUntil) {
+      const items = loadQueue()
+      if (items.length === 0) return
+      const batch = nextBatch(items)
+      const response = await fetch(endpoint(), {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'user-agent': `r3-media-hub/${appVersion()}`
+        },
+        body: bodyFor(batch),
+        signal: AbortSignal.timeout(SEND_TIMEOUT_MS)
+      })
+      if (response.status === 413) {
+        // Too big even so (the Worker's limit came down?): send these
+        // again without their logs, and give up on one that has none.
+        const stripped = batch.some((item) => item.report.log)
+        if (!stripped && batch.length === 1) {
+          queue = loadQueue().filter((item) => item !== batch[0])
+        } else {
+          for (const item of batch) delete item.report.log
+        }
+        saveQueue()
+        continue
+      }
+      if (response.status === 429) {
+        lastError = 'The feedback server asked to slow down; trying again later.'
+        heldUntil = Date.now() + 60 * 60_000
+        return
+      }
+      if (!response.ok && response.status !== 400) {
+        lastError = `The feedback server answered ${response.status}.`
+        return
+      }
+      const result = (await response.json().catch(() => ({}))) as StoreResult
+      // Positions in this batch that are done: stored, or refused as
+      // malformed (sending those again would only be refused again).
+      // Anything else — past today's allowance — stays queued.
+      const done = new Set<number>([...(result.stored ?? []), ...(result.invalid ?? [])])
+      if (!Array.isArray(result.stored) && !Array.isArray(result.invalid)) {
+        // No positions in the answer: a 400 refused the whole batch; a 200
+        // without them cannot say what was kept, so nothing is dropped.
+        if (response.status === 400) batch.forEach((_item, index) => done.add(index))
+      }
+      const finished = new Set(batch.filter((_item, index) => done.has(index)))
+      queue = loadQueue().filter((item) => !finished.has(item))
+      saveQueue()
+      if (result.stored?.length) lastSentAt = new Date().toISOString()
+      lastError = null
+      if (result.limited || finished.size === 0) {
+        lastError = result.limited
+          ? 'The feedback server has taken all it will from this computer today; the rest go tomorrow.'
+          : 'The feedback server did not say what it kept; trying again later.'
+        heldUntil = Date.now() + 60 * 60_000
+        return
+      }
+    }
+  } catch {
+    lastError = 'Could not reach the feedback server; the reports wait and go later.'
+  }
+}
+
 /** Sends what is queued, a batch at a time. Never rejects. */
 export function flushFeedback(): Promise<void> {
   if (flushing) return flushing
-  flushing = (async () => {
-    try {
-      while (Date.now() >= heldUntil) {
-        const items = loadQueue()
-        if (items.length === 0) return
-        const batch = items.slice(0, FEEDBACK_LIMITS.batch)
-        const response = await fetch(endpoint(), {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            'user-agent': `r3-media-hub/${appVersion()}`
-          },
-          body: JSON.stringify({ reports: batch.map((item) => item.report) }),
-          signal: AbortSignal.timeout(SEND_TIMEOUT_MS)
-        })
-        if (response.status === 429) {
-          lastError = 'The feedback server asked to slow down; trying again later.'
-          heldUntil = Date.now() + 60 * 60_000
-          return
-        }
-        if (!response.ok && response.status !== 400) {
-          lastError = `The feedback server answered ${response.status}.`
-          return
-        }
-        // 200: stored. 400: malformed, and resending it would be refused
-        // again. Either way this batch is done.
-        queue = loadQueue().filter((item) => !batch.includes(item))
-        saveQueue()
-        lastSentAt = new Date().toISOString()
-        lastError = null
-      }
-    } catch {
-      lastError = 'Could not reach the feedback server; the reports wait and go later.'
-    } finally {
-      flushing = null
-    }
-  })()
-  return flushing
+  // The guard is cleared from .finally, which runs after this assignment
+  // even when sendQueued finishes without awaiting anything (an empty
+  // queue, a hold). Clearing it inside the async body instead ran BEFORE
+  // the assignment in that case, and left a settled promise latched as
+  // "flushing" so nothing was ever sent again until restart.
+  const run = sendQueued().finally(() => {
+    if (flushing === run) flushing = null
+  })
+  flushing = run
+  return run
 }
 
 export function feedbackStatus(): FeedbackStatus {
