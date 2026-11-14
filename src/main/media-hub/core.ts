@@ -1634,6 +1634,60 @@ export function continueWatchingList(
   )
 }
 
+/**
+ * Continue Watching rows for films: one per film started and left part way
+ * (`films`, newest first — see the database's filmsInProgress). A film has
+ * no episodes for continueWatchingList to count, so its progress is the
+ * bookmark itself. `items` is whatever catalog detail could be found for
+ * those ids; a bookmark with no FILM detail (a show played without an
+ * episode, or a title the catalog no longer knows) is left out.
+ */
+export function filmContinueWatchingRows(
+  films: ReadonlyArray<{
+    contentId: string
+    positionSeconds: number
+    durationSeconds: number | null
+    updatedAt: string
+  }>,
+  items: readonly CatalogItem[]
+): ContinueWatchingEntry[] {
+  const byId = new Map<string, CatalogItem>()
+  for (const item of items) {
+    if (item.type === 'movie' && !byId.has(String(item.id))) byId.set(String(item.id), item)
+  }
+  const rows: ContinueWatchingEntry[] = []
+  for (const film of films) {
+    const detail = byId.get(film.contentId)
+    if (!detail) continue
+    rows.push({
+      ...detail,
+      continueSeason: 0,
+      continueEpisode: 0,
+      watchedCount: 0,
+      totalCount: 1,
+      lastWatchedAt: film.updatedAt,
+      positionSeconds: film.positionSeconds,
+      durationSeconds: film.durationSeconds
+    })
+  }
+  return rows
+}
+
+/** Shows and films in one Continue Watching row, most recently played first. */
+export function mergeContinueWatching(
+  shows: readonly ContinueWatchingEntry[],
+  films: readonly ContinueWatchingEntry[]
+): ContinueWatchingEntry[] {
+  const time = (row: ContinueWatchingEntry): number => {
+    const at = new Date(row.lastWatchedAt).getTime()
+    return Number.isFinite(at) ? at : 0
+  }
+  const seen = new Set(shows.map((row) => String(row.id)))
+  return [...shows, ...films.filter((row) => !seen.has(String(row.id)))].sort(
+    (a, b) => time(b) - time(a)
+  )
+}
+
 /** One title Home needs the episode list of. */
 export interface HomeDetailWant {
   type: MediaKind

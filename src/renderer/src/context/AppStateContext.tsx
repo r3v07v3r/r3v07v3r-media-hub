@@ -1240,6 +1240,19 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       setContinueWatching((prev) => prev.filter((c) => c.media.id !== id))
       const api = window.api?.mediaHub
       if (!api || !entry) return
+      // A film is in the row because of its resume bookmark, not the list:
+      // Remove clears the bookmark (a position under 20 seconds is stored as
+      // none) and leaves a planned film planned.
+      if (entry.media.mediaType === 'movie') {
+        api.tracking
+          .savePosition({ id, positionSeconds: 0 })
+          .then(() => {
+            forgetContinueWatching(id)
+            homeFeed.refresh()
+          })
+          .catch(() => {})
+        return
+      }
       // The title on the list this row is here for. Usually the row itself;
       // for a show that is here because a later season of it is tracked on
       // its own, that season (see ContinueWatchingEntry.trackedId).

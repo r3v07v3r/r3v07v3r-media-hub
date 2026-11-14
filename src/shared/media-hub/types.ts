@@ -812,6 +812,13 @@ export interface ContinueWatchingEntry extends CatalogItem {
    * this id — toggling the row's own would add the show to the list.
    */
   trackedId?: string
+  /**
+   * A film's row only: where its resume bookmark stands. A film has no
+   * episodes to count, so it is in the row because it was started and left
+   * part way (continueSeason/continueEpisode are 0 and the counts 0 of 1).
+   */
+  positionSeconds?: number
+  durationSeconds?: number | null
 }
 
 export interface TrackingListResult {
