@@ -1,0 +1,97 @@
+/* The Feedback section. Layout only; colours are the control centre's
+   tokens, as in CachingSection.module.css. */
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip {
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.chip[aria-checked='true'] {
+  border-color: var(--border-active);
+  color: var(--accent-cyan);
+  background: rgba(39, 230, 154, 0.1);
+}
+
+.text {
+  width: 100%;
+  min-height: 130px;
+  resize: vertical;
+  padding: 12px 14px;
+  border-radius: var(--radius-large);
+  border: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.text:focus-visible {
+  outline: none;
+  border-color: var(--border-active);
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.result {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+}
+
+.resultError {
+  color: var(--accent-amber, #f5b74e);
+}
+
+.disclosure summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+}
+
+.preview {
+  max-height: 260px;
+  overflow: auto;
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-large);
+  border: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+  line-height: 1.6;
+}

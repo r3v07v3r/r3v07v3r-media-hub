@@ -36,6 +36,13 @@ import { sendToRenderer } from './rendererBridge'
 import type { ProfileRecord } from './profiles'
 
 export interface MediaHubRawSettings {
+  /** Whether crashes, errors and repeated actions are reported on their
+   *  own (feedback/reporter.ts). Absent means ON. Typed feedback is sent
+   *  whatever this says, because somebody pressed Send. */
+  diagnosticsEnabled?: boolean
+  /** Random id this install's reports carry, made on first use. Not tied
+   *  to the machine or any account. */
+  feedbackInstallId?: string
   /**
    * Whether plan-to-watch changes here reach the tracking services, and
    * whether their removals reach this app.

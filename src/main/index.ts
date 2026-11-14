@@ -12,6 +12,7 @@ import { startBackgroundJobs } from './media-hub/backgroundJobs'
 import { sendToPlayerOverlay } from './media-hub/playerWindow'
 import { toggleMainWindowFullscreen } from './media-hub/windowFullscreen'
 import { MEDIA_HUB_CHANNELS } from '../shared/media-hub/ipc-channels'
+import { installCrashCapture } from './media-hub/feedback/crashCapture'
 
 // Fixed 1920x1080 design canvas (spec section 1) — the composition is built
 // pixel-for-pixel at this resolution first; responsive scaling is a later
@@ -187,6 +188,11 @@ app.whenReady().then(async () => {
   // exist before a secret can be read.
   await prepareBackend()
   startBackend()
+
+  // After the backend, so settings (is diagnostics on, this install's id)
+  // can be read; before the window, so a renderer that dies on its first
+  // paint is still seen. See feedback/crashCapture.ts.
+  installCrashCapture()
 
   createWindow()
 

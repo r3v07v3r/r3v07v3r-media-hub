@@ -16,6 +16,9 @@ const PATHS: Record<string, string> = {
     '<rect x="3.5" y="5.5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3.5v4M16 3.5v4"/><circle cx="8" cy="14.2" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="14.2" r="1" fill="currentColor" stroke="none"/><circle cx="16" cy="14.2" r="1" fill="currentColor" stroke="none"/><circle cx="8" cy="17.4" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="17.4" r="1" fill="currentColor" stroke="none"/>',
   settings:
     '<circle cx="12" cy="12" r="3"/><path d="M19.4 13.5a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V19.9a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87A1.7 1.7 0 0 0 3 12.46H2.9a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.55 7.35a1.7 1.7 0 0 0-.34-1.87l-.06-.06A2 2 0 1 1 6.98 2.6l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1.04-1.56V1.3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15.4 2.94a1.7 1.7 0 0 0 1.87-.34l.06-.06A2 2 0 1 1 20.16 5.4l-.06.06a1.7 1.7 0 0 0-.34 1.87V7.4a1.7 1.7 0 0 0 1.56 1.04h.19a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.04Z"/>',
+  // Speech bubble: the Feedback section and its top-bar button.
+  message:
+    '<path d="M4.5 5.5h15a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H10l-4.5 3.5V16.5h-1a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1z"/><path d="M8 10h8M8 13h5"/>',
   notification: '<path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/>',
   'play-outline': '<circle cx="12" cy="12" r="8.5"/><path d="M10 8.5l6 3.5-6 3.5v-7z"/>',
   stack:

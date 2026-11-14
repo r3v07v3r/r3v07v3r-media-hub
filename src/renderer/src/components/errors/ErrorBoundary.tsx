@@ -14,6 +14,7 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 
 import styles from './ErrorBoundary.module.css'
+import { reportRenderError } from '@renderer/lib/feedback/diagnostics'
 
 interface Props {
   children: ReactNode
@@ -44,6 +45,8 @@ export class ErrorBoundary extends Component<Props, State> {
   // anyway.
   componentDidCatch(error: Error, info: ErrorInfo): void {
     console.error('Render error caught by ErrorBoundary:', error, info.componentStack)
+    // Over IPC, not through the tree: the same reason as above.
+    reportRenderError(error, info.componentStack)
   }
 
   componentDidUpdate(prev: Props): void {

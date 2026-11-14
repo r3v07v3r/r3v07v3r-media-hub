@@ -36,6 +36,30 @@ function logPath(): string {
   return path.join(app.getPath('userData'), 'logs', 'media-hub.log')
 }
 
+/**
+ * The last `maxBytes` of the log, starting at a whole line, for a tester's
+ * report (see feedback/reporter.ts, which sanitises it before it is sent).
+ * Empty when there is no log yet or it cannot be read.
+ */
+export function readLogTail(maxBytes: number): string {
+  try {
+    const file = logPath()
+    const size = fs.statSync(file).size
+    const start = Math.max(0, size - maxBytes)
+    const fd = fs.openSync(file, 'r')
+    try {
+      const buffer = Buffer.alloc(size - start)
+      fs.readSync(fd, buffer, 0, buffer.length, start)
+      const text = buffer.toString('utf8')
+      return start > 0 ? text.slice(text.indexOf('\n') + 1) : text
+    } finally {
+      fs.closeSync(fd)
+    }
+  } catch {
+    return ''
+  }
+}
+
 /** Strips URLs out of a string before it's logged — VLC's stderr in particular can echo the playback URL (which carries a bearer-style proxy token). */
 function redactUrls(value: unknown): string {
   return String(value).replace(/https?:\/\/\S+/gi, '[redacted-url]')

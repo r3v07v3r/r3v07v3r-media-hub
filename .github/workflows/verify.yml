@@ -110,3 +110,28 @@ jobs:
       # appears.
       - name: Audit relay dependencies
         run: npm audit --prefix party-sync-worker --omit=dev --audit-level=critical
+
+  feedback-worker:
+    name: Feedback intake checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.checkout-ref }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: feedback-worker/package-lock.json
+      - name: Install feedback intake dependencies
+        run: npm ci --prefix feedback-worker
+      - name: Typecheck feedback intake
+        run: npm run typecheck --prefix feedback-worker
+      - name: Build feedback intake deployment
+        working-directory: feedback-worker
+        run: npx wrangler deploy --dry-run
+      # Keep upstream-only advisories visible and fail if a critical issue
+      # appears.
+      - name: Audit feedback intake dependencies
+        run: npm audit --prefix feedback-worker --omit=dev --audit-level=critical

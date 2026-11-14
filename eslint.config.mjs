@@ -17,7 +17,8 @@ export default defineConfig(
       'dist-daemon/**',
       '.claude/**',
       '.wrangler-config/**',
-      'party-sync-worker/**'
+      'party-sync-worker/**',
+      'feedback-worker/**'
     ]
   },
   tseslint.configs.recommended,
