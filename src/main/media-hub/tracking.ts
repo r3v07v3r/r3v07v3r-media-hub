@@ -158,7 +158,6 @@ import {
   type PendingHistoryPush
 } from './historyRetry'
 import {
-  encrypt,
   readSettings,
   simklAccountMark,
   simklCredentials,
@@ -194,10 +193,38 @@ import {
   simklActivities,
   simklCompletedAnimeImdbIds,
   simklLibrary,
+  clearSimklTokens,
+  simklDevicePoll,
+  simklDeviceStart,
   simklRequest,
   simklUrl,
-  simklWatchedSnapshot
+  simklWatchedSnapshot,
+  storeSimklSignIn
 } from './simklClient'
+
+/** The connected account's profile, read once a sign-in is stored. Only a
+ *  courtesy: the sign-in has already succeeded and its code is spent, so a
+ *  failed lookup must not turn into a failed poll (the next poll would ask
+ *  about a code that no longer exists and report the sign-in as failed). */
+async function simklUserAfterSignIn(): Promise<Record<string, unknown> | undefined> {
+  try {
+    return await simklRequest<Record<string, unknown>>('/users/settings', {
+      method: 'POST',
+      body: '{}'
+    })
+  } catch (error) {
+    logError('simkl:sign-in user lookup', error)
+    return undefined
+  }
+}
+
+/** OAuth 2.0 sign-ins in progress, by the user code the renderer shows. The
+ *  device code stays here: it is a credential for the few minutes it lives,
+ *  and nothing in the renderer needs it. */
+const simklDeviceCodes = new Map<
+  string,
+  { clientId: string; deviceCode: string; expiresAt: number }
+>()
 import {
   filmDiffCurrent,
   localFilmsSignature,
@@ -293,16 +320,13 @@ function queueRemotePushes(
     .finally(release)
 }
 
-/** Which accounts are connected right now — the tail of each token is
- *  enough to tell one from another, and nothing here is logged. */
+/** Which accounts are connected right now, by account mark rather than by
+ *  token: a refresh swaps the token but keeps the mark (see
+ *  carryAccountMarkThroughRefresh), so a push queued just before one still
+ *  runs, while a sign-in or sign-out still changes it. */
 function connectedAccountsStamp(): string {
-  return [
-    simklCredentials().accessToken,
-    traktCredentials().accessToken,
-    malCredentials().accessToken
-  ]
-    .map((token) => String(token ?? '').slice(-12))
-    .join('|')
+  const marks = trackingAccountMarks()
+  return [marks.simkl, marks.trakt, marks.mal].join('|')
 }
 
 async function syncSimklHistory(
@@ -3624,6 +3648,28 @@ export function registerTrackingIpc(): void {
   handle<string, SimklPinStart>(MEDIA_HUB_CHANNELS.simklStart, async (_e, rawClientId) => {
     const clientId = String(rawClientId || '').trim()
     if (clientId.length < 8) throw new Error('Enter the client ID from your Simkl developer app.')
+    // OAuth 2.0 first: it is what Simkl registers every app as now. Only an
+    // ID it calls invalid_client (a legacy one) goes on to the PIN flow.
+    try {
+      const device = await simklDeviceStart(clientId)
+      simklDeviceCodes.set(device.user_code, {
+        clientId,
+        deviceCode: device.device_code,
+        expiresAt: Date.now() + device.expires_in * 1000
+      })
+      const s = readSettings()
+      s.simklClientId = clientId
+      writeSettings(s)
+      return {
+        user_code: device.user_code,
+        verification_uri: device.verification_uri,
+        verification_uri_complete: device.verification_uri_complete,
+        expires_in: device.expires_in,
+        interval: device.interval
+      }
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'invalid_client') throw error
+    }
     const result = await fetchJson<SimklPinStart>(simklUrl('/oauth/pin', clientId), {
       headers: {
         // TODO(media-hub-integration): copied verbatim from the original
@@ -3639,6 +3685,23 @@ export function registerTrackingIpc(): void {
   })
 
   handle<string, SimklPollResult>(MEDIA_HUB_CHANNELS.simklPoll, async (_e, userCode) => {
+    const device = simklDeviceCodes.get(userCode)
+    if (device) {
+      if (Date.now() > device.expiresAt) {
+        simklDeviceCodes.delete(userCode)
+        return { connected: false, message: 'The code expired before it was approved. Try again.' }
+      }
+      const outcome = await simklDevicePoll(device.clientId, device.deviceCode)
+      if (outcome.state === 'pending') {
+        return { connected: false, pending: true, slowDown: outcome.slowDown }
+      }
+      simklDeviceCodes.delete(userCode)
+      if (outcome.state === 'error') return { connected: false, message: outcome.message }
+      // Same reasons as the PIN path below.
+      clearPendingPushes()
+      forgetSimklWatchedCache()
+      return { connected: true, user: await simklUserAfterSignIn() }
+    }
     const { clientId } = simklCredentials()
     if (!clientId) throw new Error('Simkl client ID is missing.')
     const result = await fetchJson<SimklPinPollResponse>(
@@ -3653,9 +3716,7 @@ export function registerTrackingIpc(): void {
       }
     )
     if (result.access_token) {
-      const s = readSettings()
-      s.simklAccessToken = encrypt(result.access_token)
-      writeSettings(s)
+      storeSimklSignIn(result.access_token)
       // A fresh authorization can be a different account than the one
       // whose decisions are sitting in the queue and whose watched
       // history is sitting in the cache, and nothing here can tell the
@@ -3666,11 +3727,7 @@ export function registerTrackingIpc(): void {
       // refetch), which is the acceptable half of that trade.
       clearPendingPushes()
       forgetSimklWatchedCache()
-      const user = await simklRequest<Record<string, unknown>>('/users/settings', {
-        method: 'POST',
-        body: '{}'
-      })
-      return { connected: true, user }
+      return { connected: true, user: await simklUserAfterSignIn() }
     }
     return {
       connected: false,
@@ -3680,9 +3737,8 @@ export function registerTrackingIpc(): void {
   })
 
   handle<undefined, ConnectResult>(MEDIA_HUB_CHANNELS.simklDisconnect, () => {
-    const s = readSettings()
-    delete s.simklAccessToken
-    writeSettings(s)
+    simklDeviceCodes.clear()
+    clearSimklTokens()
     clearPendingPushes()
     // And whoever connects next must not be diffed against the library of
     // the account that just left — see forgetSimklWatchedCache.

@@ -360,44 +360,51 @@ export function SimklSection() {
     const api = window.api?.mediaHub
     if (!api) return
     let cancelled = false
-    let remaining = pin.expires_in
-    const id = setInterval(
-      () => {
-        remaining -= pin.interval
-        if (remaining <= 0) {
-          if (!cancelled) {
-            setConnectStatus({ kind: 'error', message: 'Code expired — try again.' })
+    let timer: ReturnType<typeof setTimeout> | undefined
+    // A chain of timeouts rather than an interval: Simkl's OAuth 2.0 flow
+    // can answer slow_down, which means every later poll waits 5 s more.
+    let intervalMs = Math.max(pin.interval, 2) * 1000
+    const deadline = Date.now() + pin.expires_in * 1000
+    const schedule = (): void => {
+      timer = setTimeout(tick, intervalMs)
+    }
+    const tick = (): void => {
+      if (cancelled) return
+      if (Date.now() >= deadline) {
+        setConnectStatus({ kind: 'error', message: 'Code expired — try again.' })
+        setPin(null)
+        return
+      }
+      api.simkl
+        .poll(pin.user_code)
+        .then((result) => {
+          if (cancelled) return
+          if (result.connected) {
             setPin(null)
+            setConnectStatus({ kind: 'ok', message: 'Connected.' })
+            refreshMediaHubSettings()
+            api.simkl
+              .status()
+              .then(setStatus)
+              .catch(() => {})
+            return
           }
-          clearInterval(id)
-          return
-        }
-        api.simkl
-          .poll(pin.user_code)
-          .then((result) => {
-            if (cancelled) return
-            if (result.connected) {
-              clearInterval(id)
-              setPin(null)
-              setConnectStatus({ kind: 'ok', message: 'Connected.' })
-              refreshMediaHubSettings()
-              api.simkl
-                .status()
-                .then(setStatus)
-                .catch(() => {})
-            } else if (result.message && !result.pending) {
-              clearInterval(id)
-              setPin(null)
-              setConnectStatus({ kind: 'error', message: result.message })
-            }
-          })
-          .catch(() => {})
-      },
-      Math.max(pin.interval, 2) * 1000
-    )
+          if (result.message && !result.pending) {
+            setPin(null)
+            setConnectStatus({ kind: 'error', message: result.message })
+            return
+          }
+          if (result.slowDown) intervalMs += 5000
+          schedule()
+        })
+        .catch(() => {
+          if (!cancelled) schedule()
+        })
+    }
+    schedule()
     return () => {
       cancelled = true
-      clearInterval(id)
+      clearTimeout(timer)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-armed only when a fresh pin is issued
   }, [pin])
@@ -461,7 +468,11 @@ export function SimklSection() {
               type="button"
               className={styles.testButton}
               style={{ padding: '2px 8px' }}
-              onClick={() => window.api?.mediaHub?.openExternal(verificationUrl || '')}
+              onClick={() =>
+                window.api?.mediaHub?.openExternal(
+                  pin.verification_uri_complete || verificationUrl || ''
+                )
+              }
             >
               {verificationUrl}
             </button>
