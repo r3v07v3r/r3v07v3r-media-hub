@@ -3587,8 +3587,11 @@ export function registerTrackingIpc(): void {
       }
     }
 
+    // Every show in progress, uncapped. The row was cut to 18 across all
+    // kinds, which left the Series and Anime pages (each filtering this one
+    // list) short of what was actually in progress. The details are already
+    // fetched for every started show, so the cap saved nothing.
     const continueWatching = continueWatchingList(details, history)
-      .slice(0, 18)
       // A show that is here only because a later season of it is on the
       // list says which season that is — see ContinueWatchingEntry.trackedId.
       .map((row) => {

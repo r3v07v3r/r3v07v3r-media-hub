@@ -1152,7 +1152,8 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
         continueWatching
           .filter((entry) => matchesCategoryKind(entry.media, config.kind))
           .map((entry) => entry.media)
-      ).slice(0, 12),
+      ),
+    // No cap: every title in progress of this kind (the shelf scrolls).
     [continueWatching, config.kind]
   )
   const popular = useMemo(() => {
