@@ -72,6 +72,8 @@ import {
 import {
   activeStreamUrl,
   holdLanguageSettle,
+  playbackHeld,
+  revealPlayback,
   playbackLanguages,
   takeHeldLanguageSettle,
   preparePlayback,
@@ -1131,6 +1133,27 @@ async function openCandidate(
 }
 
 async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<PlaybackResult> {
+  try {
+    return await huntForLanguage(payload)
+  } catch (error) {
+    // Every copy is opened held, behind the loading screen. One left there
+    // by a failure after it opened is not something anyone is waiting for:
+    // the window is about to show the error.
+    if (!isSuperseded(error) && playbackHeld()) await stopPlayback().catch(() => {})
+    throw error
+  }
+}
+
+/**
+ * The copy loop behind play:stream. Each copy is opened HELD — paused, with
+ * the picture and controls off screen (preparePlayback's `held`) — so the
+ * loop can read its tracks and move on to the next without the film
+ * starting over in front of the person once per copy. The window's loading
+ * screen stays up through all of it, saying which copy is being tried, and
+ * the settled copy is revealed once, at the end. A provisional copy in the
+ * wrong language stays held until the window's wider search settles it.
+ */
+async function huntForLanguage(payload: PlayStreamPayload): Promise<PlaybackResult> {
   // Ended by a newer play:stream or by playback:stop. Without it a play the
   // window had cancelled read its own stopped session as a copy that would
   // not open, opened the next copy, and fought the new request for the one
@@ -1180,6 +1203,7 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
     activeStreamUrl() === inPlayer.result.url
   if (playingKnownShort && (!hunt || inPlayer.key === only)) {
     const fit = known[inPlayer.key]
+    await revealPlayback()
     await settleLanguageShortfall(inPlayer.result.tracks, fit, heldSince)
     return { ...inPlayer.result, languageFit: fit }
   }
@@ -1267,8 +1291,13 @@ async function playWithLanguageFallback(payload: PlayStreamPayload): Promise<Pla
   }
   // The renderer only replaces a provisional copy that lacks the audio, so
   // one that has it is settled now — its subtitles still need seeing to.
+  // Kept held, too: the window may still swap it for a copy with the audio,
+  // and showing it now would only be the first of two starts.
   if (payload.provisional && !current.fit.audio) holdLanguageSettle()
-  else await settleLanguageShortfall(current.result.tracks, current.fit)
+  else {
+    await revealPlayback()
+    await settleLanguageShortfall(current.result.tracks, current.fit)
+  }
   return { ...current.result, languageFit: current.fit }
 }
 
@@ -1343,7 +1372,10 @@ async function playCandidate(
           }
         : undefined,
       undefined,
-      live
+      live,
+      // Every copy opens behind the loading screen; play:stream reveals the
+      // one it settles on. See playWithLanguageFallback.
+      { held: true }
     )
     // Only remembered once playback actually started — see
     // stream:resolve's own "fast path 2" comment for where this gets
@@ -1372,7 +1404,8 @@ async function playCandidate(
           }
         : undefined,
       cacheToken,
-      live
+      live,
+      { held: true }
     )
     if (type && resolveId) rememberPlayedStream(type, resolveId, stream)
     return result

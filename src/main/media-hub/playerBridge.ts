@@ -198,7 +198,12 @@ async function recoverFromHang(): Promise<void> {
     )
   )
   try {
-    await startPlayerSession(load.url, { ...load.options, startSeconds: position })
+    await startPlayerSession(load.url, {
+      ...load.options,
+      startSeconds: position,
+      // A copy still being checked behind the loading screen stays there.
+      held: heldLoad
+    })
     // startPlayerSession clears the overlay's idea of which title is playing
     // (see its hand-over note) and leaves naming the next one to its caller.
     // Here the next one is the same one.
@@ -837,6 +842,24 @@ export interface StartPlayerSessionOptions {
    *  for playback with no catalogue identity, which starts with it off. */
   mediaId?: string
   mediaKind?: 'movie' | 'series' | 'anime'
+  /** Open the file paused, with the picture and the controls kept off screen,
+   *  until revealHeldPlayer. play:stream opens copies this way so it can read
+   *  a copy's tracks (is the wanted audio there?) behind the loading screen,
+   *  instead of starting the film in front of the person once per copy. */
+  held?: boolean
+}
+
+/** True while a held open (StartPlayerSessionOptions.held) is waiting for
+ *  revealHeldPlayer. */
+let heldLoad = false
+/** Whether mpv was paused before the first of a run of held opens — put back
+ *  on reveal, so holding never changes how a title starts. */
+let heldPriorPause = false
+
+/** Whether the player is holding a copy off screen — from the moment the
+ *  hold goes on, before the load it was put on for has finished. */
+export function playerHeld(): boolean {
+  return heldLoad
 }
 
 /**
@@ -907,6 +930,21 @@ export async function startPlayerSession(
 
   openPlayerOverlay(mainWindow)
 
+  // A held open is paused, unseen and unheard from before `loadfile` (which
+  // otherwise starts playing at once), so a copy that turns out to be the
+  // wrong one is never shown starting. The controls of a title already on
+  // screen go too: the loading screen behind them is what to look at now.
+  if (options.held) {
+    if (!heldLoad) heldPriorPause = await player.get<boolean>('pause').catch(() => false)
+    heldLoad = true
+    await player.set('pause', true).catch(() => {})
+    setEmbeddedVideoHidden(true)
+    hidePlayerOverlayForMainUi()
+  } else if (heldLoad) {
+    heldLoad = false
+    await player.set('pause', heldPriorPause).catch(() => {})
+  }
+
   // HAND THE RETAINED PLAYER OVER before touching it. Everything below runs
   // inside a gap the overlay cannot see: it identifies whichever title it was
   // last told about, and it is not told about the next one until
@@ -974,6 +1012,7 @@ export async function startPlayerSession(
   // launch options too.
   const sessionOptions = { ...options }
   delete sessionOptions.startSeconds
+  delete sessionOptions.held
   lastLoad = { url, options: sessionOptions, retried: false }
   if (hangRecoveredUrl && hangRecoveredUrl !== url) hangRecoveredUrl = ''
   // The picture facts start empty for every title, not only after a full
@@ -996,7 +1035,8 @@ export async function startPlayerSession(
   // Unconditional, unlike the raises below: those skip when the app is not the
   // window being used, and a film that started while the person was in another
   // application must still have controls waiting when they come back to it.
-  revealPlayerOverlay()
+  // A held open waits for revealHeldPlayer instead.
+  if (!options.held) revealPlayerOverlay()
 
   // Re-asserted per title rather than set once. mpv keeps these properties
   // across `loadfile`, so this is usually a no-op — but the process can be
@@ -1029,12 +1069,31 @@ export async function startPlayerSession(
   // person could see — so the child stays hidden until the panel closes (see
   // party-panel-closed). The false branch matters equally: it clears a hide
   // left over from a previous session's panel.
-  setEmbeddedVideoHidden(mainWindowUiOpen)
-  if (mainWindowUiOpen) hidePlayerOverlayForMainUi()
+  // A held open stays hidden: revealHeldPlayer makes this same decision.
+  if (!options.held) {
+    setEmbeddedVideoHidden(mainWindowUiOpen)
+    if (mainWindowUiOpen) hidePlayerOverlayForMainUi()
+  }
 
   const tracks = await readTracks()
   queuePatch({ tracks }, true)
   return { tracks }
+}
+
+/**
+ * Puts a held open (StartPlayerSessionOptions.held) on screen: the picture,
+ * the controls and the pause state it had before holding. The same
+ * main-window-UI rule as an ordinary open — the party panel, if up, keeps
+ * the picture hidden. A no-op when nothing is held.
+ */
+export async function revealHeldPlayer(): Promise<void> {
+  if (!heldLoad) return
+  heldLoad = false
+  revealPlayerOverlay()
+  setEmbeddedVideoHidden(mainWindowUiOpen)
+  if (mainWindowUiOpen) hidePlayerOverlayForMainUi()
+  else showPlayerOverlayAfterMainUi()
+  await player.set('pause', heldPriorPause).catch(() => {})
 }
 
 /** Unloads the title and closes the overlay, leaving the mpv process running
@@ -1043,6 +1102,12 @@ export async function startPlayerSession(
  *  app UI behind it visible again. */
 export async function stopPlayerSession(): Promise<void> {
   untrackWindow?.()
+  // A stop in the middle of a held open: the next title starts the way this
+  // one would have.
+  if (heldLoad) {
+    heldLoad = false
+    await player.set('pause', heldPriorPause).catch(() => {})
+  }
   // mainWindowUiOpen is deliberately NOT cleared here: a stop is not a close.
   // See its own comment — the main window reports the panel itself now. The
   // video-hidden state rides with it: the next session's start re-asserts
@@ -1222,6 +1287,18 @@ type PlayerCommandOutcome = { path?: string } | void
  *  the renderer is our own — the IPC surface is the boundary, not the intent of
  *  the code on the other side of it. */
 async function runCommand(command: PlayerCommand): Promise<PlayerCommandOutcome> {
+  // A held copy (StartPlayerSessionOptions.held) stays paused until it is
+  // revealed: a watch-party Play arriving while copies are still being
+  // checked would otherwise start one, audibly, behind the loading screen.
+  // The wish is kept and applied on reveal instead.
+  if (
+    heldLoad &&
+    (command.type === 'play' || command.type === 'pause' || command.type === 'toggle-pause')
+  ) {
+    heldPriorPause =
+      command.type === 'play' ? false : command.type === 'pause' ? true : !heldPriorPause
+    return
+  }
   switch (command.type) {
     case 'play':
       await player.set('pause', false)
@@ -1465,6 +1542,8 @@ function forwardUiEvent(event: PlayerUiEvent): void {
   }
   if (event.type === 'party-panel-closed') {
     mainWindowUiOpen = false
+    // A held copy is not the panel's to show: revealHeldPlayer will.
+    if (heldLoad) return
     setEmbeddedVideoHidden(false)
     showPlayerOverlayAfterMainUi()
     return

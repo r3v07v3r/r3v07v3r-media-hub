@@ -60,6 +60,8 @@ import {
   subtitleChoiceCount,
   pushSessionSnapshot,
   nightModeEnabled,
+  playerHeld,
+  revealHeldPlayer,
   startPlayerSession,
   stopPlayerSession,
   storedSubtitleStyle
@@ -132,6 +134,10 @@ const opens = createSupersession()
 /** Counts openPlayback calls, so a superseded one can tell a stop (nothing
  *  newer is opening) from a newer title (which is). */
 let openSequence = 0
+
+/** What a held open (see preparePlayback's `held`) still has to do to go on
+ *  screen, and which open it belongs to. Null when nothing is held. */
+let pendingReveal: { open: number; reveal: () => void } | null = null
 // One ticket per play:stream request (the whole copy loop, not one copy).
 // A stopPlayback — the window's Cancel, or the stop it sends before every
 // new play — ends the request, so it stops trying copies.
@@ -232,10 +238,15 @@ export async function preparePlayback(
   localToken?: string,
   /** The play:stream request this open belongs to; false once that request
    *  has been stopped or replaced. */
-  request: () => boolean = () => true
+  request: () => boolean = () => true,
+  /** Open it paused and off screen, and leave the overlay unnamed, until
+   *  revealPlayback — so play:stream can look at a copy's tracks behind the
+   *  loading screen and move on to another without the film visibly
+   *  starting over each time. */
+  { held = false }: { held?: boolean } = {}
 ): Promise<PlaybackResult> {
   try {
-    return await openPlayback(url, cacheMeta, localToken, request)
+    return await openPlayback(url, cacheMeta, localToken, request, held)
   } catch (error) {
     // Overtaken: the backpressure is the business of whatever replaced this
     // (a newer title has just raised it, a stop has already released it).
@@ -403,7 +414,8 @@ async function openPlayback(
   url: string,
   cacheMeta?: CacheSessionMeta,
   localToken?: string,
-  request: () => boolean = () => true
+  request: () => boolean = () => true,
+  held = false
 ): Promise<PlaybackResult> {
   // StreamCache is the sole owner of the upstream connection to `url`. It is
   // started before the player opens anything, and mpv then reads only from its
@@ -425,6 +437,7 @@ async function openPlayback(
   // quiet by the time the first bytes are being pulled.
   const open = opens.take()
   const mine = ++openSequence
+  pendingReveal = null
   const current = (): boolean => open() && request()
   setPressure('playback', 'critical')
   // Tier 1 skips the connect stage entirely — there is nothing to connect
@@ -477,7 +490,8 @@ async function openPlayback(
     bufferSeconds: getPlaybackBufferSeconds(settings.playbackBuffer),
     videoScaling: normalizeVideoScaling(settings.videoScaling),
     mediaId: cacheMeta?.catalogId,
-    mediaKind: cacheMeta?.mediaKind
+    mediaKind: cacheMeta?.mediaKind,
+    held
   })
   // A stop or a newer title while mpv was loading: whatever comes next owns
   // the player and the snapshot, so nothing below may be written for this one.
@@ -526,32 +540,41 @@ async function openPlayback(
         release: cacheMeta.release ?? cacheResult.meta?.release
       }
     : null
-  pushSessionSnapshot({
-    media: sessionMedia,
-    tracks: activeMediaTracks,
-    // Resume is applied by the overlay itself (seeks are in-place now), so this
-    // is informational rather than something to act on.
-    resumeSeconds: 0,
-    // Not known yet, deliberately — see resolveNextUp below, and the field's
-    // own note in shared/media-hub/player.ts about why "not yet" and "none"
-    // look the same here and why that costs the overlay nothing.
-    nextUp: null,
-    settings: {
-      bufferSeconds: getPlaybackBufferSeconds(settings.playbackBuffer),
-      autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
-      subtitleLanguage: settings.subtitleLanguage || 'en',
-      audioLanguage: settings.audioLanguage || 'en',
-      autoplayNextEnabled: settings.autoplayNextEnabled !== false,
-      subtitleStyle,
-      nightModeEnabled: nightModeEnabled()
-    }
-  })
-  // Fire-and-forget, AFTER the snapshot above has gone out. Finding the next
-  // episode is a metadata read — cached in the common case, a live Cinemeta/
-  // Kitsu fetch in the cold one — and playback must never wait behind it.
-  // Nothing needs the answer until the credits start, which is at minimum
-  // most of an episode away.
-  void resolveNextUp(sessionMedia)
+  const name = (): void =>
+    pushSessionSnapshot({
+      media: sessionMedia,
+      tracks: activeMediaTracks,
+      // Resume is applied by the overlay itself (seeks are in-place now), so this
+      // is informational rather than something to act on.
+      resumeSeconds: 0,
+      // Not known yet, deliberately — see resolveNextUp below, and the field's
+      // own note in shared/media-hub/player.ts about why "not yet" and "none"
+      // look the same here and why that costs the overlay nothing.
+      nextUp: null,
+      settings: {
+        bufferSeconds: getPlaybackBufferSeconds(settings.playbackBuffer),
+        autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
+        subtitleLanguage: settings.subtitleLanguage || 'en',
+        audioLanguage: settings.audioLanguage || 'en',
+        autoplayNextEnabled: settings.autoplayNextEnabled !== false,
+        subtitleStyle,
+        nightModeEnabled: nightModeEnabled()
+      }
+    })
+  const announce = (): void => {
+    name()
+    // Fire-and-forget, AFTER the snapshot above has gone out. Finding the next
+    // episode is a metadata read — cached in the common case, a live Cinemeta/
+    // Kitsu fetch in the cold one — and playback must never wait behind it.
+    // Nothing needs the answer until the credits start, which is at minimum
+    // most of an episode away.
+    void resolveNextUp(sessionMedia)
+  }
+  // Held: the overlay is not told which title this is until it goes on
+  // screen. Its resume seek and bookmark saves key off that, and a copy that
+  // is about to be replaced must not take them.
+  if (held) pendingReveal = { open: mine, reveal: announce }
+  else announce()
 
   return {
     ok: true,
@@ -572,11 +595,33 @@ async function openPlayback(
  *  deletes the title's cache directory outright rather than leaving it for
  *  the idle sweep; otherwise the cache is left on disk for a likely
  *  near-term resume. */
+/**
+ * Puts the copy a held open left in the player on screen — see
+ * preparePlayback's `held`. A no-op when nothing is held, or when what is
+ * held is no longer the open in the player.
+ */
+export async function revealPlayback(): Promise<void> {
+  const pending = pendingReveal
+  pendingReveal = null
+  if (!pending || pending.open !== openSequence || !activeCacheUrl) return
+  pending.reveal()
+  await revealHeldPlayer()
+}
+
+/** Whether a held open is still waiting to go on screen — including one
+ *  whose load failed after the hold went on, which left a paused, hidden
+ *  player and its cache session behind with nothing to reveal. */
+export function playbackHeld(): boolean {
+  if (playerHeld()) return true
+  return pendingReveal !== null && pendingReveal.open === openSequence && Boolean(activeCacheUrl)
+}
+
 export async function stopPlayback(deleteCache = false): Promise<void> {
   // First, so an open or a copy loop waiting on the network sees itself
   // ended the moment it wakes.
   opens.supersede()
   playRequests.supersede()
+  pendingReveal = null
   // Released here rather than in a `finally` around playback, because this
   // is the one function every end-of-playback path goes through — the
   // renderer closing the player, a new title replacing this one, and the
@@ -720,6 +765,8 @@ export function registerPlaybackIpc(): void {
 
   handle<undefined, { ok: true }>(MEDIA_HUB_CHANNELS.playbackLanguageSettle, async () => {
     const since = takeHeldLanguageSettle()
+    // The provisional copy is the one: it goes on screen now.
+    await revealPlayback()
     if (activeCacheUrl) {
       const { audio, subtitles } = playbackLanguages()
       await settleLanguageShortfall(
