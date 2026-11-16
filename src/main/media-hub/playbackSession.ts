@@ -60,6 +60,7 @@ import {
   subtitleChoiceCount,
   pushSessionSnapshot,
   nightModeEnabled,
+  playerHeld,
   revealHeldPlayer,
   startPlayerSession,
   stopPlayerSession,
@@ -539,26 +540,27 @@ async function openPlayback(
         release: cacheMeta.release ?? cacheResult.meta?.release
       }
     : null
-  const name = (): void => pushSessionSnapshot({
-    media: sessionMedia,
-    tracks: activeMediaTracks,
-    // Resume is applied by the overlay itself (seeks are in-place now), so this
-    // is informational rather than something to act on.
-    resumeSeconds: 0,
-    // Not known yet, deliberately — see resolveNextUp below, and the field's
-    // own note in shared/media-hub/player.ts about why "not yet" and "none"
-    // look the same here and why that costs the overlay nothing.
-    nextUp: null,
-    settings: {
-      bufferSeconds: getPlaybackBufferSeconds(settings.playbackBuffer),
-      autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
-      subtitleLanguage: settings.subtitleLanguage || 'en',
-      audioLanguage: settings.audioLanguage || 'en',
-      autoplayNextEnabled: settings.autoplayNextEnabled !== false,
-      subtitleStyle,
-      nightModeEnabled: nightModeEnabled()
-    }
-  })
+  const name = (): void =>
+    pushSessionSnapshot({
+      media: sessionMedia,
+      tracks: activeMediaTracks,
+      // Resume is applied by the overlay itself (seeks are in-place now), so this
+      // is informational rather than something to act on.
+      resumeSeconds: 0,
+      // Not known yet, deliberately — see resolveNextUp below, and the field's
+      // own note in shared/media-hub/player.ts about why "not yet" and "none"
+      // look the same here and why that costs the overlay nothing.
+      nextUp: null,
+      settings: {
+        bufferSeconds: getPlaybackBufferSeconds(settings.playbackBuffer),
+        autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
+        subtitleLanguage: settings.subtitleLanguage || 'en',
+        audioLanguage: settings.audioLanguage || 'en',
+        autoplayNextEnabled: settings.autoplayNextEnabled !== false,
+        subtitleStyle,
+        nightModeEnabled: nightModeEnabled()
+      }
+    })
   const announce = (): void => {
     name()
     // Fire-and-forget, AFTER the snapshot above has gone out. Finding the next
@@ -606,8 +608,11 @@ export async function revealPlayback(): Promise<void> {
   await revealHeldPlayer()
 }
 
-/** Whether a held open is still waiting to go on screen. */
+/** Whether a held open is still waiting to go on screen — including one
+ *  whose load failed after the hold went on, which left a paused, hidden
+ *  player and its cache session behind with nothing to reveal. */
 export function playbackHeld(): boolean {
+  if (playerHeld()) return true
   return pendingReveal !== null && pendingReveal.open === openSequence && Boolean(activeCacheUrl)
 }
 

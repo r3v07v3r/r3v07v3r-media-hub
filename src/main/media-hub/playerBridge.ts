@@ -856,6 +856,12 @@ let heldLoad = false
  *  on reveal, so holding never changes how a title starts. */
 let heldPriorPause = false
 
+/** Whether the player is holding a copy off screen — from the moment the
+ *  hold goes on, before the load it was put on for has finished. */
+export function playerHeld(): boolean {
+  return heldLoad
+}
+
 /**
  * Ensures mpv is running and embedded, opens the control overlay, and loads
  * `url`. `url` is validated inside MpvPlayer.loadFile — see assertPlayableUrl,
@@ -1281,6 +1287,18 @@ type PlayerCommandOutcome = { path?: string } | void
  *  the renderer is our own — the IPC surface is the boundary, not the intent of
  *  the code on the other side of it. */
 async function runCommand(command: PlayerCommand): Promise<PlayerCommandOutcome> {
+  // A held copy (StartPlayerSessionOptions.held) stays paused until it is
+  // revealed: a watch-party Play arriving while copies are still being
+  // checked would otherwise start one, audibly, behind the loading screen.
+  // The wish is kept and applied on reveal instead.
+  if (
+    heldLoad &&
+    (command.type === 'play' || command.type === 'pause' || command.type === 'toggle-pause')
+  ) {
+    heldPriorPause =
+      command.type === 'play' ? false : command.type === 'pause' ? true : !heldPriorPause
+    return
+  }
   switch (command.type) {
     case 'play':
       await player.set('pause', false)
