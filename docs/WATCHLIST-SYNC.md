@@ -688,10 +688,8 @@ account, durably, like Simkl's stamps.
 - **Anime is told apart through Simkl.** Trakt has no anime category, so
   the app looks each show's IMDb id up with Simkl's id search and keeps the
   answer 30 days; a first import of a long history makes one request per
-  show. The lookup needs a Simkl Client ID but not a Simkl sign-in. Without
-  one, an anime watched on Trakt comes in as a series under its IMDb id,
-  does not show as watched on its anime page, and later passes do not move
-  it; the log says so once. With one set, a pass in which Simkl did not
+  show. The lookup uses the app's own Simkl Client ID and needs no Simkl
+  sign-in. A pass in which Simkl did not
   answer for some show writes nothing, the films and series beside it
   included, and records nothing, so the next pass asks again; pressed by
   hand, the import says under the button that Simkl could not be reached

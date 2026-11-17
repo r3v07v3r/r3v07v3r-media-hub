@@ -34,13 +34,9 @@ movie, `id:season:episode` for a series, and `kitsuId::episode` for anime,
 because a Kitsu id already names its season. The daemon stores the key as
 given, and tier 1's `cacheContentKey` keeps the anime season on purpose.
 
-That anime rule breaks for a later season of a merged show. Its history is
-filed under the show's first member, at the season number the show's page
-gives it (see
-[WATCHLIST-SYNC.md](WATCHLIST-SYNC.md#when-a-members-place-is-not-its-season)),
-and the feeder's key drops that season, so it names the first member's
-episode instead. Neither this nor the key match above has been measured;
-both are read from the code.
+A later season of a merged show is keyed under that season's own Kitsu entry
+(#236), not the show's first member. The key match above has not been
+measured; it is read from the code.
 
 | Shipped                          | Phase | What landed                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | -------------------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -421,6 +417,17 @@ What is still open:
 3. **Phase 4.5: Viewer and Server Control.** Part of step 1 has shipped as the Control Centre, and
    the Settings page is cut down to what a viewer changes; the split by ownership has not.
 4. **Phase 5.** Bets, one at a time.
+5. **Anime discovery from AniList (to rebuild).** An old branch (`feat/watchlist-my-stuff`, commit
+   `2ada656`, built on August's code and never merged) had three things preview still lacks:
+   "Because you liked X" recommendations from AniList's community picks, seeded from what this
+   profile rated or saved (capped seeds, cached a week, through the shared `anilist` lane); an
+   anime feed that leads with the current and previous Kitsu seasons; and an English _alternate_
+   title when Kitsu's `en` field is blank. The rest of that branch (My Stuff tabs, the Planned
+   watchlist, English-first titles, fansub `- 05` matching) already exists in other forms. Rebuild
+   these three on current code; do not port the branch.
+6. **Phone: its own Simkl sign-in.** A one-click Simkl connection is deliberately not shared at
+   linking (a copied token dies when the desktop refreshes its grant), and the phone has no sign-in
+   of its own, so a phone linked to such a desktop gets no Simkl sync.
 
 Every phase ships behind the checks listed in
 [the README's What CI checks section](../README.md#what-ci-checks).
