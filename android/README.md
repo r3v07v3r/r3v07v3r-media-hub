@@ -166,7 +166,9 @@ Home can show these notes above its rows:
   until it is done, Home does not show its "Nothing to show yet" note.
 - **Simkl signed this device out. Reconnect Simkl on your computer, then link
   this device again in Settings.** Linking hands the phone the desktop's own
-  Simkl sign-in, so reconnect Simkl on the desktop first, then scan a new code
+  Simkl sign-in only when the desktop used the older PIN sign-in; a connection
+  made with **Connect to Simkl** is not shared, and the phone has no Simkl
+  sign-in of its own yet. Reconnect Simkl on the desktop first, then scan a new code
   under Settings → **Your computer** → **Scan code**. Until then the phone asks
   Simkl again only every six hours, or after a Force stop.
 - A line saying to link your computer in Settings, on a phone with no Simkl
