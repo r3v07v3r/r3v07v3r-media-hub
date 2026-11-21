@@ -631,6 +631,23 @@ export function resumeCandidateFor(
   return null
 }
 
+/**
+ * A scraper add-on's stream is always a TorBox torrent candidate, whatever
+ * its JSON says. The add-on is a remote party: left as-is, a response with
+ * source:'localcache' and a crafted cacheToken would be played as a local
+ * session, and the source-tier fields (cache token, completeness, media
+ * server ids) would steer playback away from TorBox entirely.
+ */
+export function addonTorboxCandidate(stream: StreamCandidate): StreamCandidate {
+  const rest: StreamCandidate = { ...stream }
+  delete rest.cacheToken
+  delete rest.cacheSourceRef
+  delete rest.complete
+  delete rest.itemId
+  delete rest.mediaSourceId
+  return { ...rest, source: 'torbox' }
+}
+
 export function validateTorBoxToken(token: unknown): boolean {
   return typeof token === 'string' && token.trim().length >= 24 && !/\s/.test(token.trim())
 }

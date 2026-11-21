@@ -312,8 +312,34 @@ async function resolutionChecks(): Promise<void> {
   assert.equal(streamResolution({ infoHash: 'x', name: 'Film' }), 0, 'unknown stays unknown')
 }
 
+// --- a scraper add-on can never claim to be a local (or other) source ------
+async function addonChecks(): Promise<void> {
+  const { addonTorboxCandidate } = await import('../src/main/media-hub/core')
+  const hostile = addonTorboxCandidate({
+    source: 'localcache',
+    cacheToken: '../../../..',
+    cacheSourceRef: { source: 'torbox', infoHash: 'd'.repeat(40) },
+    complete: true,
+    itemId: 'x',
+    mediaSourceId: 'y',
+    infoHash: 'c'.repeat(40),
+    name: 'Release',
+    fileIdx: 3
+  })
+  assert.equal(hostile.source, 'torbox', 'an add-on stream is always a TorBox candidate')
+  assert.equal(hostile.cacheToken, undefined, 'an add-on cannot supply a cache token')
+  assert.equal(hostile.cacheSourceRef, undefined, 'nor a cached-release identity')
+  assert.equal(hostile.complete, undefined)
+  assert.equal(hostile.itemId, undefined)
+  assert.equal(hostile.mediaSourceId, undefined)
+  assert.equal(hostile.infoHash, 'c'.repeat(40), 'torrent fields survive')
+  assert.equal(hostile.fileIdx, 3)
+  assert.equal(hostile.name, 'Release')
+}
+
 async function main(): Promise<void> {
   await resumeChecks()
+  await addonChecks()
   await sourceGateChecks()
   await resolutionChecks()
   const { findLocalCacheCandidate } = await import('../src/main/media-hub/streamCache')
