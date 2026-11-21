@@ -84,11 +84,11 @@ export function CachingSection() {
   const [daemons, setDaemons] = useState<DiscoveredDaemon[]>([])
   const [discovering, setDiscovering] = useState(false)
   const [url, setUrl] = useState('')
-  // Starts UNticked. The server fetches each person's requests with their
-  // own TorBox key and never anyone else's, so without it the server can
-  // only share files it already has — but the key is a credential for a
-  // paid account, and it goes to a server only when the person says so.
-  const [shareTorbox, setShareTorbox] = useState(false)
+  // Starts ticked: the server fetches each person's requests with their own
+  // TorBox key and never anyone else's, so without it the server can only
+  // share files it already has. Still a choice, and unticking it is kept.
+  // The key only travels over the pinned HTTPS connection (lanCacheTrust).
+  const [shareTorbox, setShareTorbox] = useState(true)
   // This device's verification code while its request waits, and the
   // pinned server's ID, so the person can check them against the server.
   const [verification, setVerification] = useState('')
