@@ -27,6 +27,7 @@ import type {
 import { parseImdbRatingsCsv } from '../../shared/media-hub/importCsv'
 import { importLetterboxdLibrary, requireLetterboxdPrerequisites } from './letterboxdImport'
 import { readBackup } from './backup'
+import { sanitizeBackupProfiles } from './backupProfiles'
 import { backupBeforeRewrite } from './autoBackup'
 import { requestRecommendationsRebuild } from './recommendations'
 import { watchRegion } from './watchProviders'
@@ -377,14 +378,15 @@ export function registerAppIpc(): void {
     const settings = readSettings()
     const existing = settings.profiles ?? []
     const byId = new Map(existing.map((profile) => [profile.id, profile]))
-    // Guaranteed an array by readBackup, which refuses a file without one
-    // BEFORE the restore runs — this read happens after the transaction has
-    // committed, so a throw here would mean a replaced library with no
-    // profiles to own it.
-    for (const incoming of backup.profiles as { id?: unknown }[]) {
-      const id = String(incoming?.id ?? '')
-      if (!id || byId.has(id)) continue
-      byId.set(id, incoming as (typeof existing)[number])
+    // Rebuilt field by field (see backupProfiles.ts) rather than saved as the
+    // file wrote them: a malformed record made active here crashed the UI on
+    // every launch, and a planted pinHash/pinSalt would have been kept.
+    // readBackup already did this and refused a file with no usable profile
+    // BEFORE the restore ran; doing it again is cheap and keeps this write
+    // safe on its own terms.
+    for (const incoming of sanitizeBackupProfiles(backup.profiles)) {
+      if (byId.has(incoming.id)) continue
+      byId.set(incoming.id, incoming)
     }
     settings.profiles = [...byId.values()]
     // Back to whoever was watching when the backup was taken. Restoring the

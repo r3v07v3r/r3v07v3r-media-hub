@@ -13,25 +13,41 @@
 // displays or filters on. One parser means they cannot disagree.
 
 /**
+ * How much of a runtime string is looked at. Every real form ("48 min",
+ * "2h 15m", "1 h 30", "148") fits comfortably; in main the value comes from
+ * plays.metadata_json, which a restored backup writes verbatim, so it has no
+ * length limit of its own.
+ */
+export const MAX_RUNTIME_TEXT = 64
+
+/**
  * The runtime `value` describes, in whole minutes, or undefined when the
  * string carries no recognisable duration.
  *
  * Anything unrecognisable is undefined rather than a guess — a title
  * contributing nothing to an estimate is honest, where a wrong number is not.
+ *
+ * Bounded work: the input is truncated to MAX_RUNTIME_TEXT and every digit
+ * run in the patterns has a fixed upper length. The previous unanchored
+ * /(\d+)\s*h/ backtracked quadratically over a long digit run with no 'h',
+ * which a crafted backup row could use to stall the main process whenever
+ * the stats view was opened.
  */
 export function parseRuntimeMinutes(value: unknown): number | undefined {
-  const text = String(value ?? '').toLowerCase()
+  const text = String(value ?? '')
+    .slice(0, MAX_RUNTIME_TEXT)
+    .toLowerCase()
   if (!text) return undefined
   // An explicit hours-and-minutes form wins, including when the minutes are
   // absent ("2h") or unlabelled ("1 h 30").
-  const hours = text.match(/(\d+)\s*h/)
+  const hours = /(\d{1,3})\s{0,3}h/.exec(text)
   if (hours) {
-    const rest = text.slice(text.indexOf(hours[0]) + hours[0].length)
-    const minutes = rest.match(/(\d+)/)
+    const rest = text.slice(hours.index + hours[0].length)
+    const minutes = /(\d{1,4})/.exec(rest)
     const total = Number(hours[1]) * 60 + (minutes ? Number(minutes[1]) : 0)
     return total > 0 ? total : undefined
   }
-  const plain = text.match(/(\d+)/)
+  const plain = /(\d{1,5})/.exec(text)
   if (!plain) return undefined
   const total = Number(plain[1])
   return total > 0 ? total : undefined

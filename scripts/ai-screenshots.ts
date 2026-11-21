@@ -11,7 +11,7 @@
 // `captureOffsetsMs` list (defaults to a single screenshot at 0ms).
 
 import { createServer, type Server } from 'node:http'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import {
   AI_DIR,
@@ -23,6 +23,7 @@ import {
   section,
   writeJSON
 } from './ai-utils.js'
+import { isAllowedHost, resolveStaticPath } from './ai-static-path.js'
 
 const MIME: Record<string, string> = {
   '.html': 'text/html',
@@ -53,12 +54,28 @@ function resolveServeDir(configured?: string): string | null {
 }
 
 function startStaticServer(serveDir: string): Promise<{ server: Server; port: number }> {
+  const root = path.resolve(serveDir)
+  let boundPort = 0
   const server = createServer((req, res) => {
-    const urlPath = decodeURIComponent((req.url ?? '/').split('?')[0])
-    let filePath = path.join(serveDir, urlPath)
-    if (!existsSync(filePath) || filePath.endsWith(path.sep)) {
+    // DNS rebinding: a web page that finds this ephemeral port would send its
+    // own hostname here, so anything other than the loopback we bound is refused.
+    if (!isAllowedHost(req.headers.host, boundPort)) {
+      res.writeHead(403)
+      res.end('Forbidden')
+      return
+    }
+    const requested = resolveStaticPath(root, req.url)
+    if (!requested) {
+      // Malformed encoding, a NUL byte, or a path that resolves outside the
+      // served directory (../ traversal, encoded or not).
+      res.writeHead(403)
+      res.end('Forbidden')
+      return
+    }
+    let filePath = requested
+    if (!existsSync(filePath) || !statSync(filePath).isFile()) {
       // SPA fallback — client-side routing means most paths won't exist on disk.
-      filePath = path.join(serveDir, 'index.html')
+      filePath = path.join(root, 'index.html')
     }
     const ext = path.extname(filePath)
     try {
@@ -74,6 +91,7 @@ function startStaticServer(serveDir: string): Promise<{ server: Server; port: nu
     server.listen(0, '127.0.0.1', () => {
       const address = server.address()
       const port = typeof address === 'object' && address ? address.port : 0
+      boundPort = port
       resolve({ server, port })
     })
   })
