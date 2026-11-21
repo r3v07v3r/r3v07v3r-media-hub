@@ -9,7 +9,11 @@
 //   - Leave switches the launch search off, so it does not undo itself;
 //   - a server that moved is followed, a typed address that still answers is
 //     never replaced, and the token is offered only to a server of the same
-//     name and kept only by one that recognises it;
+//     name that presents the PINNED certificate, and kept only by one that
+//     recognises it;
+//   - every request is HTTPS to the certificate pinned at the join, the join
+//     shows the same verification code the administrator sees, and a launch
+//     join never sends the TorBox key;
 //   - the subnet probe's arithmetic, and that it reports daemons only.
 //
 // One process plays both devices in turn: the requesting app and the
@@ -22,7 +26,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import http from 'node:http'
-import type { AddressInfo } from 'node:net'
+import net, { type AddressInfo } from 'node:net'
 import { registerHooks } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
@@ -35,6 +39,8 @@ import { createJobStore } from '../daemon/jobs'
 import { createPairing } from '../daemon/pairing'
 import { createDaemonServer } from '../daemon/server'
 import { createItemStore } from '../daemon/storage'
+import { createSelfSignedIdentity } from '../daemon/tlsIdentity'
+import { pinnedFetch } from '../src/main/media-hub/lanCacheTrust'
 
 process.env.R3_USER_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-lan-autojoin-'))
 process.env.R3_ELECTRON_SHIM = '1'
@@ -63,12 +69,22 @@ async function check(name: string, fn: () => Promise<void> | void): Promise<void
 interface Daemon {
   url: string
   port: number
+  fingerprint: string
+  /** fetch() pinned to this daemon's certificate, as the test's own client. */
+  fetch: (url: string, init?: RequestInit) => Promise<Response>
   close: () => Promise<void>
 }
 
 async function bootDaemon(serverName: string): Promise<Daemon> {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-autojoin-daemon-'))
-  const pairing = createPairing(root)
+  const tls = createSelfSignedIdentity()
+  // Every device in this test asks from 127.0.0.1, so the per-source
+  // limits (pairing.ts) are lifted here; daemon.test.ts covers them.
+  const pairing = createPairing(root, {
+    fingerprint: tls.fingerprint,
+    perSourcePerMinute: 1000,
+    pendingPerSource: 1000
+  })
   await pairing.load()
   const admin = createAdmin(root)
   await admin.load()
@@ -95,13 +111,17 @@ async function bootDaemon(serverName: string): Promise<Daemon> {
     }),
     serverName,
     version: '0.0.0',
-    diskBudgetBytes: 10 ** 9
+    diskBudgetBytes: 10 ** 9,
+    log: () => {},
+    tls
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as AddressInfo).port
   return {
-    url: `http://127.0.0.1:${port}`,
+    url: `https://127.0.0.1:${port}`,
     port,
+    fingerprint: tls.fingerprint,
+    fetch: (url, init = {}) => pinnedFetch(url, init, tls.fingerprint),
     close: async () => {
       server.closeAllConnections()
       await new Promise<void>((resolve) => server.close(() => resolve()))
@@ -134,24 +154,32 @@ async function main(): Promise<void> {
 
   // The owner: the first device on an unclaimed server is let in, then
   // claims it. Done over the wire, as the owner's own app would.
-  const ownerToken = (
+  let ownerToken = (
     (await (
-      await fetch(`${daemon.url}/api/pair`, {
+      await daemon.fetch(`${daemon.url}/api/pair`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ deviceName: 'the owner' })
       })
     ).json()) as { token: string }
   ).token
-  const claim = await fetch(`${daemon.url}/api/admin/claim`, {
+  const claim = await daemon.fetch(`${daemon.url}/api/admin/claim`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${ownerToken}` }
   })
   assert.equal(claim.status, 200, 'the owner claims the server')
   const asOwner = (): void =>
-    store.setLanCacheConnection({ url: daemon.url, name: 'r3-host.lan', token: ownerToken })
+    store.setLanCacheConnection({
+      url: daemon.url,
+      name: 'r3-host.lan',
+      token: ownerToken,
+      fingerprint: daemon.fingerprint,
+      // Fresh, so the address checks below do not renew it from under the
+      // test; renewal has its own check.
+      tokenExpiresAt: Date.now() + 80 * 24 * 60 * 60 * 1000
+    })
   const setOpenJoin = async (openJoin: boolean): Promise<void> => {
-    const res = await fetch(`${daemon.url}/api/admin/settings`, {
+    const res = await daemon.fetch(`${daemon.url}/api/admin/settings`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', Authorization: `Bearer ${ownerToken}` },
       body: JSON.stringify({ openJoin })
@@ -169,6 +197,8 @@ async function main(): Promise<void> {
       assert.equal(connection?.url, daemon.url)
       assert.equal(connection?.name, 'r3-host.lan')
       assert.equal(connection?.pending, undefined, 'not waiting for anybody')
+      assert.equal(connection?.fingerprint, daemon.fingerprint, 'the certificate is pinned')
+      assert.equal(connection?.shareTorbox, undefined, 'a launch join never volunteers the key')
       assert.equal(lan.isLanCacheConnected(), true)
     })
 
@@ -186,11 +216,17 @@ async function main(): Promise<void> {
       assert.equal(raised.length, 1, 'the administrator sees the request')
       assert.equal(raised[0].deviceName, os.hostname(), 'named as the device that asked')
       assert.equal(raised[0].status, 'pending')
+      assert.match(String(requester?.verification), /^\d{6}$/, 'the requester has a code')
+      assert.equal(
+        raised[0].verification,
+        requester?.verification,
+        'and the administrator sees the same code beside the request'
+      )
       assert.deepEqual(await lan.checkJoinRequests(), [], 'raised once, not every poll')
 
       // Allow, as the toast's button does (it goes through the same admin
       // route the Caching section uses).
-      const allow = await fetch(`${daemon.url}/api/admin/devices/${raised[0].id}`, {
+      const allow = await daemon.fetch(`${daemon.url}/api/admin/devices/${raised[0].id}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', Authorization: `Bearer ${ownerToken}` },
         body: JSON.stringify({ action: 'approve' })
@@ -200,8 +236,13 @@ async function main(): Promise<void> {
       store.setLanCacheConnection(requester!)
       assert.equal(await lan.promoteIfApproved(), 'approved')
       assert.equal(store.getLanCacheConnection()?.pending, undefined, 'and it remembers')
+      assert.equal(
+        store.getLanCacheConnection()?.fingerprint,
+        daemon.fingerprint,
+        'approval keeps the pin'
+      )
       assert.equal(lan.isLanCacheConnected(), true)
-      const status = await fetch(`${daemon.url}/api/status`, {
+      const status = await daemon.fetch(`${daemon.url}/api/status`, {
         headers: { Authorization: `Bearer ${requester!.token}` }
       })
       assert.equal(status.status, 200, 'the approved token now works')
@@ -218,7 +259,7 @@ async function main(): Promise<void> {
       asOwner()
       const raised = await lan.checkJoinRequests()
       assert.equal(raised.length, 1)
-      const deny = await fetch(`${daemon.url}/api/admin/devices/${raised[0].id}`, {
+      const deny = await daemon.fetch(`${daemon.url}/api/admin/devices/${raised[0].id}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', Authorization: `Bearer ${ownerToken}` },
         body: JSON.stringify({ action: 'deny' })
@@ -230,7 +271,7 @@ async function main(): Promise<void> {
     })
 
     const pendingOnServer = async (): Promise<number> => {
-      const res = await fetch(`${daemon.url}/api/admin/devices`, {
+      const res = await daemon.fetch(`${daemon.url}/api/admin/devices`, {
         headers: { Authorization: `Bearer ${ownerToken}` }
       })
       const body = (await res.json()) as { devices: Array<{ status: string }> }
@@ -250,27 +291,23 @@ async function main(): Promise<void> {
     await check(
       'a launch request that loses the race to a join by hand is taken back',
       async () => {
-        // A proxy in front of the daemon that completes a "manual" join while
-        // the automatic POST /api/pair is in flight.
-        const proxy = http.createServer((req, res) => {
-          if (req.method === 'POST' && req.url === '/api/pair') asOwner()
-          const upstream = http.request(
-            {
-              host: '127.0.0.1',
-              port: daemon.port,
-              path: req.url,
-              method: req.method,
-              headers: req.headers
-            },
-            (answer) => {
-              res.writeHead(answer.statusCode ?? 502, answer.headers)
-              answer.pipe(res)
-            }
-          )
-          req.pipe(upstream)
+        // A TCP pass-through in front of the daemon (the app speaks TLS end
+        // to end, so it cannot see paths) that completes a "manual" join as
+        // the third connection — the POST /api/pair, after the certificate
+        // peek and the ping — opens.
+        let connections = 0
+        const sockets: net.Socket[] = []
+        const proxy = net.createServer((client) => {
+          connections++
+          if (connections === 3) asOwner()
+          const upstream = net.connect(daemon.port, '127.0.0.1')
+          sockets.push(client, upstream)
+          client.pipe(upstream).pipe(client)
+          client.on('error', () => upstream.destroy())
+          upstream.on('error', () => client.destroy())
         })
         await new Promise<void>((resolve) => proxy.listen(0, '127.0.0.1', resolve))
-        const proxyUrl = `http://127.0.0.1:${(proxy.address() as AddressInfo).port}`
+        const proxyUrl = `https://127.0.0.1:${(proxy.address() as AddressInfo).port}`
         try {
           const before = await pendingOnServer()
           store.clearLanCacheConnection()
@@ -278,7 +315,7 @@ async function main(): Promise<void> {
           assert.equal(store.getLanCacheConnection()?.token, ownerToken, 'the manual join stands')
           assert.equal(await pendingOnServer(), before, 'and the orphan request is gone')
         } finally {
-          proxy.closeAllConnections()
+          for (const socket of sockets) socket.destroy()
           await new Promise<void>((resolve) => proxy.close(() => resolve()))
         }
       }
@@ -288,7 +325,7 @@ async function main(): Promise<void> {
       const ask = async (): Promise<string> =>
         (
           (await (
-            await fetch(`${daemon.url}/api/pair`, {
+            await daemon.fetch(`${daemon.url}/api/pair`, {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify({ deviceName: 'withdrawing' })
@@ -296,7 +333,7 @@ async function main(): Promise<void> {
           ).json()) as { token: string }
         ).token
       const withdraw = (token: string): Promise<Response> =>
-        fetch(`${daemon.url}/api/pair/withdraw`, {
+        daemon.fetch(`${daemon.url}/api/pair/withdraw`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}` }
         })
@@ -420,6 +457,71 @@ async function main(): Promise<void> {
         await lan.keepLanCacheAddressCurrent(found(daemon.url, 'someone-elses-cache')),
         'lost'
       )
+    })
+
+    await check(
+      'a server with another certificate at the stored address gets nothing',
+      async () => {
+        const impostor = await bootDaemon('r3-host.lan')
+        try {
+          asOwner()
+          store.setLanCacheConnection({ ...store.getLanCacheConnection()!, url: impostor.url })
+          // The stored address now answers with a different certificate: the
+          // handshake fails before the token is written, and the real server
+          // is found and followed instead.
+          assert.equal(await lan.keepLanCacheAddressCurrent(found()), 'moved')
+          assert.equal(store.getLanCacheConnection()?.url, daemon.url)
+          const seen = await impostor.fetch(`${impostor.url}/api/pair/status`, {
+            headers: { Authorization: `Bearer ${ownerToken}` }
+          })
+          assert.equal(seen.status, 401, 'the impostor never learned the token')
+        } finally {
+          await impostor.close()
+        }
+      }
+    )
+
+    await check('a connection from before HTTPS is pinned on its next contact', async () => {
+      // As an older app stored it: an http:// address and no fingerprint.
+      store.setLanCacheConnection({
+        url: `http://127.0.0.1:${daemon.port}`,
+        name: 'r3-host.lan',
+        token: ownerToken
+      })
+      assert.equal(await lan.keepLanCacheAddressCurrent(found()), 'current')
+      const after = store.getLanCacheConnection()
+      assert.equal(after?.url, daemon.url, 'upgraded to https')
+      assert.equal(after?.fingerprint, daemon.fingerprint, 'and pinned')
+      // It had no expiry on record, so the token was renewed in passing:
+      // the new one works and the old one no longer does.
+      assert.notEqual(after?.token, ownerToken, 'renewed')
+      assert.ok(Number(after?.tokenExpiresAt) > Date.now(), 'with an expiry')
+      const statusWith = async (token: string): Promise<number> =>
+        (
+          await daemon.fetch(`${daemon.url}/api/status`, {
+            headers: { Authorization: `Bearer ${token}` }
+          })
+        ).status
+      assert.equal(await statusWith(after!.token), 200)
+      assert.equal(await statusWith(ownerToken), 401, 'the old token stopped working')
+      ownerToken = after!.token
+    })
+
+    await check('streams go to the daemon only through the pin', async () => {
+      asOwner()
+      const target = `${daemon.url}/api/ping`
+      assert.equal((await lan.lanCacheAwareFetch(target)).status, 200, 'pinned and answered')
+      store.setLanCacheConnection({
+        ...store.getLanCacheConnection()!,
+        fingerprint: 'f'.repeat(64)
+      })
+      await assert.rejects(lan.lanCacheAwareFetch(target), /different identity/)
+      await assert.rejects(
+        lan.lanCacheAwareFetch(`http://127.0.0.1:${daemon.port}/api/ping`),
+        /without TLS/,
+        'and never in the clear'
+      )
+      asOwner()
     })
 
     await check('subnet probe: hosts come from this machine’s own private subnets', () => {

@@ -69,6 +69,7 @@ import {
   type SignedEnvelope
 } from './roomIdentity'
 import { asRoomSocket, connectHopWs, type RoomSocket } from './roomsHopClient'
+import { pinnedFetch } from './lanCacheTrust'
 import {
   decrypt,
   encrypt,
@@ -602,12 +603,18 @@ async function postToRelay<T>(url: string, body: unknown, refused: string): Prom
   }
 }
 
-async function daemonAdvertisesHop(url: string): Promise<boolean> {
+async function daemonAdvertisesHop(url: string, fingerprint: string): Promise<boolean> {
   const cached = hopCapability.get(url)
   if (cached && Date.now() - cached.at < HOP_CAPABILITY_TTL_MS) return cached.ok
   let ok = false
   try {
-    const response = await fetch(`${url}/api/ping`, { signal: AbortSignal.timeout(2000) })
+    // Pinned like every other request to the cache server: the answer
+    // decides where the room's traffic goes.
+    const response = await pinnedFetch(
+      `${url}/api/ping`,
+      { signal: AbortSignal.timeout(2000) },
+      fingerprint
+    )
     const ping = (await response.json()) as { roomsHop?: boolean }
     ok = ping.roomsHop === true
   } catch {
@@ -629,7 +636,15 @@ async function openSocket(room: RoomState): Promise<void> {
   let ws: RoomSocket | null = null
   const lan = getLanCacheConnection()
   const relayHost = new URL(room.relayUrl).host
-  if (lan && !lan.pending && (await daemonAdvertisesHop(lan.url))) {
+  // Only a pinned connection carries rooms: the hop's upgrade request holds
+  // the daemon token, and lanCache.ts pins an older connection on its next
+  // contact.
+  if (
+    lan &&
+    !lan.pending &&
+    lan.fingerprint &&
+    (await daemonAdvertisesHop(lan.url, lan.fingerprint))
+  ) {
     try {
       // The tap, handed to the terminal: a 'carry' cryptogram the
       // daemon forwards to the relay, which verifies it exactly like a
@@ -639,7 +654,7 @@ async function openSocket(room: RoomState): Promise<void> {
       const cryptogram = room.signed
         ? mintCryptogram(roomsIdentity(), 'carry', relayHost, room.roomId, nextCtr())
         : undefined
-      ws = await connectHopWs(lan.url, lan.token, {
+      ws = await connectHopWs(lan.url, lan.token, lan.fingerprint, {
         roomId: room.roomId,
         relayUrl: room.relayUrl,
         join: room.stored.joinSecret,

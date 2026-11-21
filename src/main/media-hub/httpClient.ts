@@ -89,6 +89,12 @@ export interface FetchScheduling {
    * how an empty library is spelled. A body of `null` rejects.
    */
   strictBody?: boolean
+  /**
+   * The fetch to send with. Only the cache server passes one: its requests
+   * go through the TLS connection pinned to its certificate
+   * (lanCacheTrust.pinnedFetch), never the global fetch.
+   */
+  fetchImpl?: (url: string, init: RequestInit) => Promise<Response>
 }
 
 const REQUEST_TIMEOUT_MS = 30000
@@ -129,7 +135,8 @@ export function fetchJson<T = unknown>(
         options,
         scheduling.timeoutMs,
         scheduling.maxResponseBytes,
-        scheduling.strictBody
+        scheduling.strictBody,
+        scheduling.fetchImpl
       ),
     {
       lane: scheduling.lane ?? laneForUrl(url),
@@ -153,13 +160,14 @@ async function request<T>(
   options: RequestInit,
   timeoutMs = REQUEST_TIMEOUT_MS,
   maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES,
-  strictBody = false
+  strictBody = false,
+  fetchImpl: (url: string, init: RequestInit) => Promise<Response> = fetch
 ): Promise<T> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
-    const response = await fetch(String(url), { ...options, signal: controller.signal })
+    const response = await fetchImpl(String(url), { ...options, signal: controller.signal })
     // Lenient for a failed response whatever was asked: its body is only
     // read for an error message, and the status is thrown below either way.
     const body = (await readJsonBody(

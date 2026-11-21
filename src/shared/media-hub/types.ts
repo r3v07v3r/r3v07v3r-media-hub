@@ -477,7 +477,15 @@ export type LanCacheAppEvent =
    *  device. Raised once per run. */
   | { kind: 'key-required'; serverName: string }
   | { kind: 'moved'; serverName: string; url: string }
-  | { kind: 'join-request'; id: string; deviceName: string; serverName: string }
+  | {
+      kind: 'join-request'
+      id: string
+      deviceName: string
+      serverName: string
+      /** The code the server computed for the request; the requesting
+       *  device shows its own, and the two must match. */
+      verification?: string
+    }
 
 export interface CacheSourceRef {
   source: StreamSource
