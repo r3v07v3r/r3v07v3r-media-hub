@@ -478,12 +478,32 @@ export function encryptMessage(secret: string, payload: unknown): string {
 
 // Fail-closed by design: ANY parse/decrypt/auth-tag failure returns null,
 // exactly as the original's broad try/catch does. Do not narrow this catch.
+//
+// The frame is attacker-controlled (the direct-host socket reaches this
+// before any hello), so its shape is checked before anything is decoded:
+// Buffer.from treats an object with a numeric `length` as an array, and
+// {"iv":{"length":500000000}} would otherwise allocate and loop over half a
+// gigabyte in the main process. The tag must be the full 16 bytes —
+// without authTagLength GCM accepts truncated tags down to 4 bytes.
+const GCM_IV_BYTES = 12
+const GCM_TAG_BYTES = 16
+const MAX_CIPHERTEXT_BASE64_CHARS = 128 * 1024
+
 export function decryptMessage(secret: string, raw: string): unknown {
   try {
-    const { iv, ct, tag } = JSON.parse(raw)
+    const frame: unknown = JSON.parse(raw)
+    if (!frame || typeof frame !== 'object' || Array.isArray(frame)) return null
+    const { iv, ct, tag } = frame as Record<string, unknown>
+    if (typeof iv !== 'string' || typeof ct !== 'string' || typeof tag !== 'string') return null
+    if (ct.length > MAX_CIPHERTEXT_BASE64_CHARS || iv.length > 32 || tag.length > 32) return null
+    const ivBytes = Buffer.from(iv, 'base64')
+    const tagBytes = Buffer.from(tag, 'base64')
+    if (ivBytes.length !== GCM_IV_BYTES || tagBytes.length !== GCM_TAG_BYTES) return null
     const key = deriveKey(secret)
-    const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64'))
-    decipher.setAuthTag(Buffer.from(tag, 'base64'))
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, ivBytes, {
+      authTagLength: GCM_TAG_BYTES
+    })
+    decipher.setAuthTag(tagBytes)
     const plaintext = Buffer.concat([decipher.update(Buffer.from(ct, 'base64')), decipher.final()])
     return JSON.parse(plaintext.toString('utf8'))
   } catch {
