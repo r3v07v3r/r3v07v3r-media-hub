@@ -36,6 +36,7 @@ import { fetchJson, type HttpError } from './httpClient'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import {
+  addonTorboxCandidate,
   checkcachedShortlist,
   cometConfigPath,
   declaresPreferredLanguage,
@@ -60,7 +61,7 @@ import {
 import { sanitizeTrackers } from './security'
 import { isAllowedRemoteMediaUrl } from './playback'
 import { jellyfinFingerprint } from './jellyfin'
-import { findLocalCacheCandidate } from './streamCache'
+import { findLocalCacheCandidate, isSessionToken } from './streamCache'
 import { findMediaServerCandidate, mediaServerConfig, mediaServerStreamUrl } from './mediaSources'
 import {
   findLanCacheCandidate,
@@ -252,7 +253,7 @@ async function fetchDiscoveredRaw(type: string, id: string): Promise<StreamCandi
     ),
     fetchAddonStreams(`https://torrentio.strem.fun/stream/${type}/${encodeURIComponent(id)}.json`)
   ])
-  return dedupeByInfoHash([...comet, ...torrentio])
+  return dedupeByInfoHash([...comet, ...torrentio].map(addonTorboxCandidate))
 }
 
 /**
@@ -1414,8 +1415,13 @@ async function playCandidate(
   // Tier 1: the bytes are already on this disk. No URL to build, no
   // source to contact — hand the cache session straight to the player.
   if (stream?.source === 'localcache' && stream.complete && stream.cacheToken) {
+    // The token arrives from the renderer, so it is checked here as well
+    // as inside streamCache: only the 64-hex shape a real session uses.
+    if (!isSessionToken(stream.cacheToken)) {
+      throw new Error('That downloaded copy could not be found.')
+    }
     reportPreparation('buffer', 'Playing from this computer')
-    return finishLocal(String(stream.cacheToken))
+    return finishLocal(stream.cacheToken)
   }
 
   // Tier 2: the cache daemon already fetched the file; its /stream URL

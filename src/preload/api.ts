@@ -1177,9 +1177,11 @@ export function createApi(transport: ApiTransport) {
           avatarTint?: [string, string]
           isKid?: boolean
           pin?: string | null
+          /** Required when the profile has a PIN (main enforces it). */
+          currentPin?: string
         }): Promise<ProfilePublic> => transport.invoke(MEDIA_HUB_CHANNELS.profilesUpdate, payload),
-        remove: (id: string): Promise<ProfilesListResult> =>
-          transport.invoke(MEDIA_HUB_CHANNELS.profilesDelete, { id }),
+        remove: (id: string, currentPin?: string): Promise<ProfilesListResult> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.profilesDelete, { id, currentPin }),
         verifyPin: (id: string, pin: string): Promise<ProfileVerifyPinResult> =>
           transport.invoke(MEDIA_HUB_CHANNELS.profilesVerifyPin, { id, pin })
       }

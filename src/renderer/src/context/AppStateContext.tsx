@@ -161,8 +161,9 @@ interface AppStateValue {
     name?: string
     isKid?: boolean
     pin?: string | null
+    currentPin?: string
   }) => Promise<void>
-  deleteProfile: (id: string) => Promise<void>
+  deleteProfile: (id: string, currentPin?: string) => Promise<void>
 
   // Watch Party — one shared slice so the topbar button/panel and the
   // Settings card can never disagree about whether we're in a party (see
@@ -1868,7 +1869,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   )
 
   const updateProfile = useCallback(
-    async (payload: { id: string; name?: string; isKid?: boolean; pin?: string | null }) => {
+    async (payload: {
+      id: string
+      name?: string
+      isKid?: boolean
+      pin?: string | null
+      currentPin?: string
+    }) => {
       const api = window.api?.mediaHub?.profiles
       if (!api) throw new Error("Profiles aren't available outside the desktop app.")
       await api.update(payload)
@@ -1878,10 +1885,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   )
 
   const deleteProfile = useCallback(
-    async (id: string) => {
+    async (id: string, currentPin?: string) => {
       const api = window.api?.mediaHub?.profiles
       if (!api) throw new Error("Profiles aren't available outside the desktop app.")
-      await api.remove(id)
+      await api.remove(id, currentPin)
       refreshProfiles()
     },
     [refreshProfiles]
