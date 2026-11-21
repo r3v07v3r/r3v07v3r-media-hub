@@ -3,6 +3,8 @@
 //   npx tsx daemon/main.ts        (dev)
 //   r3-cache --install            (register auto-start, once)
 //   r3-cache                      (run in this console)
+//   r3-cache --devices            (list joined devices)
+//   r3-cache --revoke <id|all>    (revoke devices; a running daemon notices)
 //
 // Zero-config by contract: run it, then claim it from the app on the same
 // network and approve whatever else asks to join. Everything else —
@@ -28,13 +30,15 @@ import { createJobStore } from './jobs'
 import { launch, type PayloadApi } from './launcher'
 import { createMdnsAnnouncer } from './mdns'
 import { createAdmin } from './admin'
-import { createPairing, deviceIdForToken, isApproved } from './pairing'
+import { createPairing, isApproved, isExpired } from './pairing'
 import { createRoomsHop } from './roomsHop'
 import { createDaemonServer, unclaimedReminder } from './server'
 import { createItemStore } from './storage'
 import { createTitleCrawler } from './titleCrawler'
 import { createTitleStore } from './titles'
+import { loadOrCreateTlsIdentity } from './tlsIdentity'
 import { createUpdater } from './updater'
+import { shortFingerprint } from '../src/shared/lancache/pairingProof'
 
 // Stamped at build time by scripts/build-daemon (esbuild --define), so a
 // released daemon carries the same version as the app release it shipped
@@ -49,6 +53,8 @@ const TITLE_CRAWL_INTERVAL_MS = 6 * 60 * 60 * 1000
 /** First crawl after boot waits this long, so a restart storm (updates,
  *  crash loops) does not hammer the upstream catalogs. */
 const TITLE_CRAWL_BOOT_DELAY_MS = 30_000
+/** How often the running daemon notices `r3-cache --revoke` edits. */
+const AUTH_RELOAD_INTERVAL_MS = 10 * 1000
 
 function log(message: string): void {
   console.log(`[r3-cache] ${new Date().toISOString()} ${message}`)
@@ -84,12 +90,15 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     // against. The tracker is built just above for this reason.
     { isStreaming: (infoHash) => activity.isStreaming(infoHash) }
   )
-  const pairing = createPairing(config.dataDir)
+  // The HTTPS identity, generated once and kept: the app pins it when it
+  // joins, so a new one means every device has to join again.
+  const tls = await loadOrCreateTlsIdentity(config.dataDir)
+  const pairing = createPairing(config.dataDir, { fingerprint: tls.fingerprint })
   const admin = createAdmin(config.dataDir)
   const credentials = createCredentials(config.dataDir)
   const jobs = createJobStore(config.dataDir)
   const titles = createTitleStore(config.dataDir)
-  await Promise.all([
+  const [authLoad] = await Promise.all([
     pairing.load(),
     admin.load(),
     credentials.load(),
@@ -97,6 +106,13 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     activity.load(),
     titles.load()
   ])
+  if (authLoad.migrated) {
+    log(`auth.json: ${authLoad.migrated} device token(s) now stored only as hashes`)
+  }
+  // A credential whose device is no longer paired (revoked at the console
+  // while the daemon was off, say) is deleted, not kept.
+  const pruned = await credentials.retainOnly(pairing.deviceIds())
+  if (pruned) log(`deleted ${pruned} TorBox key(s) of devices that are no longer paired`)
 
   // Stamp entitlement onto anything written before the fields existed.
   // Runs once — migrateEntitlement skips items that already carry a
@@ -170,7 +186,8 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     version: runningVersion,
     diskBudgetBytes: config.diskBudgetBytes,
     titles,
-    titleCrawler
+    titleCrawler,
+    tls
   })
   // Rooms use this box as their LAN hop: one relay connection per room
   // for the whole network, instead of one per device. Ciphertext only —
@@ -218,7 +235,7 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
       if (!isApproved(device)) continue
       const quota = device.quotaBytes ?? fallback
       if (typeof quota !== 'number') continue
-      quotas.set(deviceIdForToken(device.token), quota)
+      quotas.set(device.deviceId, quota)
     }
     return quotas
   }
@@ -238,6 +255,24 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
   await evict()
   const evictionTimer = setInterval(() => void evict(), EVICTION_INTERVAL_MS)
   evictionTimer.unref?.()
+
+  // Operator revocations (`r3-cache --revoke`) edit auth.json from another
+  // process; pick them up and drop the revoked devices' keys and work.
+  const authTimer = setInterval(() => {
+    void pairing
+      .reloadIfChanged()
+      .then(async (changed) => {
+        if (!changed) return
+        log('paired devices changed on disk — reloaded')
+        const kept = pairing.deviceIds()
+        await credentials.retainOnly(kept)
+        for (const job of jobs.list()) {
+          if (job.ownerDeviceId && !kept.has(job.ownerDeviceId)) jobs.cancel(job.contentKey)
+        }
+      })
+      .catch((error) => log(`auth reload: ${(error as Error).message}`))
+  }, AUTH_RELOAD_INTERVAL_MS)
+  authTimer.unref?.()
 
   // The household title crawl: shortly after boot (immediately useful on a
   // fresh install, gentle on a restart storm), then on the same six-hourly
@@ -292,7 +327,7 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     console.log('')
     console.log('  ┌──────────────────────────────────────────────┐')
     console.log(`  │  r3-cache ${runningVersion} — "${config.serverName}"`.padEnd(49) + '│')
-    console.log(`  │  port ${config.port}`.padEnd(49) + '│')
+    console.log(`  │  port ${config.port} (https)`.padEnd(49) + '│')
     console.log(
       `  │  budget ${(config.diskBudgetBytes / 1024 ** 3).toFixed(0)} GB · idle ${config.idleTtlDays}d · max ${config.hardMaxDays}d`.padEnd(
         49
@@ -301,6 +336,9 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     console.log('  │                                              │')
     console.log('  │  Devices ask to join from the app.           │')
     console.log('  │  The administrator approves them there.      │')
+    console.log('  │  Compare the verification code the joining   │')
+    console.log('  │  device shows with the one logged here.      │')
+    console.log(`  │  Server ID: ${shortFingerprint(tls.fingerprint)}`.padEnd(49) + '│')
     console.log('  └──────────────────────────────────────────────┘')
     // Below the box, not inside it: this is the path somebody needs to
     // find r3-cache.json, and a box wide enough for every path on every
@@ -340,6 +378,7 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     // skipped.
     releaseSignals()
     clearInterval(evictionTimer)
+    clearInterval(authTimer)
     clearTimeout(titleBootTimer)
     clearInterval(titleCrawlTimer)
     updater.stop()
@@ -376,6 +415,54 @@ function isMainEntry(): boolean {
   return true
 }
 
+/**
+ * `r3-cache --devices` lists paired devices; `r3-cache --revoke <id|all>`
+ * removes them — the console's answer to a lost or stolen device when the
+ * administrator's app is not to hand. Edits auth.json directly; a running
+ * daemon picks the change up within AUTH_RELOAD_INTERVAL_MS and deletes
+ * the revoked devices' TorBox keys and queued work.
+ */
+async function manageDevices(dataDir: string, argv: string[]): Promise<void> {
+  const pairing = createPairing(dataDir)
+  await pairing.load()
+  const revokeAt = argv.indexOf('--revoke')
+  if (revokeAt >= 0) {
+    const target = argv[revokeAt + 1] ?? ''
+    if (target === 'all') {
+      console.log(`Revoked ${await pairing.revokeAll()} device(s).`)
+    } else if (/^[a-f0-9]{16}$/.test(target) && (await pairing.removeDevice(target))) {
+      console.log(`Revoked ${target}.`)
+    } else {
+      console.log('Usage: r3-cache --revoke <device id|all>  (ids from r3-cache --devices)')
+      process.exitCode = 1
+      return
+    }
+    const credentials = createCredentials(dataDir)
+    await credentials.load()
+    await credentials.retainOnly(pairing.deviceIds())
+    return
+  }
+  const admin = createAdmin(dataDir)
+  await admin.load()
+  const devices = pairing.listDevices()
+  if (!devices.length) {
+    console.log('No paired devices.')
+    return
+  }
+  for (const device of devices) {
+    const state = isExpired(device)
+      ? 'expired'
+      : isApproved(device)
+        ? admin.isAdmin(device.deviceId)
+          ? 'admin'
+          : 'approved'
+        : 'pending'
+    console.log(
+      `${device.deviceId}  ${device.deviceName.padEnd(24)}  ${state.padEnd(8)}  joined ${new Date(device.createdAt).toISOString().slice(0, 10)}  expires ${new Date(device.expiresAt).toISOString().slice(0, 10)}`
+    )
+  }
+}
+
 async function entry(): Promise<void> {
   const argv = process.argv.slice(2)
   if (argv.includes('--version')) {
@@ -392,6 +479,11 @@ async function entry(): Promise<void> {
   }
 
   const config = loadConfig()
+
+  if (argv.includes('--devices') || argv.includes('--revoke')) {
+    await manageDevices(config.dataDir, argv)
+    return
+  }
 
   // Console recovery. The console stays the root of trust — not because
   // anyone should have to use it, but because on a box you physically

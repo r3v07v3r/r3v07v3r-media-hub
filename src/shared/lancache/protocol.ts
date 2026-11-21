@@ -26,16 +26,23 @@ export interface LanCachePingResponse {
    *  relay connection per room. Absent on daemons from before the hop
    *  existed, which is exactly the signal to connect direct. */
   roomsHop?: boolean
+  /** Pairing/transport contract version (shared/lancache/pairingProof.ts).
+   *  Absent on daemons from before HTTPS and pinned certificates; the app
+   *  refuses to join those. */
+  protocol?: number
 }
 
-/** What POST /api/pair answers. The request carries a device name and
- *  nothing else — there is no code any more. The token that comes back
- *  authorises NOTHING until an administrator approves it, so the app must
- *  store it and then poll GET /api/pair/status. */
+/** What POST /api/pair answers. The request carries a device name and the
+ *  app's join nonce (for the verification code) — there is no code any
+ *  more. The token that comes back authorises NOTHING until an
+ *  administrator approves it, so the app must store it and then poll GET
+ *  /api/pair/status. */
 export interface LanCachePairResponse {
   token?: string
   serverName?: string
   status?: 'approved' | 'pending'
+  /** When the daemon stops honouring the token (the app renews it first). */
+  expiresAt?: number
 }
 
 export interface LanCacheDevice {
@@ -49,6 +56,14 @@ export interface LanCacheDevice {
   quotaBytes: number | null
   isAdmin: boolean
   isYou: boolean
+  /** The six-digit code the daemon computed for this device's join. The
+   *  administrator compares it with the code the joining device shows
+   *  before approving; '' for a join made by an older app. */
+  verification?: string
+  /** The address the join request came from. */
+  source?: string
+  /** When this device's token stops working unless it is renewed. */
+  expiresAt?: number
 }
 
 /** One title this device fetched onto the cache server. Only ever the

@@ -15,8 +15,17 @@ import { createCredentials } from '../credentials'
 import { createJobStore } from '../jobs'
 import type { JobRecord } from '../jobs'
 import { createFetcher, shouldRetryAfterFailure } from '../fetcher'
-import { createPairing, deviceIdForToken, isApproved, type Pairing } from '../pairing'
+import {
+  MAX_PENDING_PER_SOURCE,
+  MAX_REQUESTS_PER_SOURCE_PER_MINUTE,
+  createPairing,
+  deviceIdForToken,
+  hashToken,
+  isApproved,
+  type Pairing
+} from '../pairing'
 import { createDaemonServer, unclaimedReminder } from '../server'
+import { joinVerificationCode } from '../../src/shared/lancache/pairingProof'
 import { createItemStore, isEntitled, planEvictions, type StoredItem } from '../storage'
 
 const DAY = 24 * 60 * 60 * 1000
@@ -464,9 +473,11 @@ async function main(): Promise<void> {
     // RATE, on its own. Each accepted request is approved immediately so
     // the queue never fills — otherwise the cap would stop the loop first
     // and this would pass with no rate limit at all.
+    // Spread over many addresses, so this is the OVERALL limit at work and
+    // not the per-source one below.
     let accepted = 0
     for (let i = 0; i < 20; i++) {
-      const requested = await pairing.requestPairing(`flood-${i}`)
+      const requested = await pairing.requestPairing(`flood-${i}`, { source: `10.9.0.${i}` })
       if (!requested) continue
       accepted++
       await pairing.setStatus(deviceIdForToken(requested), 'approved')
@@ -474,22 +485,60 @@ async function main(): Promise<void> {
     assert.ok(accepted > 0, 'a real device can still get in')
     assert.ok(accepted <= 10, `joining is rate-limited (accepted ${accepted} in a minute)`)
     assert.equal(
-      await pairing.requestPairing('one more'),
+      await pairing.requestPairing('one more', { source: '10.9.1.1' }),
       null,
       'and the refusal is a refusal, not a slower yes'
     )
+
+    // PER SOURCE: one address asking over and over spends its own minute,
+    // not the minute of somebody joining from another machine.
+    {
+      const perSource = createPairing(await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-src-')))
+      await perSource.load()
+      let fromOne = 0
+      for (let i = 0; i < 10; i++) {
+        const requested = await perSource.requestPairing(`noisy-${i}`, { source: '10.0.0.66' })
+        if (!requested) continue
+        fromOne++
+        await perSource.setStatus(deviceIdForToken(requested), 'approved')
+      }
+      assert.equal(fromOne, MAX_REQUESTS_PER_SOURCE_PER_MINUTE, 'one address is throttled alone')
+      assert.ok(
+        await perSource.requestPairing('the owner', { source: '10.0.0.5' }),
+        'another address can still ask while one is throttled'
+      )
+    }
 
     // THE QUEUE CAP, on its own, on a daemon whose minute is unspent. It is
     // the limit that actually protects the administrator: the rate limit
     // only slows a flood, this is what stops it accumulating.
     const fresh = createPairing(await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-cap-')))
     await fresh.load()
-    for (let i = 0; i < 20; i++) await fresh.requestPairing(`waiting-${i}`)
+    for (let i = 0; i < 20; i++) {
+      await fresh.requestPairing(`waiting-${i}`, { source: `10.8.0.${i}` })
+    }
     assert.equal(
       fresh.listDevices().filter((device) => !isApproved(device)).length,
       8,
       'the pending queue is capped'
     )
+    // And one address cannot take the whole queue: past its share it is
+    // refused while other addresses still get in.
+    {
+      const shared = createPairing(await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-cap-src-')))
+      await shared.load()
+      for (let i = 0; i < 5; i++)
+        await shared.requestPairing(`squatter-${i}`, { source: '10.7.0.1' })
+      assert.equal(
+        shared.listDevices().filter((device) => !isApproved(device)).length,
+        MAX_PENDING_PER_SOURCE,
+        'one address holds at most its share of the pending queue'
+      )
+      assert.ok(
+        await shared.requestPairing('a real arrival', { source: '10.7.0.2' }),
+        'the queue still has room for everyone else'
+      )
+    }
 
     // --- HTTP surface -----------------------------------------------------
     const hashC = 'c'.repeat(40)
@@ -1087,6 +1136,7 @@ async function reopenedClaimLogTest(): Promise<void> {
   const admin = createAdmin(root)
   await admin.load()
   const lines: string[] = []
+  const joinLines: string[] = []
   const build = (pairingDep: Pairing = pairing): ReturnType<typeof createDaemonServer> =>
     createDaemonServer({
       storage: createItemStore(root, {
@@ -1112,7 +1162,12 @@ async function reopenedClaimLogTest(): Promise<void> {
       serverName: 'test',
       version: '0.0.0',
       diskBudgetBytes: 10 ** 9,
-      log: (message) => lines.push(message)
+      // Every join request is logged with its verification code; this test
+      // is about the claim window's own lines, so those are set aside.
+      log: (message) => {
+        if (message.startsWith('join request:')) joinLines.push(message)
+        else lines.push(message)
+      }
     })
 
   build()
@@ -1206,6 +1261,11 @@ async function reopenedClaimLogTest(): Promise<void> {
     const later = await pair('after the window')
     assert.equal(later.status, 'pending', 'once claimed, joining waits for approval again')
     assert.equal(lines.length, 0, 'and nothing more is logged about the window')
+    assert.match(
+      joinLines.at(-1) ?? '',
+      /join request: "after the window" from .* asks to join/,
+      'the request itself is logged, for the console to see'
+    )
 
     // A claim that closes the window while a join is being approved. The
     // device was let in because the window was open, so it is still named,
@@ -1327,7 +1387,7 @@ async function approvalTests(): Promise<void> {
   )
   await pairing.load()
   assert.equal(
-    pairing.listDevices().find((d) => d.token === legacy)?.status,
+    pairing.listDevices().find((d) => d.deviceId === deviceIdForToken(legacy))?.status,
     undefined,
     'the stored device has no status at all'
   )
@@ -1567,10 +1627,7 @@ async function deviceRouteTests(): Promise<void> {
       (await act(owner.token, String(guestRow.id), { action: 'quota', quotaBytes: 1234 })).status,
       200
     )
-    assert.equal(
-      pairing.listDevices().find((d) => deviceIdForToken(d.token) === guestRow.id)?.quotaBytes,
-      1234
-    )
+    assert.equal(pairing.listDevices().find((d) => d.deviceId === guestRow.id)?.quotaBytes, 1234)
     assert.equal(
       (await act(owner.token, '0'.repeat(16), { action: 'approve' })).status,
       404,
@@ -3043,6 +3100,209 @@ async function myItemsTest(): Promise<void> {
   console.log('ok  own items listing')
 }
 
+// ---------------------------------------------------------------------------
+// Tokens (F23): stored only as hashes, expiring, renewable, revocable by the
+// device itself; and the join's verification code (F4/F10) as the daemon
+// computes and shows it.
+
+async function tokenLifecycleTest(): Promise<void> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-tokens-'))
+  const fingerprint = 'ab'.repeat(32)
+  const pairing = createPairing(root, { fingerprint })
+  await pairing.load()
+
+  // --- hashed at rest, and a plaintext auth.json is converted ------------
+  const legacy = 'c'.repeat(64)
+  await fsp.writeFile(
+    path.join(root, 'auth.json'),
+    JSON.stringify({ devices: [{ token: legacy, deviceName: 'old laptop', createdAt: 1 }] })
+  )
+  const loaded = await pairing.load()
+  assert.equal(loaded.migrated, 1, 'the plaintext record is converted')
+  const onDisk = await fsp.readFile(path.join(root, 'auth.json'), 'utf8')
+  assert.equal(onDisk.includes(legacy), false, 'and auth.json no longer holds the token')
+  assert.ok(onDisk.includes(hashToken(legacy)), 'only its hash')
+  assert.equal(pairing.isAuthorized(legacy), true, 'the converted device keeps working')
+  assert.equal(
+    pairing.deviceIdFor(legacy),
+    deviceIdForToken(legacy),
+    'under the device id everything else already knows it by'
+  )
+
+  const token = await joinApproved(pairing, 'phone')
+  assert.equal(
+    (await fsp.readFile(path.join(root, 'auth.json'), 'utf8')).includes(token),
+    false,
+    'a new token is never written either'
+  )
+
+  // --- renewal keeps the device, replaces the token ------------------------
+  const id = pairing.deviceIdFor(token)
+  const renewed = await pairing.renew(token)
+  assert.ok(renewed, 'a valid token renews')
+  assert.equal(pairing.isAuthorized(token), false, 'the old token stops working at once')
+  assert.equal(pairing.isAuthorized(renewed!.token), true)
+  assert.equal(pairing.deviceIdFor(renewed!.token), id, 'still the same device')
+  assert.equal(await pairing.renew(token), null, 'a spent token cannot renew')
+
+  // --- expiry ------------------------------------------------------------
+  {
+    const shortRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-expiry-'))
+    const brief = createPairing(shortRoot, { tokenLifetimeMs: 50 })
+    await brief.load()
+    const fleeting = await joinApproved(brief, 'brief')
+    assert.equal(brief.isAuthorized(fleeting), true)
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    assert.equal(brief.isAuthorized(fleeting), false, 'an expired token is refused')
+    assert.equal(brief.findByToken(fleeting), null, 'and is not even a pending device')
+    assert.equal(await brief.renew(fleeting), null, 'nor can it be renewed')
+    await fsp.rm(shortRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  }
+
+  // --- the console revokes; a running daemon notices -------------------------
+  {
+    const elsewhere = createPairing(root)
+    await elsewhere.load()
+    assert.equal(await pairing.reloadIfChanged(), false, 'nothing changed yet')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(await elsewhere.removeDevice(deviceIdForToken(legacy)), true)
+    assert.equal(await pairing.reloadIfChanged(), true, 'the edit is picked up')
+    assert.equal(pairing.isAuthorized(legacy), false, 'and the revoked token is refused')
+  }
+
+  // --- over HTTP: renew, leave, verification codes ------------------------------
+  const jobs = createJobStore(root)
+  const credentials = createCredentials(root)
+  const admin = createAdmin(root)
+  await admin.load()
+  const server = createDaemonServer({
+    storage: createItemStore(root, {
+      idleTtlMs: DAY,
+      hardMaxMs: 30 * DAY,
+      budgetBytes: 10 ** 9,
+      tombstoneMs: DAY
+    }),
+    jobs,
+    pairing,
+    admin,
+    credentials,
+    activity: createActivityTracker(root),
+    updaterStatus: () => ({
+      channel: 'preview',
+      enabled: true,
+      checkedAt: 0,
+      latestSeen: '',
+      staged: '',
+      stagedAt: 0,
+      lastError: ''
+    }),
+    serverName: 'test',
+    version: '0.0.0',
+    diskBudgetBytes: 10 ** 9,
+    log: () => {}
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+  const call = (route: string, bearer: string, init: RequestInit = {}): Promise<Response> =>
+    fetch(`${base}${route}`, {
+      ...init,
+      headers: { ...(init.headers ?? {}), Authorization: `Bearer ${bearer}` }
+    })
+
+  try {
+    const ping = (await (await fetch(`${base}/api/ping`)).json()) as { protocol?: number }
+    assert.ok(Number(ping.protocol) >= 2, 'ping says which pairing contract it speaks')
+
+    // The owner claims; a member joins with a nonce, as the app does.
+    const owner = renewed!.token
+    assert.equal((await call('/api/admin/claim', owner, { method: 'POST' })).status, 200)
+    const clientNonce = 'd'.repeat(64)
+    const joined = (await (
+      await fetch(`${base}/api/pair`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ deviceName: 'member', clientNonce })
+      })
+    ).json()) as { token: string; status: string; expiresAt: number }
+    assert.equal(joined.status, 'pending')
+    assert.ok(joined.expiresAt > Date.now(), 'the join says when its token expires')
+    const listed = (await (await call('/api/admin/devices', owner)).json()) as {
+      devices: Array<{ id: string; verification: string; source: string; status: string }>
+    }
+    const row = listed.devices.find((device) => device.status === 'pending')
+    assert.equal(
+      row?.verification,
+      joinVerificationCode(fingerprint, joined.token, clientNonce),
+      'the administrator sees the code the joining app computes from the same certificate'
+    )
+    assert.notEqual(
+      row?.verification,
+      joinVerificationCode('ef'.repeat(32), joined.token, clientNonce),
+      'and a different certificate (somebody in between) gives a different code'
+    )
+    assert.ok(row?.source, 'and where the request came from')
+    assert.equal(
+      (
+        await call(`/api/admin/devices/${row!.id}`, owner, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ action: 'approve' })
+        })
+      ).status,
+      200
+    )
+
+    // Renewal over the wire.
+    const renewAnswer = await call('/api/token/renew', joined.token, { method: 'POST' })
+    assert.equal(renewAnswer.status, 200)
+    const fresh = (await renewAnswer.json()) as { token: string; expiresAt: number }
+    assert.equal((await call('/api/status', joined.token)).status, 401, 'old token refused')
+    assert.equal((await call('/api/status', fresh.token)).status, 200, 'new token works')
+    assert.equal(
+      (await call('/api/token/renew', 'f'.repeat(64), { method: 'POST' })).status,
+      401,
+      'a stranger renews nothing'
+    )
+
+    // Leaving revokes: the token stops working and the key and queued work
+    // go with it.
+    await call('/api/credentials', fresh.token, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ torboxToken: 'member-key' })
+    })
+    const memberId = pairing.deviceIdFor(fresh.token)
+    assert.equal(credentials.tokenForDevice(memberId), 'member-key')
+    jobs.enqueue({
+      contentKey: 'tt-leave::',
+      infoHash: 'e'.repeat(40),
+      title: 'Left Behind',
+      ownerDeviceId: memberId
+    })
+    assert.equal((await call('/api/devices/self', fresh.token, { method: 'DELETE' })).status, 200)
+    assert.equal((await call('/api/status', fresh.token)).status, 401, 'revoked at once')
+    assert.equal(credentials.tokenForDevice(memberId), '', 'its TorBox key is gone')
+    assert.equal(
+      jobs.list().some((job) => job.contentKey === 'tt-leave::' && job.state === 'queued'),
+      false,
+      'and its queued work is cancelled'
+    )
+
+    // The administrator cannot strand the server by leaving.
+    assert.equal((await call('/api/devices/self', owner, { method: 'DELETE' })).status, 409)
+    assert.equal((await call('/api/status', owner)).status, 200, 'and still works')
+
+    // retainOnly: a key whose device is gone is dropped (the CLI path).
+    await credentials.setTokenForDevice('0123456789abcdef', 'orphan-key')
+    assert.equal(await credentials.retainOnly(pairing.deviceIds()), 1)
+    assert.equal(credentials.tokenForDevice('0123456789abcdef'), '')
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  }
+  console.log('ok  tokens: hashed, expiring, renewable, revocable; verification codes')
+}
+
 void main()
   .then(() => {
     console.log('ok  r3-cache daemon core')
@@ -3061,3 +3321,4 @@ void main()
   .then(jobOwnershipTest)
   .then(sharingRouteTest)
   .then(myItemsTest)
+  .then(tokenLifecycleTest)

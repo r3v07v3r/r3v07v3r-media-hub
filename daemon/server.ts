@@ -1,11 +1,20 @@
 // The daemon's HTTP surface: a small JSON API for the paired app, and a
 // Range-capable /stream endpoint for the player.
 //
+// Transport: HTTPS only in production, with the daemon's own self-signed
+// certificate (tlsIdentity.ts). The app pins that certificate the first
+// time it joins (and the join's verification code lets the administrator
+// confirm nothing sat in between), so the bearer token, the /stream token,
+// the rooms hop and any shared TorBox key only ever travel inside TLS to
+// this daemon. main.ts always passes `tls`; only tests construct the server
+// without it.
+//
 // Auth model, in one place:
 //  - /api/ping is unauthenticated by design — discovery needs an identity
 //    check before pairing exists, and it exposes nothing but name/version.
-//  - /api/pair is unauthenticated but throttled (see pairing.ts).
-//  - every other /api route requires a paired bearer token.
+//  - /api/pair is unauthenticated but throttled per source and overall
+//    (see pairing.ts).
+//  - every other /api route requires a paired, unexpired bearer token.
 //  - /stream takes the token as a query parameter, because the consumer is
 //    mpv, which cannot send a header — the exact pattern the app already
 //    uses for Jellyfin's api_key, and the reason the URL must never be
@@ -17,12 +26,19 @@
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import http, { type IncomingMessage, type ServerResponse } from 'node:http'
+import https from 'node:https'
+
+import {
+  LANCACHE_PROTOCOL_VERSION,
+  formatVerificationCode
+} from '../src/shared/lancache/pairingProof'
 
 import type { ActivityTracker } from './activity'
 import type { Credentials } from './credentials'
 import type { ApplyNowResult, UpdaterStatus } from './updater'
 import { heldIsSameFile, sameFile, type JobStore, type JobRecord } from './jobs'
 import { deviceIdForToken, isApproved, type Pairing } from './pairing'
+import type { TlsIdentity } from './tlsIdentity'
 import type { Admin } from './admin'
 import { isEntitled, type ItemStore } from './storage'
 import type { TitleStore } from './titles'
@@ -65,6 +81,9 @@ interface ServerDeps {
    *  to find in the log. Optional so existing callers construct unchanged;
    *  left out, it writes the same line format the daemon's own log uses. */
   log?: (message: string) => void
+  /** The daemon's certificate. main.ts always passes it, so the daemon
+   *  never serves plain http; left out only by tests of the API itself. */
+  tls?: TlsIdentity
 }
 
 function defaultLog(message: string): void {
@@ -202,7 +221,7 @@ async function serveFile(
   })
 }
 
-export function createDaemonServer(deps: ServerDeps): http.Server {
+export function createDaemonServer(deps: ServerDeps): http.Server | https.Server {
   const { storage, jobs, pairing, credentials, activity, serverName, version, admin } = deps
   const log = deps.log ?? defaultLog
 
@@ -224,12 +243,15 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
     )
   }
 
-  return http.createServer((req, res) => {
+  const listener = (req: IncomingMessage, res: ServerResponse): void => {
     void handle(req, res).catch((error) => {
       if (!res.headersSent) json(res, 500, { error: (error as Error).message })
       else res.destroy()
     })
-  })
+  }
+  return deps.tls
+    ? https.createServer({ key: deps.tls.key, cert: deps.tls.cert }, listener)
+    : http.createServer(listener)
 
   /** Claimable although somebody already administers this server: the
    *  state --claim-admin leaves behind, as opposed to a fresh install. */
@@ -242,6 +264,20 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
   function effectiveDefaultQuota(): number | null {
     const percent = admin.defaultQuotaPercent()
     return percent > 0 ? Math.floor((deps.diskBudgetBytes * percent) / 100) : null
+  }
+
+  /** What forgetting a device has to mean besides the pairing record: its
+   *  TorBox key goes, and so does the work being done on its behalf (see
+   *  the admin revoke route for why both). */
+  async function withdrawDeviceState(deviceId: string): Promise<void> {
+    await credentials.setTokenForDevice(deviceId, '')
+    for (const job of jobs.list()) {
+      if (job.ownerDeviceId === deviceId) jobs.cancel(job.contentKey)
+    }
+  }
+
+  async function forgetDevice(deviceId: string): Promise<void> {
+    if (await pairing.removeDevice(deviceId)) await withdrawDeviceState(deviceId)
   }
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -262,7 +298,10 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         unclaimed: admin.isUnclaimed(),
         // The app checks this before routing room subscriptions through
         // the LAN instead of straight to the relay.
-        roomsHop: true
+        roomsHop: true,
+        // HTTPS, pinned certificate, hashed expiring tokens, verification
+        // codes. The app refuses to join a daemon that reports less.
+        protocol: LANCACHE_PROTOCOL_VERSION
       })
       return
     }
@@ -322,7 +361,9 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       //
       // The device NAME is what the administrator sees in the approval
       // list, so an unnamed request is one nobody can sensibly say yes to.
-      const token = await pairing.requestPairing(deviceName)
+      const clientNonce = String(body.clientNonce ?? '')
+      const source = req.socket.remoteAddress ?? ''
+      const token = await pairing.requestPairing(deviceName, { source, clientNonce })
       if (!token) {
         // Throttled, or too many devices already waiting. 429 rather than
         // 403: nothing was refused about this device, it was refused about
@@ -348,6 +389,18 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       // would otherwise leave a device the window let in out of the log.
       const inReopenedWindow = reopenedForClaim()
       if (autoApprove) await pairing.setStatus(deviceIdForToken(token), 'approved')
+      const requested = pairing.findByToken(token)
+      // Said in the log with the verification code, so somebody at the
+      // console (or reading the log of a headless box) can compare it with
+      // the code the joining device shows, as the administrator does in the
+      // app. The name is quoted because it is whatever the device sent.
+      log(
+        `join request: ${JSON.stringify(requested?.deviceName ?? deviceName.slice(0, 64))} from ${source || 'an unknown address'} ` +
+          (autoApprove ? 'joined' : 'asks to join') +
+          (requested?.verification
+            ? ` — verification code ${formatVerificationCode(requested.verification)}`
+            : ' (no verification code: an older app)')
+      )
       // Every device the reopened window lets in is named in the log, so an
       // administrator recovering the box can see who joined while it was
       // open. The name is the one pairing stored, which is what the device
@@ -364,7 +417,8 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       json(res, 200, {
         token,
         serverName,
-        status: autoApprove ? 'approved' : 'pending'
+        status: autoApprove ? 'approved' : 'pending',
+        expiresAt: requested?.expiresAt ?? 0
       })
       return
     }
@@ -405,7 +459,7 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         json(res, 409, { error: 'This device has already been let in.' })
         return
       }
-      await pairing.removeDevice(deviceIdForToken(device.token))
+      await pairing.removeDevice(device.deviceId)
       json(res, 200, { withdrawn: true })
       return
     }
@@ -480,6 +534,44 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
     // Which household member is asking — the key credentials and job
     // ownership are scoped by. Every authenticated route has one.
     const callerDeviceId = pairing.deviceIdFor(callerToken)
+    const isAdminCaller = admin.isAdmin(callerDeviceId)
+
+    // TOKEN RENEWAL. Tokens expire (pairing.ts), and the app swaps its token
+    // for a fresh one while it is in use, so only an abandoned device ever
+    // reaches the expiry. The old token stops working at once.
+    if (route === 'POST /api/token/renew') {
+      const renewed = await pairing.renew(callerToken)
+      if (!renewed) {
+        json(res, 401, { error: 'Pair with this cache server first.' })
+        return
+      }
+      json(res, 200, renewed)
+      return
+    }
+
+    // LEAVING. The app's Leave used to clear only the TorBox key and then
+    // forget its token locally, so the daemon kept honouring that token for
+    // ever. Now the device revokes itself: the token stops working, and its
+    // key and the work being done for it go with it, exactly as when the
+    // administrator removes it.
+    //
+    // The administrator cannot leave this way, for the same reason the
+    // admin route refuses to remove the caller's own device: it would leave
+    // the server administered by a device that no longer exists, which only
+    // the console can recover.
+    if (route === 'DELETE /api/devices/self') {
+      if (isAdminCaller) {
+        json(res, 409, {
+          error:
+            'This device administers the cache server, so it cannot leave it. Hand the role over first.',
+          recovery: 'Run the daemon with --claim-admin at its console to reopen claiming.'
+        })
+        return
+      }
+      await forgetDevice(callerDeviceId)
+      json(res, 200, { ok: true })
+      return
+    }
 
     // --- admin: the cache server's own administration ----------------------
     //
@@ -492,7 +584,6 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
     // it, so this is not a security boundary — but building the capability
     // into the product would make 'the admin can browse your library' a
     // feature rather than a property of owning the hardware.
-    const isAdminCaller = admin.isAdmin(callerDeviceId)
 
     if (route === 'GET /api/admin/devices') {
       if (!isAdminCaller) {
@@ -503,14 +594,20 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         // Tokens never leave pairing.ts. Everything here is addressed by the
         // device id, which is a hash of the token and safe to show.
         devices: pairing.listDevices().map((device) => ({
-          id: deviceIdForToken(device.token),
+          id: device.deviceId,
           deviceName: device.deviceName,
           createdAt: device.createdAt,
           status: isApproved(device) ? 'approved' : 'pending',
           approvedAt: device.approvedAt ?? 0,
           quotaBytes: device.quotaBytes ?? null,
-          isAdmin: admin.isAdmin(deviceIdForToken(device.token)),
-          isYou: deviceIdForToken(device.token) === callerDeviceId
+          isAdmin: admin.isAdmin(device.deviceId),
+          isYou: device.deviceId === callerDeviceId,
+          // What the administrator compares with the code the joining
+          // device shows before approving it. Not a secret: it proves
+          // nothing to anyone who was not part of that join.
+          verification: device.verification ?? '',
+          source: device.source ?? '',
+          expiresAt: device.expiresAt
         })),
         openJoin: admin.openJoin(),
         defaultQuotaPercent: admin.defaultQuotaPercent(),
@@ -579,6 +676,7 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         case 'deny':
         case 'revoke':
           ok = await pairing.removeDevice(targetId)
+          if (ok) await withdrawDeviceState(targetId)
           // AND its TorBox token, AND the work being done on its behalf, in
           // the same act. Forgetting a device has to mean forgetting what it
           // lent us and what we were doing for it.
@@ -608,12 +706,6 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
           // that deserves its own design rather than being a side effect of
           // revoking access — the whole-disk budget still bounds them in the
           // meantime.
-          if (ok) {
-            await credentials.setTokenForDevice(targetId, '')
-            for (const job of jobs.list()) {
-              if (job.ownerDeviceId === targetId) jobs.cancel(job.contentKey)
-            }
-          }
           break
         case 'quota': {
           const raw = body.quotaBytes
@@ -989,7 +1081,7 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         .reduce((sum, candidate) => sum + candidate.presentBytes, 0)
       const callerDevice = pairing
         .listDevices()
-        .find((device) => deviceIdForToken(device.token) === callerDeviceId)
+        .find((device) => device.deviceId === callerDeviceId)
 
       // JOBS ARE SCOPED, and this is a deliberate departure from the plan,
       // which said jobs would gain an owner name.
@@ -1018,7 +1110,7 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       // hardware. It is still a real disclosure, and it is confined to the
       // one person who already decides who may join at all.
       const deviceNames = new Map(
-        pairing.listDevices().map((device) => [deviceIdForToken(device.token), device.deviceName])
+        pairing.listDevices().map((device) => [device.deviceId, device.deviceName])
       )
       const visibleJobs = isAdminCaller ? allJobs : mine
       json(res, 200, {
