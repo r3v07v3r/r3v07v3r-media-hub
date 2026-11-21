@@ -2070,11 +2070,36 @@ export interface RoomsStatus {
 export type RoomMessage =
   // "Let me watch with you." Sent to someone who is watching but has no
   // party open, since a solo watcher has no code to hand out until asked.
-  | { type: 'friend-join-request'; fromFriendId: string; toFriendId: string; fromName: string }
-  // The answer, carrying a party the requester can actually join.
-  | { type: 'friend-join-offer'; fromFriendId: string; toFriendId: string; partyCode: string }
-  // Politely declining — they stopped watching, or hosting failed.
-  | { type: 'friend-join-declined'; fromFriendId: string; toFriendId: string; reason: string }
+  //
+  // `requestId` is assigned by main when a request is sent and must be
+  // echoed by the answer; main drops any offer/decline that does not match
+  // a request this device made (see main/media-hub/friendJoin.ts), and
+  // refuses to send one that does not answer a request it received.
+  | {
+      type: 'friend-join-request'
+      fromFriendId: string
+      toFriendId: string
+      fromName: string
+      requestId?: string
+    }
+  // The answer, carrying a party the requester can actually join. Only ever
+  // sent after the asked user accepted, and only joined after the asking
+  // user confirms.
+  | {
+      type: 'friend-join-offer'
+      fromFriendId: string
+      toFriendId: string
+      partyCode: string
+      requestId?: string
+    }
+  // Politely declining — they said no, stopped watching, or hosting failed.
+  | {
+      type: 'friend-join-declined'
+      fromFriendId: string
+      toFriendId: string
+      reason: string
+      requestId?: string
+    }
 
 /** A peer message as delivered to the renderer: the room it arrived on
  *  rides along so the reply goes back through the same room. */

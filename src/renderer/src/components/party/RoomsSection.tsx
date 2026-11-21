@@ -17,6 +17,9 @@ import styles from './RoomsSection.module.css'
 // generous for a round trip but short enough that giving up doesn't feel
 // like waiting on a hang.
 const JOIN_REQUEST_TIMEOUT_MS = 20_000
+/** How long the "they said yes — join?" prompt stays up. Letting it lapse
+ *  joins nothing. */
+const JOIN_OFFER_PROMPT_MS = 20_000
 
 /** "34 min in" — friendlier than a timestamp for a position someone else
  *  is at, and deliberately coarse: it updates on their announce interval,
@@ -83,23 +86,58 @@ export function RoomsSection() {
     return api.onEvent(setStatus)
   }, [])
 
+  // Read by the answer handler below without re-subscribing on every change.
+  const awaitingRef = useRef<string | null>(null)
+  useEffect(() => {
+    awaitingRef.current = awaiting
+  }, [awaiting])
+  const statusRef = useRef<RoomsStatus | null>(null)
+  useEffect(() => {
+    statusRef.current = status
+  }, [status])
+
   // The other half of joining a SOLO watcher: we asked, they spun up a
   // party on demand, and this is the answer coming back.
+  //
+  // Main only delivers an answer that matches a request this device sent to
+  // that member through that room (see main/media-hub/friendJoin.ts); it is
+  // checked again here against the request still showing as pending, so an
+  // answer that lands after the user cancelled or gave up is ignored. Even
+  // then nothing is joined until the user confirms — the code names
+  // whatever host and relay the other side chose.
   useEffect(() => {
     const api = window.api?.mediaHub?.rooms
     if (!api) return
-    return api.onMessage(({ message }) => {
-      if (message.type === 'friend-join-offer') {
-        clearAwaitingTimeout()
-        setAwaiting(null)
-        joinParty(message.partyCode, mediaHubSettings?.partyDisplayName || 'A friend').catch(() => {
-          pushNotification({ tone: 'error', message: 'Could not join that watch party.' })
-        })
-      } else if (message.type === 'friend-join-declined') {
-        clearAwaitingTimeout()
-        setAwaiting(null)
+    return api.onMessage(({ roomId, message }) => {
+      if (message.type !== 'friend-join-offer' && message.type !== 'friend-join-declined') return
+      const key = `${roomId}:${message.fromFriendId}`
+      if (!awaitingRef.current || awaitingRef.current !== key) return
+      clearAwaitingTimeout()
+      setAwaiting(null)
+      if (message.type === 'friend-join-declined') {
         pushNotification({ tone: 'warning', message: message.reason })
+        return
       }
+      const partyCode = message.partyCode
+      const name =
+        statusRef.current?.rooms
+          .find((room) => room.roomId === roomId)
+          ?.members.find((member) => member.friendId === message.fromFriendId)?.name ||
+        'Your room member'
+      pushNotification({
+        tone: 'info',
+        message: `${name} said yes — join their watch party?`,
+        durationMs: JOIN_OFFER_PROMPT_MS,
+        action: {
+          label: 'Join',
+          run: () => {
+            joinParty(partyCode, mediaHubSettings?.partyDisplayName || 'A friend').catch(() => {
+              pushNotification({ tone: 'error', message: 'Could not join that watch party.' })
+            })
+          }
+        },
+        secondaryAction: { label: 'Not now', run: () => {} }
+      })
     })
   }, [joinParty, mediaHubSettings, pushNotification, clearAwaitingTimeout])
 

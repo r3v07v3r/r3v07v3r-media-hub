@@ -90,18 +90,20 @@ assert.match(
   /next\.role === 'host' && next\.inviteCode\) \{\n\s*setInvite\(\{ code: next\.inviteCode, hostId: next\.selfId \?\? '' \}\)/
 )
 
-// A Rooms join request makes the receiver host a party with no prompt, so
-// it is honoured only in a room the receiver shares its watching with. Main
-// declines it there and never forwards it to the window that would host.
-// Read from the source, as above: rooms.ts needs Electron and sockets.
+// A Rooms join request can make the receiver host a party, so it is
+// passed on only in a room the receiver shares its watching with — and
+// with sharing off it is dropped with NO reply (a decline would tell the
+// asker this member is there but not sharing). The consent tracker makes
+// that call (see friendJoin.ts and tests/partyAuthority.test.ts); this pins
+// that rooms.ts consults it, with the room's sharing switch, before
+// anything is forwarded to the window that would host. Read from the
+// source, as above: rooms.ts needs Electron and sockets.
 const rooms = source('src/main/media-hub/rooms.ts')
-const joinGate = rooms.indexOf("msg.type === 'friend-join-request' && !room.stored.sharing")
+const joinGate = rooms.indexOf('joinTrackerFor(room).acceptIncoming(')
 const forward = rooms.indexOf('sendToRenderer(MEDIA_HUB_CHANNELS.roomsMessage, inbound)')
-assert.ok(joinGate > 0 && joinGate < forward, 'the sharing check comes before the forward')
-assert.match(
-  rooms.slice(joinGate, forward),
-  /sendRoomPayload\(room, \{\s*type: 'friend-join-declined',[\s\S]*?\}\)\s*return\s*\}/
-)
+assert.ok(joinGate > 0 && joinGate < forward, 'the consent check comes before the forward')
+assert.match(rooms.slice(joinGate, forward), /sharing: room\.stored\.sharing/)
+assert.doesNotMatch(rooms.slice(joinGate, forward), /friend-join-declined'/)
 
 // The shared queue and its play-request are gone. Older builds may still
 // send suggest/vote/play-request or broadcast queue-sync; they are dropped
