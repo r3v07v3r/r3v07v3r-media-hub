@@ -10,7 +10,12 @@
 import { computeWantedList } from '../../shared/lancache/wantedList'
 import { animeEpisodeStreamAddress } from './animeSeasons'
 import { getDatabase } from './dbState'
-import { isLanCacheConnected, lanCacheCatalog, queueLanCacheJob } from './lanCache'
+import {
+  isLanCacheConnected,
+  lanCacheCatalog,
+  queueLanCacheJob,
+  renewLanCacheTokenIfDue
+} from './lanCache'
 import { logError } from './logger'
 import { sanitizeTrackers } from './security'
 import { discoverBestPrefetchCandidate } from './torbox'
@@ -22,6 +27,8 @@ const MAX_NEW_JOBS_PER_PASS = 3
 /** One feeder pass. Registered as a recurring background job. */
 export async function runLanCacheFeeder(): Promise<void> {
   if (!isLanCacheConnected()) return
+  // The feeder is the one regular caller, so it keeps the token fresh.
+  await renewLanCacheTokenIfDue()
   const db = getDatabase()
   const wanted = computeWantedList(db.tracked(), db.history(), animeEpisodeStreamAddress)
   if (!wanted.length) return

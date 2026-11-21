@@ -34,11 +34,19 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
+import { peekLanCacheFingerprint, pinnedFetch } from '../../src/main/media-hub/lanCacheTrust'
+
 /** Not the default 8945: a developer's own daemon is very likely already
  *  on that port, and a test that silently talks to it would be both
  *  wrong and destructive. */
 const PORT = Number(process.env.R3_E2E_PORT || 8946)
-const BASE = `http://127.0.0.1:${PORT}`
+const BASE = `https://127.0.0.1:${PORT}`
+
+/** The daemon's certificate, learned when it comes up and pinned for every
+ *  request after, as the app does. */
+let fingerprint = ''
+const fetch = (url: string, init: RequestInit = {}): Promise<Response> =>
+  pinnedFetch(url, init, fingerprint)
 
 let passed = 0
 const failures: string[] = []
@@ -97,6 +105,7 @@ async function startDaemon(): Promise<void> {
   daemon.stderr?.on('data', (chunk: Buffer) => log.push(String(chunk)))
   for (let attempt = 0; attempt < 100; attempt++) {
     try {
+      fingerprint = await peekLanCacheFingerprint(BASE)
       await fetch(`${BASE}/api/ping`)
       return
     } catch {

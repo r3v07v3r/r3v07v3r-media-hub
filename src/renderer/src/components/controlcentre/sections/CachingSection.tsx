@@ -84,10 +84,15 @@ export function CachingSection() {
   const [daemons, setDaemons] = useState<DiscoveredDaemon[]>([])
   const [discovering, setDiscovering] = useState(false)
   const [url, setUrl] = useState('')
-  // Starts ticked: the server fetches each person's requests with their own
-  // TorBox key and never anyone else's, so without it the server can only
-  // share files it already has. Still a choice, and unticking it is kept.
-  const [shareTorbox, setShareTorbox] = useState(true)
+  // Starts UNticked. The server fetches each person's requests with their
+  // own TorBox key and never anyone else's, so without it the server can
+  // only share files it already has — but the key is a credential for a
+  // paid account, and it goes to a server only when the person says so.
+  const [shareTorbox, setShareTorbox] = useState(false)
+  // This device's verification code while its request waits, and the
+  // pinned server's ID, so the person can check them against the server.
+  const [verification, setVerification] = useState('')
+  const [serverId, setServerId] = useState('')
   // No TorBox key on this computer: there is nothing to save on the cache,
   // so the consent is not offered and the join does not ask for it. Empty
   // until readiness has loaded, so the ticked default is not overridden
@@ -206,6 +211,8 @@ export function CachingSection() {
       setDaemons(found.daemons)
       setPairedUrl(found.paired)
       setPairState(pair.state)
+      setVerification(pair.verification ?? '')
+      setServerId(pair.serverId ?? '')
       if (pair.state === 'approved') {
         await refreshStatus()
         await refreshMyItems()
@@ -229,6 +236,8 @@ export function CachingSection() {
         const pair = await api.pairStatus()
         setPairState(pair.state)
         setPairedUrl(pair.state === 'none' ? null : (pair.url ?? null))
+        setVerification(pair.verification ?? '')
+        setServerId(pair.serverId ?? '')
         if (pair.state === 'approved') await Promise.all([refreshStatus(), refreshMyItems()])
       })()
     })
@@ -353,6 +362,8 @@ export function CachingSection() {
       setMessage({ ok: result.ok, text: result.message })
       if (!result.ok) return
       setPairState(result.pending ? 'pending' : 'approved')
+      setVerification(result.verification ?? '')
+      setServerId(result.serverId ?? '')
       const found = await api.discover()
       setPairedUrl(found.paired)
       if (!result.pending) await refreshStatus()
@@ -555,6 +566,17 @@ export function CachingSection() {
               that server approves it there — nothing else is needed here, and this will notice when
               it happens.
             </p>
+            {verification && (
+              <p className={styles.note}>
+                Verification code{' '}
+                <strong>
+                  {verification.slice(0, 3)} {verification.slice(3)}
+                </strong>
+                . The administrator sees a code beside this request; if the two differ, something on
+                your network is in between — cancel and do not approve it.
+                {serverId && ` Server ID ${serverId}.`}
+              </p>
+            )}
           </div>
           <button
             type="button"
@@ -600,7 +622,7 @@ export function CachingSection() {
             <input
               className={styles.fieldInput}
               type="text"
-              placeholder="http://192.168.1.20:8945"
+              placeholder="https://192.168.1.20:8945"
               value={url}
               onChange={(event) => setUrl(event.target.value)}
             />
@@ -743,7 +765,13 @@ export function CachingSection() {
                     <li key={device.id} className={`${styles.deviceRow} ${styles.devicePending}`}>
                       <span className={styles.deviceText}>
                         <span className={styles.deviceName}>{device.deviceName}</span>
-                        <span className={styles.deviceMeta}>Asking to join</span>
+                        <span className={styles.deviceMeta}>
+                          Asking to join
+                          {device.source ? ` from ${device.source}` : ''}
+                          {device.verification
+                            ? ` · code ${device.verification.slice(0, 3)} ${device.verification.slice(3)} — approve only if that device shows the same`
+                            : ' · no verification code (an older app)'}
+                        </span>
                       </span>
                       <button
                         type="button"

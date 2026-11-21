@@ -193,6 +193,15 @@ export interface MediaHubRawSettings {
   lanCacheUrl?: string
   lanCacheName?: string
   lanCacheToken?: string
+  /** SHA-256 of the daemon's TLS certificate, pinned when this device
+   *  joined. Absent on a connection made before the daemon spoke HTTPS;
+   *  lanCache.ts pins such a connection on its next contact. */
+  lanCacheFingerprint?: string
+  /** When the daemon stops honouring lanCacheToken (renewed in use). */
+  lanCacheTokenExpiresAt?: number
+  /** The verification code this device computed when it asked to join,
+   *  shown while it waits so the administrator can compare it. */
+  lanCacheVerification?: string
   /** Set to false, and only ever to false, when the person pressed Leave.
    *  Absent means the app may find a cache server on its own network at
    *  launch and ask to join it. Without the flag Leave would undo itself on
@@ -516,6 +525,13 @@ export interface LanCacheConnection {
    * to the cache (syncTorBoxKeyToLanCache) while this stays set.
    */
   shareTorbox?: boolean
+  /** The pinned certificate fingerprint every request is checked against.
+   *  Absent only on a connection stored before the daemon spoke HTTPS. */
+  fingerprint?: string
+  /** When the token expires unless renewed; 0 when unknown. */
+  tokenExpiresAt?: number
+  /** This device's verification code for its join request. */
+  verification?: string
 }
 
 /** The paired cache daemon, or undefined. Unlike the TorBox token this is
@@ -530,7 +546,16 @@ export function getLanCacheConnection(): LanCacheConnection | undefined {
     name: String(settings.lanCacheName || ''),
     token,
     ...(settings.lanCachePending === true ? { pending: true } : {}),
-    ...(settings.lanCacheShareTorbox === true ? { shareTorbox: true } : {})
+    ...(settings.lanCacheShareTorbox === true ? { shareTorbox: true } : {}),
+    ...(/^[a-f0-9]{64}$/.test(String(settings.lanCacheFingerprint ?? ''))
+      ? { fingerprint: String(settings.lanCacheFingerprint) }
+      : {}),
+    ...(Number(settings.lanCacheTokenExpiresAt) > 0
+      ? { tokenExpiresAt: Number(settings.lanCacheTokenExpiresAt) }
+      : {}),
+    ...(/^\d{6}$/.test(String(settings.lanCacheVerification ?? ''))
+      ? { verification: String(settings.lanCacheVerification) }
+      : {})
   }
 }
 
@@ -545,6 +570,12 @@ export function setLanCacheConnection(connection: LanCacheConnection): void {
   else delete settings.lanCachePending
   if (connection.shareTorbox) settings.lanCacheShareTorbox = true
   else delete settings.lanCacheShareTorbox
+  if (connection.fingerprint) settings.lanCacheFingerprint = connection.fingerprint
+  else delete settings.lanCacheFingerprint
+  if (connection.tokenExpiresAt) settings.lanCacheTokenExpiresAt = connection.tokenExpiresAt
+  else delete settings.lanCacheTokenExpiresAt
+  if (connection.verification) settings.lanCacheVerification = connection.verification
+  else delete settings.lanCacheVerification
   writeSettings(settings)
 }
 
@@ -567,6 +598,9 @@ export function clearLanCacheConnection(): void {
   delete settings.lanCacheToken
   delete settings.lanCachePending
   delete settings.lanCacheShareTorbox
+  delete settings.lanCacheFingerprint
+  delete settings.lanCacheTokenExpiresAt
+  delete settings.lanCacheVerification
   delete settings.lanCacheKeySyncPending
   writeSettings(settings)
 }

@@ -5,8 +5,15 @@
  * mDNS discovery crossing actual network hardware, pairing, and byte
  * serving with Range.
  *
- *   LANCACHE_URL=http://192.168.88.237:8945 \
+ *   LANCACHE_URL=https://192.168.88.237:8945 \
  *   npx tsx scripts/verify-lancache.ts
+ *
+ * The daemon speaks HTTPS with a self-signed certificate. The script
+ * learns it on first contact (printing its short Server ID, which the
+ * daemon's banner shows too) and pins it for every later request, as the
+ * app does; LANCACHE_FINGERPRINT pins a known certificate instead. A join
+ * prints its verification code, to compare with the one shown beside the
+ * request in the administrator's app.
  *
  * THERE IS NO PAIRING CODE ANY MORE. It was removed once devices gained
  * an approval flow: this asks to join under its own name and then waits,
@@ -25,9 +32,25 @@
 import { assertPlayableUrl } from '../src/main/media-hub/mpv'
 import { clearTrustedMediaHosts, setTrustedMediaHosts } from '../src/main/media-hub/playback'
 import { discoverLanCaches } from '../src/main/media-hub/lanCacheDiscovery'
+import {
+  normalizeLanCacheUrl,
+  peekLanCacheFingerprint,
+  pinnedFetch
+} from '../src/main/media-hub/lanCacheTrust'
+import {
+  formatVerificationCode,
+  joinVerificationCode,
+  newNonce,
+  shortFingerprint
+} from '../src/shared/lancache/pairingProof'
 
-const baseUrl = (process.env.LANCACHE_URL ?? '').replace(/\/+$/, '')
+const baseUrl = process.env.LANCACHE_URL ? normalizeLanCacheUrl(process.env.LANCACHE_URL) : ''
 let token = process.env.LANCACHE_TOKEN ?? ''
+let fingerprint = (process.env.LANCACHE_FINGERPRINT ?? '').toLowerCase()
+
+/** Every request to the daemon goes through the pinned certificate. */
+const fetch = (url: string, init: RequestInit = {}): Promise<Response> =>
+  pinnedFetch(url, init, fingerprint)
 
 /** The content key of the optional hand-placed fixture. */
 const SEED_KEY = 'tt-seed::'
@@ -68,10 +91,24 @@ async function main(): Promise<void> {
 
   // --- 2. identity -------------------------------------------------------
   try {
+    const seen = await peekLanCacheFingerprint(baseUrl)
+    if (fingerprint && seen !== fingerprint) {
+      fail('the daemon presented a different certificate than LANCACHE_FINGERPRINT')
+      process.exitCode = 1
+      return
+    }
+    fingerprint = seen
+    pass(`certificate pinned, Server ID ${shortFingerprint(fingerprint)}`)
     const ping = (await (await fetch(`${baseUrl}/api/ping`)).json()) as {
       product?: string
       serverName?: string
       version?: string
+      protocol?: number
+    }
+    if (ping.product === 'r3-cache' && !(Number(ping.protocol) >= 2)) {
+      fail('an older r3-cache without HTTPS pairing (protocol 2): update the daemon')
+      process.exitCode = 1
+      return
     }
     if (ping.product === 'r3-cache') {
       pass(`identified: ${ping.serverName} v${ping.version}`)
@@ -97,10 +134,11 @@ async function main(): Promise<void> {
   // immediately and authorises nothing until an administrator approves
   // this device, so the wait below is the flow working, not a hang.
   if (!token) {
+    const clientNonce = newNonce()
     const paired = await fetch(`${baseUrl}/api/pair`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ deviceName: 'verify-lancache harness' })
+      body: JSON.stringify({ deviceName: 'verify-lancache harness', clientNonce })
     })
     if (paired.status !== 200) {
       fail(`pairing refused (${paired.status}) — throttled, or too many devices waiting`)
@@ -109,13 +147,16 @@ async function main(): Promise<void> {
     }
     const result = (await paired.json()) as { token: string; status: string }
     token = result.token
+    const code = joinVerificationCode(fingerprint, token, clientNonce)
+    if (code) console.log(`  note  verification code ${formatVerificationCode(code)}`)
     if (result.status === 'approved') {
       // Either the server is unclaimed, or its administrator has turned
       // on "anyone on this network may join".
       pass('joined without waiting — this server is unclaimed or open')
     } else {
       console.log('\n  Waiting for approval. In the app, open Control Centre → Caching and')
-      console.log('  approve "verify-lancache harness". Two minutes, then this gives up.\n')
+      console.log('  approve "verify-lancache harness" if it shows the code above.')
+      console.log('  Two minutes, then this gives up.\n')
       const deadline = Date.now() + 120_000
       let approved = false
       while (Date.now() < deadline && !approved) {

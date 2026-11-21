@@ -1372,7 +1372,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         }
         pushNotification({
           tone: 'info',
-          message: `${event.deviceName} on your network wants to use ${event.serverName}. Allow it?`,
+          message: event.verification
+            ? `${event.deviceName} on your network wants to use ${event.serverName}. Allow it only if that device shows the code ${event.verification.slice(0, 3)} ${event.verification.slice(3)}.`
+            : `${event.deviceName} on your network wants to use ${event.serverName}. Allow it?`,
           action: { label: 'Allow', run: () => answer('approve') },
           secondaryAction: { label: 'Deny', run: () => answer('deny') }
         })

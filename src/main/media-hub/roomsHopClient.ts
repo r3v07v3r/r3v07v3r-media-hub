@@ -17,6 +17,8 @@
 import { EventEmitter } from 'node:events'
 import WebSocket from 'ws'
 
+import { pinnedAgent } from './lanCacheTrust'
+
 /** What rooms.ts needs from a socket — satisfied by both the relay
  *  WebSocket and the hop adapter, which is the whole point. */
 export interface RoomSocket {
@@ -120,6 +122,10 @@ class HopSocket extends EventEmitter implements RoomSocket {
 export function connectHopWs(
   daemonUrl: string,
   daemonToken: string,
+  /** The daemon certificate this device pinned when it joined. The
+   *  upgrade request carries the daemon token, so it is only ever written
+   *  to a connection that presented this certificate. */
+  daemonFingerprint: string,
   sub: {
     roomId: string
     relayUrl: string
@@ -132,8 +138,22 @@ export function connectHopWs(
   }
 ): Promise<RoomSocket> {
   return new Promise((resolve, reject) => {
+    if (!/^https:\/\//i.test(daemonUrl)) {
+      reject(new Error('Refusing to reach the cache server without TLS.'))
+      return
+    }
+    let agent: ReturnType<typeof pinnedAgent>
+    try {
+      agent = pinnedAgent(daemonFingerprint)
+    } catch (error) {
+      reject(error)
+      return
+    }
     const ws = new WebSocket(
-      `${daemonUrl.replace(/^http/, 'ws')}/api/rooms/hop?token=${encodeURIComponent(daemonToken)}`
+      `${daemonUrl.replace(/^https/i, 'wss')}/api/rooms/hop?token=${encodeURIComponent(daemonToken)}`,
+      // Pinned, not CA-verified: the daemon's certificate is self-signed
+      // and the pin is the check (lanCacheTrust.pinnedAgent).
+      { agent }
     )
     const timer = setTimeout(() => {
       ws.terminate()

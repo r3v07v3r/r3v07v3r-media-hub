@@ -1,8 +1,10 @@
 // Each person's TorBox key on the LAN cache, and the claim window, from the
 // app's side (lanCache.ts), driven against a REAL daemon server booted in
 // this process from daemon/server.ts. What is pinned:
-//   - a join the app makes by itself saves this device's key on the cache,
-//     and the joining toast says so;
+//   - a join the app makes by itself NEVER sends this device's key (it is
+//     a join to whatever answered, with nobody comparing codes), and the
+//     joining toast says the key is not saved; a join by hand with the
+//     consent ticked saves it, and says so;
 //   - a join by hand with the consent unticked saves nothing, and a later
 //     key change is not pushed either;
 //   - with consent, a changed key replaces the saved one and a removed key
@@ -33,6 +35,8 @@ import { createJobStore } from '../daemon/jobs'
 import { createPairing, deviceIdForToken } from '../daemon/pairing'
 import { createDaemonServer } from '../daemon/server'
 import { createItemStore } from '../daemon/storage'
+import { createSelfSignedIdentity } from '../daemon/tlsIdentity'
+import { pinnedFetch } from '../src/main/media-hub/lanCacheTrust'
 
 process.env.R3_USER_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-lan-keypush-'))
 process.env.R3_ELECTRON_SHIM = '1'
@@ -93,7 +97,14 @@ async function main(): Promise<void> {
 
   // --- the daemon -----------------------------------------------------------
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-keypush-daemon-'))
-  const pairing = createPairing(root)
+  const tls = createSelfSignedIdentity()
+  // Every device here asks from 127.0.0.1; daemon.test.ts covers the
+  // per-source limits.
+  const pairing = createPairing(root, {
+    fingerprint: tls.fingerprint,
+    perSourcePerMinute: 1000,
+    pendingPerSource: 1000
+  })
   await pairing.load()
   const admin = createAdmin(root)
   await admin.load()
@@ -122,11 +133,14 @@ async function main(): Promise<void> {
     serverName: 'r3-host.lan',
     version: '0.0.0',
     diskBudgetBytes: 10 ** 9,
-    log: () => {}
+    log: () => {},
+    tls
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as AddressInfo).port
-  const url = `http://127.0.0.1:${port}`
+  const url = `https://127.0.0.1:${port}`
+  const fetch = (target: string, init: RequestInit = {}): Promise<Response> =>
+    pinnedFetch(target, init, tls.fingerprint)
   const found = async (): Promise<
     Array<{ name: string; host: string; port: number; url: string }>
   > => [{ name: 'r3-host-lan', host: '127.0.0.1', port, url }]
@@ -151,14 +165,23 @@ async function main(): Promise<void> {
   }
 
   try {
-    await check('a join the app makes by itself saves the key, and says so', async () => {
+    await check('a join the app makes by itself never sends the key', async () => {
       setAppKey('app-torbox-key-1')
       store.clearLanCacheConnection()
       events.length = 0
       assert.equal(await lan.runLanCacheAutoConnect(found), 'joined')
-      assert.equal(savedKey(), 'app-torbox-key-1', 'the cache holds this device key')
+      assert.equal(savedKey(), '', 'the cache holds no key for this device')
+      assert.equal(store.getLanCacheConnection()?.shareTorbox, undefined, 'no consent assumed')
       const joined = events.find((event) => event.kind === 'joined')
-      assert.equal(joined?.keySaved, true, 'and the joining toast is told')
+      assert.equal(joined?.keySaved, false, 'and the joining toast says so')
+    })
+
+    await check('a join by hand with the consent ticked saves the key, and says so', async () => {
+      store.clearLanCacheConnection()
+      const result = await lan.askToJoin(url, { shareTorboxToken: true })
+      assert.equal(result.ok, true)
+      assert.equal(result.keySaved, true)
+      assert.equal(savedKey(), 'app-torbox-key-1', 'the cache holds this device key')
     })
 
     await check(
@@ -175,13 +198,13 @@ async function main(): Promise<void> {
 
     await check('a key change made while the server is away is sent when it answers', async () => {
       const live = store.getLanCacheConnection()!
-      assert.equal(live.shareTorbox, true, 'the auto-join consent is remembered')
+      assert.equal(live.shareTorbox, true, 'the consent is remembered')
       // The server is away: the same connection at an address nobody answers.
       const probe = http.createServer()
       await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve))
       const deadPort = (probe.address() as AddressInfo).port
       await new Promise<void>((resolve) => probe.close(() => resolve()))
-      store.setLanCacheConnection({ ...live, url: `http://127.0.0.1:${deadPort}` })
+      store.setLanCacheConnection({ ...live, url: `https://127.0.0.1:${deadPort}` })
 
       setAppKey('app-torbox-key-away')
       assert.equal(await lan.syncTorBoxKeyToLanCache(), false)
@@ -194,7 +217,7 @@ async function main(): Promise<void> {
       assert.equal(store.isLanCacheKeySyncPending(), false, 'and is no longer pending')
 
       // A removal while away is a change too: the cache ends up with no key.
-      store.setLanCacheConnection({ ...live, url: `http://127.0.0.1:${deadPort}` })
+      store.setLanCacheConnection({ ...live, url: `https://127.0.0.1:${deadPort}` })
       setAppKey('')
       await lan.syncTorBoxKeyToLanCache()
       assert.equal(store.isLanCacheKeySyncPending(), true)
@@ -290,7 +313,13 @@ async function main(): Promise<void> {
         const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame }
         const invoke = (channel: string): Promise<unknown> =>
           ipcMain.dispatchInvoke(event, channel, [undefined])
-        store.setLanCacheConnection({ url, name: 'r3-host.lan', token: ownerToken })
+        store.setLanCacheConnection({
+          url,
+          name: 'r3-host.lan',
+          token: ownerToken,
+          fingerprint: tls.fingerprint,
+          tokenExpiresAt: Date.now() + 80 * 24 * 60 * 60 * 1000
+        })
 
         await admin.reopen()
         assert.equal(admin.isUnclaimed(), true)
