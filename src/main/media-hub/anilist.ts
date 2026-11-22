@@ -42,6 +42,7 @@ import { fetchJson } from './httpClient'
 import type { TaskPriority } from './taskScheduler'
 import { logError } from './logger'
 import { getDatabase } from './dbState'
+import { kitsuMappings } from './kitsuReads'
 import type { AiringSchedule } from '../../shared/media-hub/upcomingEpisodes'
 
 const ANILIST_ENDPOINT = 'https://graphql.anilist.co'
@@ -82,7 +83,7 @@ const NO_ANILIST_ID = -1
  * than costing a second live request.
  */
 export function anilistIdFromKitsuMappings(mappings: {
-  data?: { attributes?: { externalSite?: string; externalId?: string } }[]
+  data?: { attributes?: { externalSite?: string; externalId?: string | number } }[]
 }): number | null {
   const entry = (mappings.data || []).find((x) => x.attributes?.externalSite === 'anilist/anime')
   const id = Number(entry?.attributes?.externalId)
@@ -251,7 +252,7 @@ export function cachedAnilistId(kitsuId: string): number | null {
  *  cachedAnilistId can read it back with no additional request. */
 export function cacheAnilistIdFromMappings(
   kitsuId: string,
-  mappings: { data?: { attributes?: { externalSite?: string; externalId?: string } }[] }
+  mappings: { data?: { attributes?: { externalSite?: string; externalId?: string | number } }[] }
 ): void {
   const id = anilistIdFromKitsuMappings(mappings)
   getDatabase().putCache(`kitsu:anilist:${kitsuId}`, id ?? NO_ANILIST_ID, RELATIONS_TTL_MS)
@@ -271,13 +272,7 @@ export async function anilistIdForKitsu(
   const known = getDatabase().getCache<number>(`kitsu:anilist:${kitsuId}`)
   if (known !== null) return known > 0 ? known : null
   try {
-    const result = await fetchJson<{
-      data?: { attributes?: { externalSite?: string; externalId?: string } }[]
-    }>(
-      `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuId)}/mappings`,
-      {},
-      { priority, label: 'anime franchise mapping' }
-    )
+    const result = await kitsuMappings(kitsuId, priority)
     cacheAnilistIdFromMappings(kitsuId, result)
     return cachedAnilistId(kitsuId)
   } catch (error) {

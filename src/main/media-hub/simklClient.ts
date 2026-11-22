@@ -368,6 +368,7 @@ export async function simklRequest<T = unknown>(
   await refreshSimklIfDue()
   const { clientId, accessToken } = simklCredentials()
   if (!clientId || !accessToken) throw new Error('Simkl is not connected.')
+  if (accessToken === rejectedToken) throw rejectedTokenError()
   try {
     return await sendSimkl<T>(pathname, clientId, accessToken, options, priority, scheduling)
   } catch (error) {
@@ -375,9 +376,36 @@ export async function simklRequest<T = unknown>(
     if (status === 429 && (retryAfterMs ?? 0) >= DAILY_LIMIT_MIN_WAIT_MS) {
       throw dailyLimitError(noteDailyLimit(retryAfterMs ?? 0))
     }
+    if (status === 401 && simklCredentials().accessToken === accessToken) {
+      rejectedToken = accessToken
+      logError('simkl:token-rejected', error)
+    }
     throw error
   }
 }
+
+// ---------------------------------------------------------------------
+// A token Simkl has refused (401: revoked, expired, or issued to another
+// app ID) refuses every request after it. Sending on spent one round trip
+// per caller per pass — 33 watchlist pulls and hundreds of id lookups in a
+// week for one dead sign-in — and every one of them still failed. Held in
+// memory against the token itself: a refresh or a new sign-in is a
+// different token and goes straight out, and a restart tries once more.
+let rejectedToken: string | null = null
+
+function rejectedTokenError(): HttpError {
+  const error = new Error(
+    'Simkl refused the saved sign-in. Reconnect Simkl in the Control Centre.'
+  ) as HttpError
+  error.status = 401
+  return error
+}
+
+// App IDs registered on Simkl's OAuth 2.0 scheme (the built-in one among
+// them) refuse every request without a user token, the lookup endpoints
+// included: `user_token_required`. Learned from the first refusal, per ID,
+// so a legacy ID somebody saved keeps its free, sign-in-less lookups.
+const tokenRequiredIds = new Set<string>()
 
 function sendSimkl<T>(
   pathname: string,
@@ -475,17 +503,34 @@ export async function simklPublicRequest<T = unknown>(
   // Cinemeta (see catalog.ts's catalog:search) — so the message must not
   // claim it does. What still needs a Client ID is resolving a Simkl id.
   if (!clientId) throw new Error('Add a Simkl Client ID in Settings to look titles up on Simkl.')
-  return fetchJson<T>(
-    simklUrl(pathname, clientId),
-    {
-      ...options,
-      headers: {
-        'User-Agent': `r3v07v3r-media-hub/${app.getVersion()}`,
-        ...options.headers
-      }
-    },
-    { priority, label }
-  )
+  // An ID that needs a user token goes out signed in, with the daily
+  // allowance and the refused-token rules of every signed-in call — or not
+  // at all: without a sign-in its answer is known before asking.
+  if (tokenRequiredIds.has(clientId)) {
+    if (!simklCredentials().accessToken) {
+      throw new Error('Connect Simkl to look titles up on Simkl.')
+    }
+    return simklRequest<T>(pathname, options, priority)
+  }
+  try {
+    return await fetchJson<T>(
+      simklUrl(pathname, clientId),
+      {
+        ...options,
+        headers: {
+          'User-Agent': `r3v07v3r-media-hub/${app.getVersion()}`,
+          ...options.headers
+        }
+      },
+      { priority, label }
+    )
+  } catch (error) {
+    const { status, message } = error as HttpError
+    if (status !== 401 || message !== 'user_token_required') throw error
+    tokenRequiredIds.add(clientId)
+    if (!simklCredentials().accessToken) throw error
+    return simklRequest<T>(pathname, options, priority)
+  }
 }
 
 // v2 stamps the payload with WHOSE history it is (see CachedWatchedHistory).

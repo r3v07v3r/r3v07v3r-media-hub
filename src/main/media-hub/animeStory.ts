@@ -23,7 +23,7 @@ import {
   type RawApiPayload
 } from './core'
 import { getDatabase } from './dbState'
-import { fetchJson } from './httpClient'
+import { kitsuRelationships } from './kitsuReads'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { isValidCatalogKind } from './security'
@@ -55,11 +55,7 @@ export async function storyForAnime(
     const kitsuId = String(id)
       .replace(/^kitsu:/, '')
       .split(':')[0]
-    const payload = await fetchJson<RawApiPayload>(
-      `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuId)}/media-relationships?include=destination&page%5Blimit%5D=20`,
-      {},
-      { priority }
-    )
+    const payload = await kitsuRelationships<RawApiPayload>(kitsuId, priority)
     const links = animeStoryLinks(payload)
     const items = await withAnilistArtwork(
       links.map((link) => link.item),

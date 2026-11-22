@@ -28,7 +28,7 @@ import { fetchJson, type HttpError } from './httpClient'
 import { logError } from './logger'
 import { getDatabase } from './dbState'
 import { handle } from './ipcGuard'
-import type { RawApiPayload } from './core'
+import { kitsuMappings, mappedId } from './kitsuReads'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type { SkipInterval, SkipTimes } from '../../shared/media-hub/types'
 
@@ -41,13 +41,7 @@ async function kitsuMalId(kitsuId: string): Promise<number | null> {
   if (cached !== null) return cached > 0 ? cached : null
 
   try {
-    const result = await fetchJson<RawApiPayload>(
-      `https://kitsu.io/api/edge/anime/${encodeURIComponent(bareId)}/mappings`
-    )
-    const entry = (result.data || []).find(
-      (x: RawApiPayload) => x.attributes?.externalSite === 'myanimelist/anime'
-    )
-    const id = Number(entry?.attributes?.externalId)
+    const id = Number(mappedId(await kitsuMappings(bareId), 'myanimelist/anime'))
     const value = Number.isInteger(id) && id > 0 ? id : -1
     db.putCache(key, value, 30 * 24 * 60 * 60 * 1000)
     return value > 0 ? value : null

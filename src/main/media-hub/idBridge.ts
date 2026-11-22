@@ -21,6 +21,7 @@
 // the same endpoint malSync.ts used exclusively before this module existed.
 
 import { fetchJson } from './httpClient'
+import { kitsuMappings, mappedId } from './kitsuReads'
 import { logError } from './logger'
 import { getDatabase } from './dbState'
 import { simklPublicRequest } from './simklClient'
@@ -51,10 +52,6 @@ function numericKitsuId(id: string | number): string {
   return String(id).replace(/^kitsu:/, '')
 }
 
-interface KitsuMappingsResponse {
-  data?: Array<{ attributes?: { externalSite?: string; externalId?: string | number } }>
-}
-
 /**
  * Kitsu's own kitsu-id -> mal-id bridge (ported from malSync.ts's original
  * resolveMalIdForKitsu), used only as a fallback for whatever Simkl's
@@ -66,13 +63,8 @@ async function malIdFromKitsuMappings(
   numericId: string
 ): Promise<{ answered: boolean; malId: number }> {
   try {
-    const result = await fetchJson<KitsuMappingsResponse>(
-      `https://kitsu.io/api/edge/anime/${encodeURIComponent(numericId)}/mappings`
-    )
-    const match = (result.data || []).find(
-      (m) => m.attributes?.externalSite === 'myanimelist/anime'
-    )
-    return { answered: true, malId: match ? Number(match.attributes?.externalId) || 0 : 0 }
+    const result = await kitsuMappings(numericId, 'background')
+    return { answered: true, malId: Number(mappedId(result, 'myanimelist/anime')) || 0 }
   } catch (error) {
     logError('idbridge:kitsu-mappings', error)
     return { answered: false, malId: 0 }
@@ -80,18 +72,31 @@ async function malIdFromKitsuMappings(
 }
 
 interface KitsuMappingResponse {
-  data?: Array<{ id?: string | number }>
+  data?: Array<{ relationships?: { item?: { data?: { id?: string | number; type?: string } } } }>
 }
 
-/** Inverse of malIdFromKitsuMappings (ported from malSync.ts's original resolveKitsuIdForMal). Same `answered` distinction, for the same reason. */
+/**
+ * Inverse of malIdFromKitsuMappings (ported from malSync.ts's original
+ * resolveKitsuIdForMal). Same `answered` distinction, for the same reason.
+ *
+ * Asks the mappings collection, not the anime one: Kitsu dropped the
+ * anime collection's `filter[mappingExternalId]` in November 2026 and
+ * answers it with a 400, which read as "Kitsu could not be reached" and was
+ * asked again on every pass. The item's id comes back as the linkage.
+ */
 async function kitsuIdFromKitsuMapping(
   malId: number
 ): Promise<{ answered: boolean; kitsuId: number }> {
   try {
     const result = await fetchJson<KitsuMappingResponse>(
-      `https://kitsu.io/api/edge/anime?filter[mappingExternalId]=${encodeURIComponent(String(malId))}&filter[mappingExternalSite]=myanimelist/anime`
+      `https://kitsu.io/api/edge/mappings?filter%5BexternalSite%5D=myanimelist%2Fanime&filter%5BexternalId%5D=${encodeURIComponent(String(malId))}&include=item&fields%5Banime%5D=id`,
+      {},
+      { priority: 'background', label: 'anime id lookup' }
     )
-    return { answered: true, kitsuId: Number(result.data?.[0]?.id) || 0 }
+    const item = (result.data || [])
+      .map((m) => m.relationships?.item?.data)
+      .find((d) => d?.type === 'anime')
+    return { answered: true, kitsuId: Number(item?.id) || 0 }
   } catch (error) {
     logError('idbridge:kitsu-mapping', error)
     return { answered: false, kitsuId: 0 }
