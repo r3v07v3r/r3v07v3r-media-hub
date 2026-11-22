@@ -33,13 +33,14 @@
 // before, which is exactly what a fresh install sees anyway.
 
 import type { CatalogItem, MediaKind, TitleCredits } from '../../shared/media-hub/types'
-import { cachedAnilistId } from './anilist'
+import { ANILIST_AIRING_FIELDS, cachedAnilistId, rememberAiringSchedule } from './anilist'
 import type { RawApiPayload } from './core'
 import { getDatabase } from './dbState'
 import { fetchJson } from './httpClient'
 import { logError } from './logger'
 import { tmdbCredentials } from './settingsStore'
 import type { TaskPriority } from './taskScheduler'
+import { tmdbIdForImdb } from './tmdbIds'
 
 const EMPTY_CREDITS: TitleCredits = { cast: [], creators: [], keywords: [] }
 
@@ -207,32 +208,6 @@ export function matchCredits(
   return { people, labels }
 }
 
-/** Resolves an IMDb id to TMDB's own, which every other TMDB endpoint needs. Cached, since it is a fixed fact and this runs thousands of times. */
-async function tmdbIdFor(
-  kind: 'movie' | 'series',
-  imdbId: string,
-  apiKey: string,
-  priority: TaskPriority
-): Promise<number | null> {
-  const key = `tmdb:id:${kind}:${imdbId}`
-  const db = getDatabase()
-  const cached = db.getCache<number>(key)
-  if (cached !== null) return cached > 0 ? cached : null
-
-  const found = await fetchJson<RawApiPayload>(
-    `https://api.themoviedb.org/3/find/${encodeURIComponent(imdbId)}?api_key=${encodeURIComponent(apiKey)}&external_source=imdb_id`,
-    {},
-    { priority, label: 'TMDB id lookup' }
-  )
-  const results = kind === 'series' ? found.tv_results : found.movie_results
-  const id = Number(results?.[0]?.id)
-  const value = Number.isInteger(id) && id > 0 ? id : -1
-  // -1 rather than absence, so a title TMDB genuinely does not have is not
-  // re-looked-up on every enrichment pass for the next ninety days.
-  db.putCache(key, value, CREDITS_TTL_MS)
-  return value > 0 ? value : null
-}
-
 /** Cast, directors/creators and keywords for one movie or series. */
 async function tmdbCredits(
   kind: 'movie' | 'series',
@@ -242,7 +217,7 @@ async function tmdbCredits(
   const { apiKey } = tmdbCredentials()
   if (!apiKey || !/^tt\d+$/.test(imdbId)) return null
 
-  const tmdbId = await tmdbIdFor(kind, imdbId, apiKey, priority)
+  const tmdbId = await tmdbIdForImdb(kind, imdbId, apiKey, priority)
   if (!tmdbId) return EMPTY_CREDITS
 
   const path = kind === 'series' ? 'tv' : 'movie'
@@ -311,6 +286,7 @@ async function anilistCredits(
           ({ anilistId }, index) => `a${index}: Media(id: ${anilistId}, type: ANIME) {
         tags { name rank isGeneralSpoiler }
         studios(isMain: true) { nodes { name } }
+        ${ANILIST_AIRING_FIELDS}
       }`
         )
         .join('\n')}
@@ -325,11 +301,18 @@ async function anilistCredits(
         },
         { priority, label: 'AniList tags' }
       )
-      batch.forEach(({ kitsuId }, index) => {
+      batch.forEach(({ kitsuId, anilistId }, index) => {
         const node = result.data?.[`a${index}`]
         if (!node) {
           out.set(kitsuId, EMPTY_CREDITS)
           return
+        }
+        // The airing schedule came on the same request (the detail page
+        // asks for both at once on a cold open, and the background
+        // enrichment pass then leaves every title's schedule ready). Not
+        // written over a row that is still fresh.
+        if (!getDatabase().getCache(`anilist:airing:${anilistId}`)) {
+          rememberAiringSchedule(anilistId, node)
         }
         // Ranked by how strongly voters think the tag applies, and
         // spoiler tags dropped — a story-type label that gives away the

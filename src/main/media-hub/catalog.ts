@@ -41,7 +41,8 @@ import { sanitizeDaemonTitleRow } from '../../shared/lancache/titleSync'
 import { fetchJson, type FetchScheduling, type HttpError } from './httpClient'
 import { logError } from './logger'
 import { getDatabase } from './dbState'
-import { kitsuHedged, kitsuRelationships } from './kitsuReads'
+import { kitsuHedged, kitsuRelationships, seedKitsuMappings } from './kitsuReads'
+import { imdbIdForTmdb, tmdbIdForImdb } from './tmdbIds'
 import { anilistIdForKitsu } from './anilist'
 import { handle } from './ipcGuard'
 import { simklPublicRequest } from './simklClient'
@@ -443,13 +444,20 @@ async function cinemetaPages(
   )
 }
 
-/** One page (20 items) of Kitsu's most-popular-anime listing, with genre titles resolved from the included `categories` sideload. */
+/**
+ * One page (20 items) of Kitsu's most-popular-anime listing, with genre
+ * titles resolved from the included `categories` sideload. Each title's
+ * external-id mappings come on the same read and are stored for the page
+ * opens and the grouping pass that would otherwise ask for them one title
+ * at a time (see seedKitsuMappings).
+ */
 async function kitsuPage(offset: number, priority: TaskPriority): Promise<CatalogItem[]> {
   const result = await fetchJson<RawApiPayload>(
-    `https://kitsu.io/api/edge/anime?sort=-userCount&page%5Blimit%5D=20&page%5Boffset%5D=${offset}&include=categories`,
+    `https://kitsu.io/api/edge/anime?sort=-userCount&page%5Blimit%5D=20&page%5Boffset%5D=${offset}&include=categories,mappings&fields%5Bmappings%5D=externalSite,externalId`,
     {},
     { priority, label: `anime catalog +${offset}` }
   )
+  seedKitsuMappings(result)
   const categories = new Map<string, string | undefined>(
     (result.included || [])
       .filter((x: RawApiPayload) => x.type === 'categories')
@@ -1429,22 +1437,21 @@ async function tmdbSimilar(kind: 'movie' | 'series', imdbId: string): Promise<Ca
   const auth = `api_key=${encodeURIComponent(apiKey)}`
 
   try {
-    const found = await fetchJson<RawApiPayload>(
-      `https://api.themoviedb.org/3/find/${encodeURIComponent(imdbId)}?${auth}&external_source=imdb_id`
-    )
-    const results = kind === 'series' ? found.tv_results : found.movie_results
-    const sourceId = tmdbId(results?.[0]?.id)
+    const sourceId = await tmdbIdForImdb(kind, imdbId, apiKey)
     if (!sourceId) return []
 
     // Franchise siblings to subtract. Movies only — TMDB models
     // collections for films, and a tv show's "franchise" has no equivalent
     // field, so there's nothing to look up for series.
+    // The title's own record: its name and genres rank the pool below (the
+    // shared id lookup no longer hands back /find's result row), and a
+    // film's collection id comes on the same read.
+    const detail = await fetchJson<RawApiPayload>(
+      `https://api.themoviedb.org/3/${path}/${sourceId}?${auth}`
+    ).catch(() => ({}) as RawApiPayload)
     const excluded = new Set<number>([sourceId])
     if (kind === 'movie') {
       try {
-        const detail = await fetchJson<RawApiPayload>(
-          `https://api.themoviedb.org/3/movie/${sourceId}?${auth}`
-        )
         const collectionId = tmdbId(detail.belongs_to_collection?.id)
         if (collectionId) {
           const collection = await fetchJson<RawApiPayload>(
@@ -1488,7 +1495,10 @@ async function tmdbSimilar(kind: 'movie' | 'series', imdbId: string): Promise<Ca
     // no-API-key path uses, so both paths agree on what "similar" means.
     // Ranking here also means the external-id lookups below are spent on
     // the twelve titles that will actually be shown.
-    const source = results?.[0] ?? {}
+    const source: RawApiPayload = {
+      ...detail,
+      genre_ids: (detail.genres || []).map((g: RawApiPayload) => g?.id)
+    }
     const sourceTitle = String(source.title || source.name || source.original_title || '')
     const seen = new Set<string>()
     const pool: CatalogItem[] = []
@@ -1534,11 +1544,9 @@ async function tmdbSimilar(kind: 'movie' | 'series', imdbId: string): Promise<Ca
           try {
             const id = tmdbId(item.id.replace('tmdb:', ''))
             if (!id) return null
-            const external = await fetchJson<RawApiPayload>(
-              `https://api.themoviedb.org/3/${path}/${id}/external_ids?${auth}`
-            )
-            if (!external.imdb_id) return null
-            return { ...item, id: String(external.imdb_id) }
+            const imdb = await imdbIdForTmdb(kind, id, apiKey)
+            if (!imdb) return null
+            return { ...item, id: imdb }
           } catch {
             return null
           }

@@ -156,3 +156,44 @@ export function kitsuHedged<T>(url: string, priority: TaskPriority, label: strin
     }, HEDGE_AFTER_MS)
   })
 }
+
+/**
+ * Stores the mappings a listing read sideloaded (`include=mappings`), so a
+ * title the catalog crawl has already seen never needs its own /mappings
+ * read: opening it, the grouping pass's TheTVDB lookup and the AniList id
+ * all read the row written here. Only titles with no row yet are written,
+ * so the six-hourly crawl does not rewrite two thousand rows each time.
+ */
+export function seedKitsuMappings(result: {
+  data?: { id?: unknown; relationships?: { mappings?: { data?: { id?: unknown }[] } } }[]
+  included?: {
+    id?: unknown
+    type?: unknown
+    attributes?: { externalSite?: string; externalId?: string | number }
+  }[]
+}): void {
+  const byId = new Map<string, KitsuMappingsPayload['data']>()
+  for (const x of result.included || []) {
+    if (x.type !== 'mappings') continue
+    byId.set(String(x.id), [
+      {
+        attributes: {
+          externalSite: x.attributes?.externalSite,
+          externalId: x.attributes?.externalId
+        }
+      }
+    ])
+  }
+  if (!byId.size) return
+  const db = getDatabase()
+  for (const record of result.data || []) {
+    const links = record.relationships?.mappings?.data
+    // No linkage means the listing was not asked for mappings: not the same
+    // as "this title has none", so nothing is written.
+    if (!Array.isArray(links) || record.id === undefined) continue
+    const key = `kitsu:mappings:${bareId(String(record.id))}`
+    if (db.getCache<KitsuMappingsPayload>(key)) continue
+    const data = links.flatMap((link) => byId.get(String(link.id)) ?? [])
+    db.putCache(key, { data }, MAPPINGS_TTL_MS)
+  }
+}

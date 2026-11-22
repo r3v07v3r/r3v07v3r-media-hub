@@ -283,7 +283,7 @@ export async function anilistIdForKitsu(
 
 /** The airing fields this reads off one AniList Media node. `airingAt` is
  *  AniList's Unix-seconds timestamp. Exported for the parser's tests. */
-interface AnilistAiringNode {
+export interface AnilistAiringNode {
   status?: string | null
   nextAiringEpisode?: { episode?: number | null; airingAt?: number | null } | null
   airingSchedule?: {
@@ -373,18 +373,10 @@ export async function anilistAiringSchedule(
   anilistId: number,
   priority: TaskPriority
 ): Promise<AiringSchedule | null> {
-  const key = `anilist:airing:${anilistId}`
-  const db = getDatabase()
-  const cached = db.getCache<AiringSchedule>(key)
+  const cached = getDatabase().getCache<AiringSchedule>(`anilist:airing:${anilistId}`)
   if (cached) return cached
   const query = `query ($id: Int) {
-    Media(id: $id, type: ANIME) {
-      status
-      nextAiringEpisode { episode airingAt }
-      airingSchedule(notYetAired: true, perPage: ${AIRING_SCHEDULE_PAGE}) {
-        nodes { episode airingAt }
-      }
-    }
+    Media(id: $id, type: ANIME) { ${ANILIST_AIRING_FIELDS} }
   }`
   try {
     const result = await fetchJson<{ data?: { Media?: AnilistAiringNode | null } }>(
@@ -396,25 +388,46 @@ export async function anilistAiringSchedule(
       },
       { priority, label: 'AniList airing schedule' }
     )
-    const read = airingScheduleFromNode(result.data?.Media) ?? {
-      status: null,
-      nextEpisode: null,
-      airDates: {}
-    }
-    // `since`: when this status was first seen, kept from the previous row
-    // (expired or not) while the status holds, so a cancellation or hiatus
-    // stays anchored to the read that first reported it rather than to
-    // every re-read after. See AiringSchedule.since for what it decides.
-    const previous = db.getCache<AiringSchedule>(key, { allowExpired: true })
-    const since =
-      previous?.status === read.status && typeof previous.since === 'number'
-        ? previous.since
-        : Date.now()
-    const schedule: AiringSchedule = { ...read, since }
-    db.putCache(key, schedule, isSettled(schedule) ? SETTLED_TTL_MS : AIRING_TTL_MS)
-    return schedule
+    return rememberAiringSchedule(anilistId, result.data?.Media)
   } catch (error) {
     logError('anime:anilist-airing', error)
     return null
   }
+}
+
+/**
+ * The airing fields of an AniList Media node. Exported so a query already
+ * going to AniList for the same title (the credits batch asks for tags and
+ * studios) can carry them and save the schedule its own request.
+ */
+export const ANILIST_AIRING_FIELDS = `status
+      nextAiringEpisode { episode airingAt }
+      airingSchedule(notYetAired: true, perPage: ${AIRING_SCHEDULE_PAGE}) {
+        nodes { episode airingAt }
+      }`
+
+/** Caches one title's schedule read from a Media node carrying ANILIST_AIRING_FIELDS. */
+export function rememberAiringSchedule(
+  anilistId: number,
+  node: AnilistAiringNode | null | undefined
+): AiringSchedule {
+  const key = `anilist:airing:${anilistId}`
+  const db = getDatabase()
+  const read = airingScheduleFromNode(node) ?? {
+    status: null,
+    nextEpisode: null,
+    airDates: {}
+  }
+  // `since`: when this status was first seen, kept from the previous row
+  // (expired or not) while the status holds, so a cancellation or hiatus
+  // stays anchored to the read that first reported it rather than to
+  // every re-read after. See AiringSchedule.since for what it decides.
+  const previous = db.getCache<AiringSchedule>(key, { allowExpired: true })
+  const since =
+    previous?.status === read.status && typeof previous.since === 'number'
+      ? previous.since
+      : Date.now()
+  const schedule: AiringSchedule = { ...read, since }
+  db.putCache(key, schedule, isSettled(schedule) ? SETTLED_TTL_MS : AIRING_TTL_MS)
+  return schedule
 }
