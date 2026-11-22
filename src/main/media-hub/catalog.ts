@@ -41,7 +41,8 @@ import { sanitizeDaemonTitleRow } from '../../shared/lancache/titleSync'
 import { fetchJson, type FetchScheduling, type HttpError } from './httpClient'
 import { logError } from './logger'
 import { getDatabase } from './dbState'
-import { kitsuHedged, kitsuMappings, kitsuRelationships } from './kitsuReads'
+import { kitsuHedged, kitsuRelationships } from './kitsuReads'
+import { anilistIdForKitsu } from './anilist'
 import { handle } from './ipcGuard'
 import { simklPublicRequest } from './simklClient'
 import { isValidCatalogKind } from './security'
@@ -917,26 +918,31 @@ async function resolveMetadata(
     return withCredits(served, type, resolvedId, priority)
   }
 
-  // Started now, awaited where they are used. Credits need only the id,
-  // and so do the ratings and the anime's Kitsu mappings (its AniList id,
-  // which the artwork, the airing schedule and the credits all read, and
-  // its TheTVDB season for the episode list). Awaited one after another
-  // behind the record, each was a whole extra round trip on the page's
-  // wait — and Kitsu's have been taking anywhere from one second to a
-  // minute. None of them throws.
-  const creditsAhead = titleCredits(type, resolvedId, priority)
+  // Started now, awaited where they are used: none of these needs the
+  // record, and awaited one after another behind it, each was a whole
+  // extra round trip on the page's wait — Kitsu's taking anywhere from one
+  // second to a minute. None of them throws.
+  const animeKitsuId = String(resolvedId)
+    .replace(/^kitsu:/, '')
+    .split(':')[0]
+  // An anime's credits come from AniList and read its AniList id from the
+  // cache, where a missing id reads as "no credits" and is stored as such.
+  // So they wait for the Kitsu mappings read that writes the id (shared
+  // with the artwork and the airing schedule) — but not for the record.
+  const creditsAhead =
+    type === 'anime'
+      ? anilistIdForKitsu(animeKitsuId, priority)
+          .catch(() => null)
+          .then(() => titleCredits(type, resolvedId, priority))
+      : titleCredits(type, resolvedId, priority)
   const ratingAhead =
     type !== 'anime'
       ? omdbRottenTomatoesRating(String(resolvedId), priority).catch(() => undefined)
       : null
-  if (type === 'anime') kitsuMappings(resolvedId, priority).catch(() => undefined)
   // An ungrouped anime's real episode list needs its id and nothing from
   // the record, so it goes out beside it: the page then waits for one Kitsu
   // round trip where it waited for two in a row. A grouped show builds its
   // seasons below from the record instead. Never throws.
-  const animeKitsuId = String(resolvedId)
-    .replace(/^kitsu:/, '')
-    .split(':')[0]
   const episodesAhead =
     type === 'anime' && !groupedIdsFor(resolvedId)?.length
       ? kitsuRealEpisodes(animeKitsuId, String(resolvedId), priority)
