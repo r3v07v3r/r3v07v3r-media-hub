@@ -41,7 +41,7 @@ import { sanitizeDaemonTitleRow } from '../../shared/lancache/titleSync'
 import { fetchJson, type FetchScheduling, type HttpError } from './httpClient'
 import { logError } from './logger'
 import { getDatabase } from './dbState'
-import { kitsuMappings, kitsuRelationships } from './kitsuReads'
+import { kitsuHedged, kitsuMappings, kitsuRelationships } from './kitsuReads'
 import { handle } from './ipcGuard'
 import { simklPublicRequest } from './simklClient'
 import { isValidCatalogKind } from './security'
@@ -930,6 +930,17 @@ async function resolveMetadata(
       ? omdbRottenTomatoesRating(String(resolvedId), priority).catch(() => undefined)
       : null
   if (type === 'anime') kitsuMappings(resolvedId, priority).catch(() => undefined)
+  // An ungrouped anime's real episode list needs its id and nothing from
+  // the record, so it goes out beside it: the page then waits for one Kitsu
+  // round trip where it waited for two in a row. A grouped show builds its
+  // seasons below from the record instead. Never throws.
+  const animeKitsuId = String(resolvedId)
+    .replace(/^kitsu:/, '')
+    .split(':')[0]
+  const episodesAhead =
+    type === 'anime' && !groupedIdsFor(resolvedId)?.length
+      ? kitsuRealEpisodes(animeKitsuId, String(resolvedId), priority)
+      : null
 
   let item: CatalogItem
   try {
@@ -942,10 +953,10 @@ async function resolveMetadata(
       // that read is still used when it is there, so a title opened before
       // costs nothing more.
       const cachedGenres = db.getCache<string[]>(`kitsu:categories:${kitsuId}`)
-      const result = await fetchJson<RawApiPayload>(
+      const result = await kitsuHedged<RawApiPayload>(
         `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuId)}${cachedGenres ? '' : '?include=categories'}`,
-        {},
-        { priority, label: 'anime details' }
+        priority,
+        'anime details'
       )
       const genres = cachedGenres ?? kitsuIncludedGenres(kitsuId, result)
       item = await withAnilistArtworkOne(
@@ -1039,18 +1050,20 @@ async function resolveMetadata(
       logError('anime:grouped-videos', error)
       degraded = true
     }
-  } else if (type === 'anime' && item.videos.length) {
+  } else if (type === 'anime' && (item.videos.length || episodesAhead)) {
     // Ungrouped (single-season) anime: item.videos above is still
     // normalizeKitsuAnime's synthesized "Episode N" placeholder list —
     // Kitsu's own /anime/{id} record never carries real per-episode data,
     // only episodeCount. Real titles/thumbnails/synopses live on Kitsu's
     // separate /episodes sub-resource (see kitsuRealEpisodes) — try that
     // before falling back to keeping the placeholders, same as the grouped
-    // path already does per-season.
-    const kitsuId = String(resolvedId)
-      .replace(/^kitsu:/, '')
-      .split(':')[0]
-    const real = await kitsuRealEpisodes(kitsuId, item.id, priority)
+    // path already does per-season. Also when the record failed and a
+    // stand-in has no episodes at all: the list started beside it may
+    // well have come back, and is all the page needs to play.
+    const real =
+      episodesAhead && item.id === String(resolvedId)
+        ? await episodesAhead
+        : await kitsuRealEpisodes(animeKitsuId, item.id, priority)
     if (real.length) item.videos = real
   }
 

@@ -78,7 +78,7 @@ import { fetchJson } from './httpClient'
 import { mapWithLimit, type TaskPriority } from './taskScheduler'
 import { logError } from './logger'
 import { getDatabase } from './dbState'
-import { kitsuMappings, mappedId, kitsuRelationships } from './kitsuReads'
+import { kitsuHedged, kitsuMappings, mappedId, kitsuRelationships } from './kitsuReads'
 import { normalizeKitsuAnime, normalizeKitsuEpisode, type RawApiPayload } from './core'
 import { anilistTitleInfo, cacheAnilistIdFromMappings, cachedAnilistId } from './anilist'
 
@@ -374,10 +374,11 @@ async function kitsuEpisodePage(
   parentId: string,
   priority: TaskPriority
 ): Promise<{ episodes: Episode[]; total: number }> {
-  const result = await fetchJson<RawApiPayload>(
+  // Hedged (see kitsuHedged): the detail page waits on these.
+  const result = await kitsuHedged<RawApiPayload>(
     `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuId)}/episodes?page%5Blimit%5D=20&page%5Boffset%5D=${offset}&sort=number`,
-    {},
-    { priority, label: 'anime episodes' }
+    priority,
+    'anime episodes'
   )
   const episodes = (result.data || []).map((record: RawApiPayload) =>
     normalizeKitsuEpisode(record, parentId)

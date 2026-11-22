@@ -116,3 +116,43 @@ export function kitsuRelationships<T = unknown>(
   }
   return payload
 }
+
+// ---------------------------------------------------------------------
+// Kitsu's slow answers are not slow, they are stuck: timed on 22 Nov 2026
+// the same record came back in 1.5-5 s or not until the 30 s timeout (or a
+// 504 at 60), with little in between. Waiting out a stuck one cost the page
+// half a minute; asking again once the first has had a fair chance usually
+// lands in a few seconds. Whichever answers first wins; the other is left
+// to its own timeout.
+
+const HEDGE_AFTER_MS = 8000
+
+/** fetchJson for one Kitsu read the page is waiting on, re-asked once if
+ *  the first has not answered in eight seconds. */
+export function kitsuHedged<T>(url: string, priority: TaskPriority, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+    let pending = 1
+    const win = (value: T): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(value)
+    }
+    const lose = (error: unknown): void => {
+      pending--
+      // A first try that fails before the hedge is due is an answer (a 404,
+      // a refused connection): no point waiting eight seconds to repeat it.
+      if (settled || pending > 0) return
+      settled = true
+      clearTimeout(timer)
+      reject(error)
+    }
+    fetchJson<T>(url, {}, { priority, label }).then(win, lose)
+    const timer = setTimeout(() => {
+      if (settled) return
+      pending++
+      fetchJson<T>(url, {}, { priority, label: `${label} (second try)` }).then(win, lose)
+    }, HEDGE_AFTER_MS)
+  })
+}
