@@ -58,7 +58,9 @@ import {
   PlaybackPreparationCancelledError,
   playbackPreparationErrorMessage,
   runPlaybackPreparationStage,
-  type PlaybackPreparationStage
+  takeoverHeadings,
+  type PlaybackTakeoverFailure,
+  type ResolvingMedia
 } from '@renderer/lib/mediaHub/playbackPreparation'
 import {
   clearStartupSnapshot,
@@ -515,13 +517,13 @@ interface AppStateValue {
   // labels alone can't say "downloading 2.4 MB of 4 MB" or "converting
   // TRUEHD audio", and the buffering stage in particular can legitimately
   // run for a minute or more, which without this reads as a hang.
-  resolvingMedia: {
-    id: string
-    title: string
-    stage: PlaybackPreparationStage
-    detail?: string
-  } | null
+  resolvingMedia: ResolvingMedia | null
   cancelPlaybackPreparation: () => void
+  /** A title started over another that could not start — shown on the
+   *  full-window loading screen, which turns into this rather than vanishing.
+   *  Null otherwise. */
+  playbackTakeoverFailure: PlaybackTakeoverFailure | null
+  dismissPlaybackTakeoverFailure: () => void
   playbackMedia: MediaItem | null
   startPlayback: (media: MediaItem) => Promise<boolean>
   /** `watched` deletes this title's local stream cache outright on close instead of leaving it for the idle sweep — see usePlayerTracking's markedWatchedRef, which PlayerOverlayWindow reads when it asks to stop and is the only thing that should ever pass true. */
@@ -732,17 +734,21 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // 480p series does not re-ask on every autoplayed episode, not to record
   // a preference.
   const acceptedLowQuality = useRef<Set<string>>(new Set())
-  const [resolvingMedia, setResolvingMedia] = useState<{
-    id: string
-    title: string
-    stage: PlaybackPreparationStage
-    detail?: string
-  } | null>(null)
+  const [resolvingMedia, setResolvingMedia] = useState<ResolvingMedia | null>(null)
+  const [playbackTakeoverFailure, setPlaybackTakeoverFailure] =
+    useState<PlaybackTakeoverFailure | null>(null)
+  const dismissPlaybackTakeoverFailure = useCallback(() => setPlaybackTakeoverFailure(null), [])
   const playbackPreparationRef = useRef<{ generation: number; controller: AbortController } | null>(
     null
   )
   const playbackPreparationGeneration = useRef(0)
   const [playbackMedia, setPlaybackMedia] = useState<MediaItem | null>(null)
+  // Read by runPlayback to tell a title started over another (the full-window
+  // loading screen) from one started from the library (the corner card).
+  const playingForTakeoverRef = useRef<MediaItem | null>(null)
+  useEffect(() => {
+    playingForTakeoverRef.current = playbackMedia
+  }, [playbackMedia])
   const [activeMood, setActiveMood] = useState<string | null>(null)
   const [combinedMoods, setCombinedMoods] = useState<string[]>([])
   // The RAW backend rows behind categorySearch, not the MediaItems the rest
@@ -2089,6 +2095,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     // stream-cache session and mpv load behind after the UI has cancelled
     // it.
     window.api?.mediaHub?.playback.stop().catch(() => {})
+    // The stop above ends whatever is in the player, including a title the
+    // cancelled one was started over (held off screen since — see
+    // runPlayback's takeover), so nothing is playing any more.
+    setPlaybackMedia(null)
   }, [])
 
   // Main narrates the long stages as it works through them (see
@@ -2279,13 +2289,41 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       playbackPreparationRef.current = { generation, controller }
       const isCurrent = (): boolean =>
         playbackPreparationRef.current?.generation === generation && !controller.signal.aborted
+      // Started over a title that is playing: that one is put away now, not
+      // once this one's first copy opens, and the wait gets the whole window
+      // (PlaybackPreparationOverlay's takeover) with the show's page behind
+      // it. See holdPlayerForNextTitle in main for what the hold does.
+      const outgoing = playingForTakeoverRef.current
+      const takeover = outgoing !== null
+      setPlaybackTakeoverFailure(null)
+      if (takeover) {
+        void api.playback.holdForNext().catch(() => {})
+        // Behind the loading screen is the show being moved through, not
+        // whatever page it was first started from — Home, a search, a list.
+        const { location } = navigationRef.current
+        const showPath = mediaKindToDetailPath(requested)
+        if (location.pathname !== showPath) {
+          openDetail(requested, undefined, requested.seasonNumber ?? undefined)
+        }
+      }
+      const announce = (subject: MediaItem, stage: ResolvingMedia['stage']): void =>
+        setResolvingMedia({
+          id: subject.id,
+          title: subject.title,
+          stage,
+          ...(takeover ? { takeover: true, ...takeoverHeadings(subject) } : {})
+        })
+      // How a failure is said: on the loading screen when it is up (it turns
+      // into the failure instead of vanishing), as a notification otherwise.
+      let takeoverFailure: PlaybackTakeoverFailure | null = null
+      let started = false
       // Which episode "play this series" means, resolved before anything is
       // built from the coordinate. Inside the spinner rather than before it:
       // this can be a round trip for metadata and history, and a Play button
       // that sits dead for it looks broken. Idempotent — a caller that
       // already named an episode gets its own answer straight back, so the
       // party path below can resolve first and reach here for free.
-      setResolvingMedia({ id: requested.id, title: requested.title, stage: 'resolving' })
+      announce(requested, 'resolving')
       const media = await resolvePlaybackTarget(requested)
       if (!isCurrent()) return { started: false, target: requested }
       const kind = media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie')
@@ -2324,7 +2362,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           controller.signal
         )
         if (!isCurrent()) return { started: false, target: media }
-        setResolvingMedia({ id: media.id, title: media.title, stage: 'safety-checking' })
+        announce(media, 'safety-checking')
         if (!resolved.best) {
           // `queued` (see StreamResolveResult's own doc comment) means a
           // real torrent existed but nothing was cached yet, and the
@@ -2332,12 +2370,18 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // genuinely different from "nothing exists for this title
           // anywhere," and worth telling apart rather than one generic
           // failure message for both.
-          pushNotification({
-            tone: resolved.queued ? 'warning' : 'error',
-            message: resolved.queued
-              ? "This title wasn't cached yet, so TorBox has started downloading it — try again in a few minutes."
-              : 'No sources were found for this title yet — try again later.'
-          })
+          const message = resolved.queued
+            ? "This title wasn't cached yet, so TorBox has started downloading it — try again in a few minutes."
+            : 'No sources were found for this title yet — try again later.'
+          if (takeover) {
+            takeoverFailure = {
+              heading: `Couldn't start ${takeoverHeadings(media).heading.replace(/^Loading /, '')}`,
+              message,
+              retry: () => void startPlaybackRef.current(media)
+            }
+          } else {
+            pushNotification({ tone: resolved.queued ? 'warning' : 'error', message })
+          }
           return { started: false, target: media }
         }
 
@@ -2368,7 +2412,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           acceptedLowQuality.current.add(media.id)
         }
 
-        setResolvingMedia({ id: media.id, title: media.title, stage: 'buffering' })
+        announce(media, 'buffering')
         // The copies ranked after the pick go along with it: main opens them
         // in turn when the pick turns out to lack the wanted audio (see
         // torbox.ts's playWithLanguageFallback), so an episode from a
@@ -2483,8 +2527,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             void api.playback.settleLanguage().catch(() => {})
           }
         }
-        setResolvingMedia({ id: media.id, title: media.title, stage: 'starting' })
+        announce(media, 'starting')
         setPlaybackMedia(media)
+        started = true
         // The two upfront warnings that used to fire here are gone with the
         // engine, not merely relocated. `videoCodecWarning` existed because
         // video was only ever stream-copied to a <video> element, so an HEVC or
@@ -2517,25 +2562,41 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           (mediaHubSettings !== null &&
             !mediaHubSettings.torboxConnected &&
             !mediaHubSettings.mediaServerConnected)
-        pushNotification({
-          tone: 'error',
-          message,
-          key: `play-failed:${media.id}`,
-          ...(noSource
-            ? {
-                action: {
-                  label: 'Set up TorBox',
-                  run: () => openControlCentre('media-services', 'settings-torbox')
-                },
-                secondaryAction: retry
-              }
-            : { action: retry })
-        })
+        const setup = {
+          label: 'Set up TorBox',
+          run: () => openControlCentre('media-services', 'settings-torbox')
+        }
+        if (takeover) {
+          takeoverFailure = {
+            heading: `Couldn't start ${takeoverHeadings(media).heading.replace(/^Loading /, '')}`,
+            message,
+            retry: retry.run,
+            ...(noSource ? { setup } : {})
+          }
+        } else {
+          pushNotification({
+            tone: 'error',
+            message,
+            key: `play-failed:${media.id}`,
+            ...(noSource ? { action: setup, secondaryAction: retry } : { action: retry })
+          })
+        }
         return { started: false, target: media }
       } finally {
         if (playbackPreparationRef.current?.generation === generation) {
           playbackPreparationRef.current = null
           setResolvingMedia(null)
+          // Nothing started, and nothing newer has taken over: the title this
+          // one was to replace is still in the player, paused and hidden by
+          // the hold. Ended rather than brought back — its cache may already
+          // have given way to this one's, and the loading screen has said
+          // what happened. (A cancel never reaches here: it clears the slot
+          // and stops playback itself.)
+          if (takeover && !started) {
+            window.api?.mediaHub?.playback.stop().catch(() => {})
+            setPlaybackMedia((current) => (current === outgoing ? null : current))
+            if (takeoverFailure) setPlaybackTakeoverFailure(takeoverFailure)
+          }
         }
       }
     },
@@ -2545,7 +2606,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       closeContextMenu,
       cancelPlaybackPreparation,
       resolvePlaybackTarget,
-      openControlCentre
+      openControlCentre,
+      openDetail
     ]
   )
   /** The public shape: everything outside this file only wants to know
@@ -3622,6 +3684,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       clearPendingRestore,
       resolvingMedia,
       cancelPlaybackPreparation,
+      playbackTakeoverFailure,
+      dismissPlaybackTakeoverFailure,
       playbackMedia,
       startPlayback,
       stopPlayback,
@@ -3727,6 +3791,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       clearPendingRestore,
       resolvingMedia,
       cancelPlaybackPreparation,
+      playbackTakeoverFailure,
+      dismissPlaybackTakeoverFailure,
       playbackMedia,
       startPlayback,
       stopPlayback,

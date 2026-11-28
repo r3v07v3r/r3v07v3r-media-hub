@@ -36,7 +36,7 @@ import {
   nextAbLoopPoint
 } from '@shared/media-hub/player'
 import { skipWindowsFromChapters } from '@shared/media-hub/skipChapters'
-import type { NextEpisodeRef } from '@shared/media-hub/nextEpisode'
+import { upNextLeadSeconds, type NextEpisodeRef } from '@shared/media-hub/nextEpisode'
 import type { PlayerChapter, PlayerSessionMedia } from '@shared/media-hub/player'
 import { subtitleProviderName } from '@shared/media-hub/subtitleProviders'
 import type { SubtitleResult } from '@shared/media-hub/types'
@@ -93,9 +93,11 @@ const EMPTY_CHAPTERS: PlayerChapter[] = []
  *  top of this one". */
 const CHAPTER_RESTART_SECONDS = 5
 /** With no credits marked for an episode (no chapters, no Aniskip entry), the
- *  Up next card goes up this far from the end instead of on the last frame —
- *  which people who close the player as the credits roll never reach. */
-const UP_NEXT_FALLBACK_SECONDS = 60
+ *  Up next card goes up upNextLeadSeconds from the end instead of on the last
+ *  frame — which people who close the player as the credits roll never
+ *  reach. Anything shorter than this has no fallback card at all: the lead
+ *  would be a real part of the episode. */
+const UP_NEXT_FALLBACK_MIN_DURATION = 300
 /** Scrub previews are bucketed so hovering along the bar reuses frames instead
  *  of asking for one per pixel — each is a separate short-lived process. */
 const THUMBNAIL_BUCKET_SECONDS = 5
@@ -450,6 +452,13 @@ function PlayerControls() {
       ? (session?.nextUp ?? null)
       : null
   const upNextKey = upNext ? `${media?.id ?? ''}:${upNext.season}:${upNext.episode}` : null
+  // The control bar's own Next episode button answers to fewer rules than the
+  // card: a press is somebody asking for the next one, so neither the autoplay
+  // setting nor an end-of-episode sleep timer (both about the app starting it
+  // unasked) stands in the way. Only a party follower goes without — the host
+  // decides what the room watches.
+  const barNext: NextEpisodeRef | null = !party.following ? (session?.nextUp ?? null) : null
+  const barNextKey = barNext ? `${media?.id ?? ''}:${barNext.season}:${barNext.episode}` : null
 
   const autoplay: NextEpisodeRef | null =
     state.eofReached === true &&
@@ -484,7 +493,10 @@ function PlayerControls() {
   )
   // Against upNextKey, not autoplayKey: Play next can be pressed from the
   // credits, and the file may then end before the next one has opened.
-  const startingNext = upNextKey !== null && startedNextFor === upNextKey
+  // The bar's button shares the latch: both start the same episode.
+  const startingNext =
+    (upNextKey !== null && startedNextFor === upNextKey) ||
+    (barNextKey !== null && startedNextFor === barNextKey)
   const countdownCancelled = autoplayKey !== null && countdownCancelledFor === autoplayKey
 
   // One tick per second while the card is up. The last tick starts the episode
@@ -1284,8 +1296,8 @@ function PlayerControls() {
   const nearEndUnmarked =
     !currentSkipTimes?.credits &&
     state.eofReached !== true &&
-    duration > UP_NEXT_FALLBACK_SECONDS * 5 &&
-    timePos >= duration - UP_NEXT_FALLBACK_SECONDS &&
+    duration > UP_NEXT_FALLBACK_MIN_DURATION &&
+    timePos >= duration - upNextLeadSeconds(duration) &&
     upNextKey !== null &&
     upNextDismissedFor !== upNextKey
   const cardNext = autoplay ?? (creditsSkip || nearEndUnmarked ? upNext : null)
@@ -1766,6 +1778,32 @@ function PlayerControls() {
             <span className={styles.currentChapter}>
               {chapters[currentChapter]?.title || `Chapter ${currentChapter + 1}`}
             </span>
+          )}
+
+          {/* Always there on a series with a next episode, so moving on never
+              waits for the Up next card — which only knows where the credits
+              start when the file or Aniskip says so. */}
+          {barNext && barNextKey && (
+            <button
+              type="button"
+              className={`${styles.button} ${styles.nextEpisodeButton}`}
+              disabled={startingNext}
+              onClick={() => {
+                // The same rule as the card's button from the credits: moving
+                // on is having watched it, but only once most of it is behind
+                // you — a press a few minutes in is skipping, not finishing.
+                if (duration > 0 && timePos / duration >= WATCHED_FRACTION) {
+                  tracking.markWatchedNow()
+                }
+                startNext(barNext, barNextKey)
+              }}
+              title={`Next episode: S${String(barNext.season).padStart(2, '0')}E${String(
+                barNext.episode
+              ).padStart(2, '0')}${barNext.title ? ` — ${barNext.title}` : ''}`}
+            >
+              <Icon name="skip-forward" size={14} />
+              <span>{startingNext ? 'Starting…' : 'Next episode'}</span>
+            </button>
           )}
 
           <div className={styles.spacer} />

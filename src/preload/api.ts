@@ -928,6 +928,10 @@ export function createApi(transport: ApiTransport) {
          *  what is playing, fetch subtitles if it has none. */
         settleLanguage: (): Promise<{ ok: true }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.playbackLanguageSettle),
+        /** Pauses and hides the title playing because another is about to
+         *  start over it — the loading screen is what to look at now. */
+        holdForNext: (): Promise<{ ok: true }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.playbackHoldForNext),
         thumbnail: (seconds: number): Promise<string | null> =>
           transport.invoke(MEDIA_HUB_CHANNELS.playbackThumbnail, seconds),
         skipTimes: (
