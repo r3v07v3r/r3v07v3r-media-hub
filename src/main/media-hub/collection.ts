@@ -17,6 +17,7 @@ import { getDatabase } from './dbState'
 import { logError } from './logger'
 import { tmdbCredentials } from './settingsStore'
 import type { TaskPriority } from './taskScheduler'
+import { imdbIdForTmdb, tmdbIdForImdb } from './tmdbIds'
 
 /**
  * Thirty days. Which films are in a series is about as fixed as facts get —
@@ -69,13 +70,8 @@ export async function titleCollection(
 
   const auth = `api_key=${encodeURIComponent(apiKey)}`
   try {
-    const found = await fetchJson<{ movie_results?: { id?: unknown }[] }>(
-      `https://api.themoviedb.org/3/find/${encodeURIComponent(imdbId)}?${auth}&external_source=imdb_id`,
-      {},
-      { priority }
-    )
-    const sourceId = Number(found.movie_results?.[0]?.id)
-    if (!Number.isFinite(sourceId) || sourceId <= 0) {
+    const sourceId = await tmdbIdForImdb('movie', imdbId, apiKey, priority)
+    if (!sourceId) {
       // Cached empty: a film TMDB has never heard of will not be there
       // tomorrow either, and this is on a page-open path.
       db.putCache(cacheKey, EMPTY, TTL_MS)
@@ -114,12 +110,7 @@ export async function titleCollection(
             // read as an order. Its IMDb id is already known.
             let partImdb = imdbId
             if (partId !== sourceId) {
-              const external = await fetchJson<{ imdb_id?: unknown }>(
-                `https://api.themoviedb.org/3/movie/${partId}/external_ids?${auth}`,
-                {},
-                { priority }
-              )
-              partImdb = String(external.imdb_id ?? '')
+              partImdb = await imdbIdForTmdb('movie', partId, apiKey, priority)
             }
             if (!/^tt\d+$/.test(partImdb)) return null
             const poster = String(part?.poster_path ?? '')

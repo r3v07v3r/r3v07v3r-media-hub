@@ -41,6 +41,9 @@ import { sanitizeDaemonTitleRow } from '../../shared/lancache/titleSync'
 import { fetchJson, type FetchScheduling, type HttpError } from './httpClient'
 import { logError } from './logger'
 import { getDatabase } from './dbState'
+import { kitsuHedged, kitsuRelationships, seedKitsuMappings } from './kitsuReads'
+import { imdbIdForTmdb, tmdbIdForImdb } from './tmdbIds'
+import { anilistIdForKitsu } from './anilist'
 import { handle } from './ipcGuard'
 import { simklPublicRequest } from './simklClient'
 import { isValidCatalogKind } from './security'
@@ -363,21 +366,16 @@ function runAnimeGrouping(items: CatalogItem[], generation: number): void {
 // Trakt, Simkl) needs — see that module for the full doc.
 
 /** Cached (7d) Kitsu genre/category titles for one anime id. */
-async function kitsuCategories(id: string, priority: TaskPriority): Promise<string[]> {
-  const key = `kitsu:categories:${id}`
-  const db = getDatabase()
-  const cached = db.getCache<string[]>(key)
-  if (cached) return cached
-
-  const result = await fetchJson<RawApiPayload>(
-    `https://kitsu.io/api/edge/anime/${encodeURIComponent(id)}/categories?page%5Blimit%5D=20`,
-    {},
-    { priority, label: 'anime genres' }
-  )
-  const genres: string[] = (result.data || [])
-    .map((x: RawApiPayload) => x.attributes?.title)
+/**
+ * The genres a record fetched with `include=categories` carries, cached
+ * under the same row and for the same week as kitsuCategories' own read.
+ */
+function kitsuIncludedGenres(id: string, payload: RawApiPayload): string[] {
+  const genres: string[] = ((payload.included || []) as RawApiPayload[])
+    .filter((x) => x.type === 'categories')
+    .map((x) => x.attributes?.title)
     .filter(Boolean)
-  db.putCache(key, genres, 7 * 24 * 60 * 60 * 1000)
+  getDatabase().putCache(`kitsu:categories:${id}`, genres, 7 * 24 * 60 * 60 * 1000)
   return genres
 }
 
@@ -446,13 +444,20 @@ async function cinemetaPages(
   )
 }
 
-/** One page (20 items) of Kitsu's most-popular-anime listing, with genre titles resolved from the included `categories` sideload. */
+/**
+ * One page (20 items) of Kitsu's most-popular-anime listing, with genre
+ * titles resolved from the included `categories` sideload. Each title's
+ * external-id mappings come on the same read and are stored for the page
+ * opens and the grouping pass that would otherwise ask for them one title
+ * at a time (see seedKitsuMappings).
+ */
 async function kitsuPage(offset: number, priority: TaskPriority): Promise<CatalogItem[]> {
   const result = await fetchJson<RawApiPayload>(
-    `https://kitsu.io/api/edge/anime?sort=-userCount&page%5Blimit%5D=20&page%5Boffset%5D=${offset}&include=categories`,
+    `https://kitsu.io/api/edge/anime?sort=-userCount&page%5Blimit%5D=20&page%5Boffset%5D=${offset}&include=categories,mappings&fields%5Bmappings%5D=externalSite,externalId`,
     {},
     { priority, label: `anime catalog +${offset}` }
   )
+  seedKitsuMappings(result)
   const categories = new Map<string, string | undefined>(
     (result.included || [])
       .filter((x: RawApiPayload) => x.type === 'categories')
@@ -806,9 +811,10 @@ async function withCredits(
   item: CatalogItem,
   type: MediaKind,
   id: string,
-  priority: TaskPriority
+  priority: TaskPriority,
+  started?: ReturnType<typeof titleCredits>
 ): Promise<CatalogItem> {
-  const credits = await titleCredits(type, id, priority)
+  const credits = await (started ?? titleCredits(type, id, priority))
   if (!credits) return item
   return {
     ...item,
@@ -920,20 +926,53 @@ async function resolveMetadata(
     return withCredits(served, type, resolvedId, priority)
   }
 
+  // Started now, awaited where they are used: none of these needs the
+  // record, and awaited one after another behind it, each was a whole
+  // extra round trip on the page's wait — Kitsu's taking anywhere from one
+  // second to a minute. None of them throws.
+  const animeKitsuId = String(resolvedId)
+    .replace(/^kitsu:/, '')
+    .split(':')[0]
+  // An anime's credits come from AniList and read its AniList id from the
+  // cache, where a missing id reads as "no credits" and is stored as such.
+  // So they wait for the Kitsu mappings read that writes the id (shared
+  // with the artwork and the airing schedule) — but not for the record.
+  const creditsAhead =
+    type === 'anime'
+      ? anilistIdForKitsu(animeKitsuId, priority)
+          .catch(() => null)
+          .then(() => titleCredits(type, resolvedId, priority))
+      : titleCredits(type, resolvedId, priority)
+  const ratingAhead =
+    type !== 'anime'
+      ? omdbRottenTomatoesRating(String(resolvedId), priority).catch(() => undefined)
+      : null
+  // An ungrouped anime's real episode list needs its id and nothing from
+  // the record, so it goes out beside it: the page then waits for one Kitsu
+  // round trip where it waited for two in a row. A grouped show builds its
+  // seasons below from the record instead. Never throws.
+  const episodesAhead =
+    type === 'anime' && !groupedIdsFor(resolvedId)?.length
+      ? kitsuRealEpisodes(animeKitsuId, String(resolvedId), priority)
+      : null
+
   let item: CatalogItem
   try {
     if (type === 'anime') {
       const kitsuId = String(resolvedId)
         .replace(/^kitsu:/, '')
         .split(':')[0]
-      const [result, genres] = await Promise.all([
-        fetchJson<RawApiPayload>(
-          `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuId)}`,
-          {},
-          { priority, label: 'anime details' }
-        ),
-        kitsuCategories(kitsuId, priority)
-      ])
+      // One request for the record and its genres: `include=categories`
+      // carries what the separate /categories read did. A genres row from
+      // that read is still used when it is there, so a title opened before
+      // costs nothing more.
+      const cachedGenres = db.getCache<string[]>(`kitsu:categories:${kitsuId}`)
+      const result = await kitsuHedged<RawApiPayload>(
+        `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuId)}${cachedGenres ? '' : '?include=categories'}`,
+        priority,
+        'anime details'
+      )
+      const genres = cachedGenres ?? kitsuIncludedGenres(kitsuId, result)
       item = await withAnilistArtworkOne(
         normalizeKitsuAnime({
           ...result.data,
@@ -1025,18 +1064,20 @@ async function resolveMetadata(
       logError('anime:grouped-videos', error)
       degraded = true
     }
-  } else if (type === 'anime' && item.videos.length) {
+  } else if (type === 'anime' && (item.videos.length || episodesAhead)) {
     // Ungrouped (single-season) anime: item.videos above is still
     // normalizeKitsuAnime's synthesized "Episode N" placeholder list —
     // Kitsu's own /anime/{id} record never carries real per-episode data,
     // only episodeCount. Real titles/thumbnails/synopses live on Kitsu's
     // separate /episodes sub-resource (see kitsuRealEpisodes) — try that
     // before falling back to keeping the placeholders, same as the grouped
-    // path already does per-season.
-    const kitsuId = String(resolvedId)
-      .replace(/^kitsu:/, '')
-      .split(':')[0]
-    const real = await kitsuRealEpisodes(kitsuId, item.id, priority)
+    // path already does per-season. Also when the record failed and a
+    // stand-in has no episodes at all: the list started beside it may
+    // well have come back, and is all the page needs to play.
+    const real =
+      episodesAhead && item.id === String(resolvedId)
+        ? await episodesAhead
+        : await kitsuRealEpisodes(animeKitsuId, item.id, priority)
     if (real.length) item.videos = real
   }
 
@@ -1048,8 +1089,8 @@ async function resolveMetadata(
   // coverage even when a mapping exists, so there's nothing worth the extra
   // round trip. omdbRottenTomatoesRating already no-ops (returns undefined)
   // when OMDb isn't connected, so this is always safe to call unconditionally.
-  if (type !== 'anime') {
-    item.rottenTomatoesRating = await omdbRottenTomatoesRating(String(resolvedId), priority)
+  if (ratingAhead) {
+    item.rottenTomatoesRating = await ratingAhead
   }
 
   // Applied once here rather than per-source (Cinemeta/Simkl-fallback/
@@ -1088,7 +1129,7 @@ async function resolveMetadata(
     // the grids and in My Stuff like anything the crawl found.
     indexIfMissing(type, item)
   }
-  return withCredits(item, type, resolvedId, priority)
+  return withCredits(item, type, resolvedId, priority, creditsAhead)
 }
 
 /**
@@ -1323,11 +1364,7 @@ async function relatedAnime(id: string): Promise<CatalogItem[]> {
     const kitsuId = String(id)
       .replace(/^kitsu:/, '')
       .split(':')[0]
-    const result = await fetchJson<RawApiPayload>(
-      `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuId)}/media-relationships?include=destination&page%5Blimit%5D=20`,
-      {},
-      { priority: 'interactive', label: 'related anime' }
-    )
+    const result = await kitsuRelationships<RawApiPayload>(kitsuId, 'interactive', 'related anime')
     const entries = await withAnilistArtwork(filterAnimeRelationships(result), 'interactive')
     db.putCache(key, entries, 24 * 60 * 60 * 1000)
     return entries
@@ -1400,22 +1437,21 @@ async function tmdbSimilar(kind: 'movie' | 'series', imdbId: string): Promise<Ca
   const auth = `api_key=${encodeURIComponent(apiKey)}`
 
   try {
-    const found = await fetchJson<RawApiPayload>(
-      `https://api.themoviedb.org/3/find/${encodeURIComponent(imdbId)}?${auth}&external_source=imdb_id`
-    )
-    const results = kind === 'series' ? found.tv_results : found.movie_results
-    const sourceId = tmdbId(results?.[0]?.id)
+    const sourceId = await tmdbIdForImdb(kind, imdbId, apiKey)
     if (!sourceId) return []
 
     // Franchise siblings to subtract. Movies only — TMDB models
     // collections for films, and a tv show's "franchise" has no equivalent
     // field, so there's nothing to look up for series.
+    // The title's own record: its name and genres rank the pool below (the
+    // shared id lookup no longer hands back /find's result row), and a
+    // film's collection id comes on the same read.
+    const detail = await fetchJson<RawApiPayload>(
+      `https://api.themoviedb.org/3/${path}/${sourceId}?${auth}`
+    ).catch(() => ({}) as RawApiPayload)
     const excluded = new Set<number>([sourceId])
     if (kind === 'movie') {
       try {
-        const detail = await fetchJson<RawApiPayload>(
-          `https://api.themoviedb.org/3/movie/${sourceId}?${auth}`
-        )
         const collectionId = tmdbId(detail.belongs_to_collection?.id)
         if (collectionId) {
           const collection = await fetchJson<RawApiPayload>(
@@ -1459,7 +1495,10 @@ async function tmdbSimilar(kind: 'movie' | 'series', imdbId: string): Promise<Ca
     // no-API-key path uses, so both paths agree on what "similar" means.
     // Ranking here also means the external-id lookups below are spent on
     // the twelve titles that will actually be shown.
-    const source = results?.[0] ?? {}
+    const source: RawApiPayload = {
+      ...detail,
+      genre_ids: (detail.genres || []).map((g: RawApiPayload) => g?.id)
+    }
     const sourceTitle = String(source.title || source.name || source.original_title || '')
     const seen = new Set<string>()
     const pool: CatalogItem[] = []
@@ -1505,11 +1544,9 @@ async function tmdbSimilar(kind: 'movie' | 'series', imdbId: string): Promise<Ca
           try {
             const id = tmdbId(item.id.replace('tmdb:', ''))
             if (!id) return null
-            const external = await fetchJson<RawApiPayload>(
-              `https://api.themoviedb.org/3/${path}/${id}/external_ids?${auth}`
-            )
-            if (!external.imdb_id) return null
-            return { ...item, id: String(external.imdb_id) }
+            const imdb = await imdbIdForTmdb(kind, id, apiKey)
+            if (!imdb) return null
+            return { ...item, id: imdb }
           } catch {
             return null
           }

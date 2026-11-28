@@ -840,7 +840,7 @@ async function pullPlanned(
       })
       return
     }
-    logError('watchlists:pull', result.reason)
+    logError(`watchlists:pull:${service}`, result.reason)
     services.push({
       service,
       connected: connected[service],

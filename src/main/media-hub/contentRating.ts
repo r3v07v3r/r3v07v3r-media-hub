@@ -15,6 +15,7 @@ import type { MediaKind } from '../../shared/media-hub/types'
 import { fetchJson } from './httpClient'
 import { getDatabase } from './dbState'
 import { tmdbCredentials } from './settingsStore'
+import { tmdbIdForImdb } from './tmdbIds'
 import { watchRegion } from './watchProviders'
 
 /** Thirty days. A certificate is assigned once and effectively never moves. */
@@ -54,15 +55,8 @@ export async function contentRating(kind: MediaKind, imdbId: string): Promise<st
 
   const auth = `api_key=${encodeURIComponent(apiKey)}`
   try {
-    const found = await fetchJson<{
-      movie_results?: { id?: unknown }[]
-      tv_results?: { id?: unknown }[]
-    }>(
-      `https://api.themoviedb.org/3/find/${encodeURIComponent(imdbId)}?${auth}&external_source=imdb_id`
-    )
-    const results = kind === 'series' ? found.tv_results : found.movie_results
-    const tmdbId = Number(results?.[0]?.id)
-    if (!Number.isFinite(tmdbId) || tmdbId <= 0) {
+    const tmdbId = await tmdbIdForImdb(kind === 'series' ? 'series' : 'movie', imdbId, apiKey)
+    if (!tmdbId) {
       db.putCache(cacheKey, '', TTL_MS)
       return ''
     }
