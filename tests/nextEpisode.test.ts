@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 
-import { nextEpisodeInOrder } from '../src/shared/media-hub/nextEpisode'
+import { nextEpisodeInOrder, upNextLeadSeconds } from '../src/shared/media-hub/nextEpisode'
 import type { Episode } from '../src/shared/media-hub/types'
 
 function ep(season: number, episode: number, extra: Partial<Episode> = {}): Episode {
@@ -86,5 +86,12 @@ assert.equal(
   null,
   'an episode with an unusable coordinate is not a play target'
 )
+
+// The Up next card's lead on an episode with no credits marked: 5% of the
+// runtime, at least 30 s and at most 2 minutes.
+assert.equal(upNextLeadSeconds(22 * 60), 66, 'a 22-minute sitcom gets about a minute')
+assert.equal(upNextLeadSeconds(45 * 60), 120, 'a 45-minute drama reaches the cap')
+assert.equal(upNextLeadSeconds(90 * 60), 120, 'nothing goes past the cap')
+assert.equal(upNextLeadSeconds(6 * 60), 30, 'a short episode keeps the floor')
 
 console.log('nextEpisode tests passed')

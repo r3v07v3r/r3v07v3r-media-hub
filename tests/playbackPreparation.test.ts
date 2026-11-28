@@ -3,7 +3,8 @@ import {
   PlaybackPreparationCancelledError,
   PlaybackPreparationTimeoutError,
   playbackPreparationErrorMessage,
-  runPlaybackPreparationStage
+  runPlaybackPreparationStage,
+  takeoverHeadings
 } from '../src/renderer/src/lib/mediaHub/playbackPreparation'
 
 async function main(): Promise<void> {
@@ -52,6 +53,35 @@ async function main(): Promise<void> {
   assert.equal(playbackPreparationErrorMessage('not an error'), 'Playback failed to start.')
 
   console.log('ok  playback preparation success, cancellation, and timeout')
+
+  // What the full-window loading screen says.
+  assert.deepEqual(
+    takeoverHeadings({
+      title: 'Severance',
+      mediaKind: 'series',
+      seasonNumber: 1,
+      episodeNumber: 12,
+      episodeTitle: 'The We We Are'
+    }),
+    { heading: 'Loading episode 12', subheading: 'Severance · The We We Are' }
+  )
+  assert.equal(
+    takeoverHeadings({ title: 'Show', mediaType: 'series', seasonNumber: 3, episodeNumber: 2 })
+      .heading,
+    'Loading season 3, episode 2',
+    'a later season is named'
+  )
+  assert.deepEqual(
+    takeoverHeadings({ title: 'Frieren', mediaKind: 'anime', episodeNumber: 7 }),
+    { heading: 'Loading episode 7', subheading: 'Frieren' },
+    'no episode name falls back to the show'
+  )
+  assert.deepEqual(
+    takeoverHeadings({ title: 'Heat', mediaKind: 'movie' }),
+    { heading: 'Loading Heat', subheading: '' },
+    'a film is just its title'
+  )
+  console.log('ok  takeover headings')
 }
 
 void main()

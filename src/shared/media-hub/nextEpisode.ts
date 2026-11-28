@@ -15,6 +15,20 @@
 import { hasAired, isRegularEpisode } from './catalog-logic'
 import type { Episode } from './types'
 
+/**
+ * How far from the end the player's Up next card goes up on an episode with
+ * no credits marked (no chapters, no Aniskip entry).
+ *
+ * A share of the runtime rather than a flat minute: a flat 60 s landed halfway
+ * through the 90 s–3 min of credits a 45-minute drama carries, so the card
+ * came up after people had already started skipping ahead to find it. 5% is
+ * about 66 s on a 22-minute sitcom and reaches the 2-minute cap on anything
+ * past 40 minutes; never under 30 s.
+ */
+export function upNextLeadSeconds(durationSeconds: number): number {
+  return Math.max(30, Math.min(120, durationSeconds * 0.05))
+}
+
 /** The minimum a caller needs to start the next episode and name it. */
 export interface NextEpisodeRef {
   season: number

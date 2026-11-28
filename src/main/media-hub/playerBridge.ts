@@ -863,6 +863,31 @@ export function playerHeld(): boolean {
 }
 
 /**
+ * Takes the title on screen away the moment the next one is asked for —
+ * Play next, the bar's Next episode, an episode picked from inside the
+ * player — rather than once that one's first copy opens.
+ *
+ * Without it the outgoing episode kept playing through the stream search,
+ * then ran dry when its cache gave way to the incoming one's and stalled, and
+ * only then dropped to the page behind: three changes of picture for one
+ * press. Now there is one, straight to the window's loading screen.
+ *
+ * It is the same hold a held open puts on (paused, unseen, controls away), so
+ * every way out of it is already there: the incoming copy's reveal
+ * (revealHeldPlayer), an ordinary open, or a stop. The difference is the
+ * pause put back on reveal: always playing. Somebody who paused in the
+ * credits and then pressed Next wants the next episode, not a still of it.
+ */
+export async function holdPlayerForNextTitle(): Promise<void> {
+  if (!player.running) return
+  if (!heldLoad) heldPriorPause = false
+  heldLoad = true
+  await player.set('pause', true).catch(() => {})
+  setEmbeddedVideoHidden(true)
+  hidePlayerOverlayForMainUi()
+}
+
+/**
  * Ensures mpv is running and embedded, opens the control overlay, and loads
  * `url`. `url` is validated inside MpvPlayer.loadFile — see assertPlayableUrl,
  * which is the guard that used to sit immediately before every ffmpeg spawn.
@@ -934,6 +959,10 @@ export async function startPlayerSession(
   // otherwise starts playing at once), so a copy that turns out to be the
   // wrong one is never shown starting. The controls of a title already on
   // screen go too: the loading screen behind them is what to look at now.
+  // An ordinary open that ends a hold has the controls to bring back too: the
+  // hold took them away (hidePlayerOverlayForMainUi), and only
+  // revealHeldPlayer used to undo that.
+  let releasedHold = false
   if (options.held) {
     if (!heldLoad) heldPriorPause = await player.get<boolean>('pause').catch(() => false)
     heldLoad = true
@@ -942,6 +971,7 @@ export async function startPlayerSession(
     hidePlayerOverlayForMainUi()
   } else if (heldLoad) {
     heldLoad = false
+    releasedHold = true
     await player.set('pause', heldPriorPause).catch(() => {})
   }
 
@@ -1073,6 +1103,7 @@ export async function startPlayerSession(
   if (!options.held) {
     setEmbeddedVideoHidden(mainWindowUiOpen)
     if (mainWindowUiOpen) hidePlayerOverlayForMainUi()
+    else if (releasedHold) showPlayerOverlayAfterMainUi()
   }
 
   const tracks = await readTracks()

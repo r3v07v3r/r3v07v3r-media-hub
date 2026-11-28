@@ -60,6 +60,7 @@ import {
   subtitleChoiceCount,
   pushSessionSnapshot,
   nightModeEnabled,
+  holdPlayerForNextTitle,
   playerHeld,
   revealHeldPlayer,
   startPlayerSession,
@@ -775,6 +776,13 @@ export function registerPlaybackIpc(): void {
         since
       )
     }
+    return { ok: true }
+  })
+
+  // The window is about to start another title over the one playing — see
+  // holdPlayerForNextTitle. Nothing playing is nothing to hold.
+  handle<undefined, { ok: true }>(MEDIA_HUB_CHANNELS.playbackHoldForNext, async () => {
+    if (activeCacheUrl) await holdPlayerForNextTitle()
     return { ok: true }
   })
 

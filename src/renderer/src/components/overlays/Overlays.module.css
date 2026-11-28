@@ -199,6 +199,155 @@
     width: auto;
   }
 }
+/* ---------- Playback takeover (a title started over another) ----------
+   The whole window, mostly opaque and blurred: the show's page shows
+   through as shapes and colour, and what is loading sits in the middle. */
+.takeover {
+  position: fixed;
+  inset: 0;
+  z-index: 950;
+  display: grid;
+  place-items: center;
+  padding: 24px 16px;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(4, 9, 16, 0.78) 0%,
+    rgba(4, 9, 16, 0.62) 45%,
+    rgba(2, 5, 10, 0.72) 100%
+  );
+  backdrop-filter: blur(6px) saturate(115%);
+  animation: fadeIn 220ms ease-out both;
+}
+.takeoverBody {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(520px, 100%);
+  text-align: center;
+  animation: modalIn 260ms ease-out both;
+}
+.takeoverSpinner {
+  width: 44px;
+  height: 44px;
+  margin-bottom: 22px;
+  border: 3px solid rgba(95, 224, 255, 0.16);
+  border-top-color: var(--color-cyan, #5fe0ff);
+  border-radius: 50%;
+  animation: playerBufferingSpin 0.9s linear infinite;
+}
+.takeoverEyebrow {
+  margin: 0 0 8px;
+  color: var(--color-cyan, #5fe0ff);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.takeoverHeading {
+  margin: 0;
+  color: #fff;
+  font-family: var(--font-display, inherit);
+  font-size: clamp(26px, 4.2vw, 40px);
+  font-weight: 700;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+.takeoverSubheading {
+  margin: 10px 0 0;
+  max-width: 100%;
+  overflow: hidden;
+  color: rgba(214, 226, 239, 0.78);
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.takeoverSteps {
+  display: flex;
+  gap: 6px;
+  margin: 28px 0 10px;
+  padding: 0;
+  list-style: none;
+}
+.takeoverStep {
+  width: 34px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(214, 226, 239, 0.16);
+  transition: background 200ms ease;
+}
+.takeoverStepDone {
+  background: rgba(116, 228, 176, 0.7);
+}
+.takeoverStepActive {
+  background: var(--color-cyan, #5fe0ff);
+  box-shadow: 0 0 10px rgba(95, 224, 255, 0.45);
+}
+.takeoverStatus {
+  min-height: 1.4em;
+  margin: 0 0 24px;
+  color: rgba(214, 226, 239, 0.66);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.takeoverMessage {
+  margin: 12px 0 24px;
+  color: rgba(214, 226, 239, 0.8);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.takeoverFailedIcon {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 20px;
+  place-items: center;
+  border: 2px solid rgba(255, 138, 128, 0.6);
+  border-radius: 50%;
+  color: #ff8a80;
+  font-size: 22px;
+  font-weight: 700;
+}
+.takeoverActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+.takeoverCancel,
+.takeoverPrimary {
+  min-width: 120px;
+  padding: 9px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.06);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.takeoverPrimary {
+  border-color: var(--color-cyan, #5fe0ff);
+  color: #07131e;
+  background: var(--color-cyan, #5fe0ff);
+  font-weight: 600;
+}
+.takeoverCancel:hover,
+.takeoverCancel:focus-visible {
+  color: #fff;
+  border-color: rgba(95, 224, 255, 0.45);
+  outline: none;
+}
+.takeoverPrimary:hover,
+.takeoverPrimary:focus-visible {
+  box-shadow: 0 0 16px rgba(95, 224, 255, 0.4);
+  outline: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .takeover,
+  .takeoverBody {
+    animation: none;
+  }
+}
 @keyframes playerBufferingSpin {
   to {
     transform: rotate(360deg);

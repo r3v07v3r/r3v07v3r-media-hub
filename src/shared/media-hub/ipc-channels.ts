@@ -251,6 +251,7 @@ export const MEDIA_HUB_CHANNELS = {
   streamRejectedForget: 'mediahub:stream:rejected-forget',
   playbackStop: 'mediahub:playback:stop',
   playbackLanguageSettle: 'mediahub:playback:language-settle',
+  playbackHoldForNext: 'mediahub:playback:hold-for-next',
   playbackPrepareProgress: 'mediahub:playback:prepare-progress', // push event
   playbackThumbnail: 'mediahub:playback:thumbnail',
   playbackSkipTimes: 'mediahub:playback:skip-times',
