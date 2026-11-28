@@ -288,8 +288,11 @@ Playback is mpv, embedded inside the app's own window on Windows; there is no tr
   that will not open is skipped the same way. If none has your audio, it goes back to the closest
   copy, preferring one with subtitles in your language, and says so once, for example "No copy with
   Japanese audio — playing … with English subtitles." What each copy held is remembered for that
-  episode for 14 days, so playing it again goes straight to a copy that worked. An episode already
-  on this disk still plays offline.
+  episode for 14 days, so playing it again goes straight to a copy that worked. The search happens
+  behind the loading screen, and the message shows there. When a whole round finds no copy of an
+  episode with your audio, the show's other episodes skip the search for two weeks and open the
+  best-ranked copy straight away, until a copy with that audio turns up. An episode already on this
+  disk still plays offline.
 - **Wrong copy?** If a copy turns out to be a recap, a different episode or a broken file, choose
   **Wrong copy? Find another** at the top of the player's Playback menu. That copy is deleted from
   this machine and not offered for that episode again for a year, and the app searches afresh and
@@ -313,9 +316,8 @@ Playback is mpv, embedded inside the app's own window on Windows; there is no tr
   has), which the next title keeps. Series and anime episodes are looked
   up by the show's IMDb id with the season and episode, and OpenSubtitles tries the title when that
   finds nothing, so later anime seasons and shows known by a Japanese name find subtitles too. An
-  anime's IMDb id comes from Simkl, so that needs a Simkl Client ID (no sign-in); without one the
-  search goes by title, and after you enter one the app looks the id up again within a day. When
-  every connected service fails, the menu shows each one's reason.
+  anime's IMDb id comes from Simkl's public id search, which needs no Simkl sign-in. When every
+  connected service fails, the menu shows each one's reason.
 - **Anime4K** (optional): install the shader pack once from **Control centre → General → Performance
   & Display**. Installing also switches on **Use Anime4K while watching**, which appears there once
   the pack is installed; pick a mode, or switch it off to keep the shaders out of the player. While
@@ -358,7 +360,9 @@ Playback is mpv, embedded inside the app's own window on Windows; there is no tr
   Continue Watching card takes the show off your plan, which is what keeps it in that row; what you
   have watched of it stays, and the toast that follows has the same eight-second **Undo** as Remove
   from plan, which puts the show back on your plan as it was and back in the row. For an anime
-  season that is planned as its own card, it takes that season off, not the whole show. A toast that
+  season that is planned as its own card, it takes that season off, not the whole show. Films you
+  started and left part-way (from 20 seconds in to 90% through) are in the row too, with the
+  minutes left; **Remove** on a film clears its resume point and leaves it on your plan. A toast that
   repeats one already on screen replaces it. At most eight show at once; past that, the oldest that
   would close by itself goes first, so an Undo or Retry that waits for you stays.
 - **Rate what you have seen** out of 10 on a title's page. Each profile keeps its own scores, and
@@ -384,9 +388,10 @@ Playback is mpv, embedded inside the app's own window on Windows; there is no tr
 
 ### 5. Sync — optional, one account per service
 
-Each tracking service needs its own API application: create one on the service's developer site and
-enter the Client ID (and, for Trakt, the client secret; MyAnimeList's is optional) under
-**Control centre → Accounts**.
+Simkl and MyAnimeList connect in one click: press **Connect** under **Control centre → Accounts →
+Tracking** and finish signing in in your browser (Simkl shows a short code to enter there). If Simkl's
+daily request limit is used up, a note says so and when it resets. Trakt still needs its own API
+application: create one on Trakt's developer site and enter its Client ID and client secret.
 
 | Service         | What it does                                                                                                                                                                                                                                                                                                                                                                      |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -499,6 +504,10 @@ match Simkl and, with Trakt connected too, makes Trakt match it as well, and **x
 about that film; it can appear again once 90 days pass with no film ignored. A film saved under an
 id only this app knows shows **Can't push** instead of Use Local; Use Simkl is the way to settle it.
 
+With two or more rows waiting, a **For everything** bar settles them all at once: **Use Local**, or
+**Use** followed by a service that has rows waiting. Each asks for a second click ("Apply to N?")
+before it does anything.
+
 The phone and TV app take in only what Simkl holds and have no such panel. The rules are in
 [docs/WATCHLIST-SYNC.md](docs/WATCHLIST-SYNC.md#episodes-show-by-show).
 
@@ -576,6 +585,7 @@ control centre at that service:
 | **Media servers** | TorBox (connect with its API token), and Jellyfin, Sonarr, Radarr, qBittorrent, Prowlarr and Bazarr, each with a connection test.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | **Accounts**      | Tracking (Simkl, Trakt, MyAnimeList), Artwork & metadata (TMDB, OMDb), Subtitles (SubDL, OpenSubtitles).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | **AI**            | The local Ollama model behind the assistant and Recommend Next.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| **Feedback**      | Send a bug report, idea or other note, optionally with the recent log (**See exactly what is sent** previews it), and the **Report problems automatically** switch for crashes, freezes, recovered errors, repeated clicks and unclean shutdowns. The feedback button in the top bar opens it too.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | **Community**     | The Watch Party relay, and profiles.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 - **A backup is taken automatically** into the `backups` folder in the app's data folder
@@ -616,7 +626,7 @@ control centre at that service:
 - **Stay updated on your own terms.** Packaged builds check GitHub Releases a few times a day; an
   update downloads in the background and installs when you restart.
 - **Link a phone.** **Control centre → Media servers → Link a phone** shows a one-time QR code. The
-  phone app scans it and is signed in to the same services: TorBox, Simkl, the TMDB, OMDb and SubDL
+  phone app scans it and is signed in to the same services: TorBox, Simkl (see below), the TMDB, OMDb and SubDL
   keys, the OpenSubtitles login, your subtitle and audio languages, age-rating region, Watch Party
   name and update channel ([android/README.md](android/README.md#updates) has the one exception).
   Trakt, MyAnimeList, the r3-cache device token and your room identity stay on the desktop. The code
@@ -624,7 +634,10 @@ control centre at that service:
   The phone must be on the same local network as the computer; if Windows asks whether to allow R3
   Media Hub on private networks, allow it, or the phone cannot connect. When linking moves the phone
   to a different update channel, the phone says so as it finishes, for example that it now follows
-  Stable once a stable release is out.
+  Stable once a stable release is out. A Simkl connection made with **Connect to Simkl** is not
+  passed to the phone, because Simkl cancels a copied sign-in when the desktop renews its own; only
+  an older PIN sign-in is. The phone app has no Simkl sign-in of its own yet, so with a one-click
+  connection the phone gets no Simkl sync.
 - **Phone and desktop meet at Simkl.** Each time the phone app opens, comes back to the front or is
   linked, it brings its My List and watch history up to date from Simkl, never from the desktop, and
   what you watch on the phone reaches the desktop the same way. Without Simkl connected, nothing
@@ -1041,7 +1054,11 @@ and the half-hourly watchlist pull under `job:planned-sync`.
   The Torrentio (`torrentio.strem.fun`) and Comet (`cometfortheweebs.midnightignite.me`) add-ons are
   queried for releases when you play from TorBox, and every half hour while an r3-cache server is
   paired, for titles it should pre-fetch; only the title's id is sent, never your TorBox token.
-  Neither is configurable. Every other host is one you connected yourself.
+  Neither is configurable. Crash, error and repeated-action reports, and any feedback you send, go
+  to the developer's feedback service (`r3-feedback.unit.workers.dev`), cleaned of user names,
+  addresses, links and keys first (see [feedback-worker/README.md](feedback-worker/README.md));
+  automatic reports stop when **Report problems automatically** is turned off under **Control
+  centre → Feedback**. Every other host is one you connected yourself.
 - The [security review playbook](docs/SECURITY_REVIEW.md) lists the manual checks worth running
   (renderer-to-main capability, the HTTP proxy, secrets, the packaged app, media processing) and
   the automated checks still to add.
