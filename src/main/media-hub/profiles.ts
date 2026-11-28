@@ -32,6 +32,14 @@ import type {
 } from '../../shared/media-hub/types'
 import { getDatabase } from './dbState'
 import { handle } from './ipcGuard'
+import {
+  assertNotLockedOut,
+  hashPin,
+  requireProfilePin,
+  pinAttempts,
+  recordPinAttempt,
+  verifyPin
+} from './profilePin'
 import { readSettings, writeSettings } from './settingsStore'
 
 /** Main-process-only shape — carries the PIN hash/salt. Never sent to the renderer; see ProfilePublic for that. */
@@ -100,51 +108,6 @@ export function activeProfileId(): string {
   return ensureProfiles().activeProfileId
 }
 
-function hashPin(pin: string, salt: string): string {
-  return crypto.scryptSync(pin, salt, 64).toString('hex')
-}
-
-function verifyPin(record: ProfileRecord, pin: string): boolean {
-  if (!record.pinHash || !record.pinSalt) return true
-  const candidate = hashPin(pin, record.pinSalt)
-  const a = Buffer.from(candidate, 'hex')
-  const b = Buffer.from(record.pinHash, 'hex')
-  return a.length === b.length && crypto.timingSafeEqual(a, b)
-}
-
-// A 4-digit PIN is only 10,000 combinations — with nothing gating repeated
-// attempts, a script could brute-force it via profilesVerifyPin/
-// profilesSetActive in well under a second, defeating the PIN-lock's whole
-// point (see this file's own header comment on what it's meant to gate:
-// a casual "confirm it's really you" check, not something meant to survive
-// a determined attacker, but it should at least survive a trivial loop).
-// In-memory and per-profile, not persisted: resets on app restart, which is
-// fine for this threat model and avoids a settings-schema change.
-const MAX_PIN_ATTEMPTS = 5
-const PIN_LOCKOUT_MS = 30_000
-const pinAttempts = new Map<string, { count: number; lockedUntil: number }>()
-
-function assertNotLockedOut(profileId: string): void {
-  const state = pinAttempts.get(profileId)
-  if (!state || state.lockedUntil <= Date.now()) return
-  const seconds = Math.ceil((state.lockedUntil - Date.now()) / 1000)
-  throw new Error(`Too many incorrect PIN attempts. Try again in ${seconds}s.`)
-}
-
-function recordPinAttempt(profileId: string, ok: boolean): void {
-  if (ok) {
-    pinAttempts.delete(profileId)
-    return
-  }
-  const state = pinAttempts.get(profileId) ?? { count: 0, lockedUntil: 0 }
-  state.count += 1
-  if (state.count >= MAX_PIN_ATTEMPTS) {
-    state.lockedUntil = Date.now() + PIN_LOCKOUT_MS
-    state.count = 0
-  }
-  pinAttempts.set(profileId, state)
-}
-
 interface SetActiveArgs {
   id?: string
   pin?: string
@@ -164,10 +127,14 @@ interface UpdateArgs {
   avatarTint?: [string, string]
   isKid?: boolean
   pin?: string | null // null explicitly clears an existing PIN
+  /** Required when the profile has a PIN — see requireProfilePin. */
+  currentPin?: string
 }
 
 interface DeleteArgs {
   id?: string
+  /** Required when the profile has a PIN — see requireProfilePin. */
+  currentPin?: string
 }
 
 interface VerifyPinArgs {
@@ -246,6 +213,7 @@ export function registerProfilesIpc(): void {
     const index = profiles.findIndex((p) => p.id === id)
     if (index === -1) throw new Error('That profile no longer exists.')
     const existing = profiles[index]
+    requireProfilePin(existing, payload?.currentPin)
     const updated: ProfileRecord = { ...existing }
     if (payload?.name !== undefined) {
       const name = String(payload.name).trim().slice(0, 40)
@@ -280,8 +248,10 @@ export function registerProfilesIpc(): void {
     if (id === activeProfileId) {
       throw new Error('Switch to a different profile before deleting this one.')
     }
+    const target = profiles.find((p) => p.id === id)
+    if (!target) throw new Error('That profile no longer exists.')
+    requireProfilePin(target, payload?.currentPin)
     const remaining = profiles.filter((p) => p.id !== id)
-    if (remaining.length === profiles.length) throw new Error('That profile no longer exists.')
     // The rows BEFORE the settings entry, so a failure leaves a profile that
     // still owns its data rather than data owned by a profile that no longer
     // exists. Everything a profile owns goes with it: leaving it behind means

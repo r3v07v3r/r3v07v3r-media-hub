@@ -163,8 +163,9 @@ interface AppStateValue {
     name?: string
     isKid?: boolean
     pin?: string | null
+    currentPin?: string
   }) => Promise<void>
-  deleteProfile: (id: string) => Promise<void>
+  deleteProfile: (id: string, currentPin?: string) => Promise<void>
 
   // Watch Party — one shared slice so the topbar button/panel and the
   // Settings card can never disagree about whether we're in a party (see
@@ -565,6 +566,9 @@ interface AppStateValue {
 // card off early would be worse than leaving it a while — it would look
 // like the party had started without them.
 const PARTY_PREPARING_TIMEOUT_MS = 3 * 60 * 1000
+// How long a room member's "can I join?" prompt stays up. Matches the
+// asker's own give-up time (RoomsSection's JOIN_REQUEST_TIMEOUT_MS).
+const ROOM_JOIN_PROMPT_MS = 20_000
 
 /** The most extra opens play:stream can make past the pick when it lacks
  *  the wanted audio: main's LANGUAGE_RETRY_LIMIT (3) untried copies, the
@@ -1374,7 +1378,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         }
         pushNotification({
           tone: 'info',
-          message: `${event.deviceName} on your network wants to use ${event.serverName}. Allow it?`,
+          message: event.verification
+            ? `${event.deviceName} on your network wants to use ${event.serverName}. Allow it only if that device shows the code ${event.verification.slice(0, 3)} ${event.verification.slice(3)}.`
+            : `${event.deviceName} on your network wants to use ${event.serverName}. Allow it?`,
           action: { label: 'Allow', run: () => answer('approve') },
           secondaryAction: { label: 'Deny', run: () => answer('deny') }
         })
@@ -1874,7 +1880,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   )
 
   const updateProfile = useCallback(
-    async (payload: { id: string; name?: string; isKid?: boolean; pin?: string | null }) => {
+    async (payload: {
+      id: string
+      name?: string
+      isKid?: boolean
+      pin?: string | null
+      currentPin?: string
+    }) => {
       const api = window.api?.mediaHub?.profiles
       if (!api) throw new Error("Profiles aren't available outside the desktop app.")
       await api.update(payload)
@@ -1884,10 +1896,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   )
 
   const deleteProfile = useCallback(
-    async (id: string) => {
+    async (id: string, currentPin?: string) => {
       const api = window.api?.mediaHub?.profiles
       if (!api) throw new Error("Profiles aren't available outside the desktop app.")
-      await api.remove(id)
+      await api.remove(id, currentPin)
       refreshProfiles()
     },
     [refreshProfiles]
@@ -3144,11 +3156,15 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const playbackMediaRef = useRef(playbackMedia)
   const hostPartyRef = useRef(hostParty)
   const mediaHubSettingsRef = useRef(mediaHubSettings)
+  const partyStatusRef = useRef(partyStatus)
+  const partyHostCodeRef = useRef(partyHostCode)
   useEffect(() => {
     playbackMediaRef.current = playbackMedia
     hostPartyRef.current = hostParty
     mediaHubSettingsRef.current = mediaHubSettings
-  }, [playbackMedia, hostParty, mediaHubSettings])
+    partyStatusRef.current = partyStatus
+    partyHostCodeRef.current = partyHostCode
+  }, [playbackMedia, hostParty, mediaHubSettings, partyStatus, partyHostCode])
   // The nowPlaying replay currently being resolved (type:id:season:episode),
   // for the whole gap where playbackMedia is still null — see the follower
   // unwrap's dedupe below.
@@ -3168,6 +3184,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     if (!api) return
     return api.onEvent((event) => {
       if (event.type !== 'message' || partyStatus?.role !== 'client') return
+      // preparing/nowPlaying are the host's alone. Main already drops copies
+      // from anyone else; this is the last check before we start resolving
+      // and streaming a title on this user's own account.
+      if (event.from !== 'host') return
       const msg = event.message as {
         type?: string
         item?: { id?: string; type?: string; title?: string; poster?: string }
@@ -3301,72 +3321,103 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // nothing to click — the party is created on demand, only when somebody
   // actually asks, rather than forcing everyone to host speculatively.
   // The reply goes back through the room the request arrived on.
+  //
+  // Created on demand only with the user's say-so: a request becomes an
+  // Accept/Decline prompt. Main delivers requests at all only while this
+  // device shares its watching in that room — with sharing off a request is
+  // dropped unanswered (see main/media-hub/friendJoin.ts).
   useEffect(() => {
     const api = window.api?.mediaHub?.rooms
     if (!api) return
     return api.onMessage(({ roomId, message }) => {
       if (message.type !== 'friend-join-request') return
+      const toFriendId = message.fromFriendId
+      const requestId = message.requestId
       const decline = (reason: string): void => {
         api
           .send(roomId, {
             type: 'friend-join-declined',
-            toFriendId: message.fromFriendId,
+            toFriendId,
             fromFriendId: '',
+            requestId,
             reason
           })
           .catch(() => {})
       }
+      const offer = (partyCode: string): void => {
+        api
+          .send(roomId, {
+            type: 'friend-join-offer',
+            toFriendId,
+            fromFriendId: '',
+            requestId,
+            partyCode
+          })
+          .catch(() => {})
+      }
+      // Sharing is on in this room (or main would never have passed this
+      // on), so this says nothing their presence doesn't already show.
       if (!playbackMediaRef.current) {
         decline("They aren't watching anything right now.")
         return
       }
-      // Already hosting — hand over the code we've got rather than
-      // tearing down a party other people may already be in.
-      if (partyStatus?.inParty && partyStatus.role === 'host' && partyHostCode) {
-        api
-          .send(roomId, {
-            type: 'friend-join-offer',
-            toFriendId: message.fromFriendId,
-            fromFriendId: '',
-            partyCode: partyHostCode
-          })
-          .catch(() => {})
-        return
-      }
-      // Hosting, but the code has not reached this window yet (the status
-      // that carries it is a moment behind a party hosted from the player).
-      if (partyStatus?.inParty && partyStatus.role === 'host') {
-        decline("They're starting a watch party. Try again in a moment.")
-        return
-      }
-      if (partyStatus?.inParty) {
-        decline("They're already in someone else's watch party.")
-        return
-      }
-      hostPartyRef
-        .current(mediaHubSettingsRef.current?.partyDisplayName || 'A friend')
-        .then((result) => {
-          // No nowPlaying announcement here: the party:host handler seeds
-          // the new party with the film already playing — at the LIVE
-          // playhead — in main, where both the session identity and the
-          // observed position actually live. The joiner is then caught up
-          // by the ordinary late-join replay.
-          api
-            .send(roomId, {
-              type: 'friend-join-offer',
-              toFriendId: message.fromFriendId,
-              fromFriendId: '',
-              partyCode: result.code
-            })
-            .catch(() => {})
+      const accept = (): void => {
+        // Re-read at the moment of the click: the prompt may have been up
+        // for a while.
+        if (!playbackMediaRef.current) {
+          decline("They aren't watching anything right now.")
+          return
+        }
+        const status = partyStatusRef.current
+        const hostCode = partyHostCodeRef.current
+        // Already hosting — hand over the code we've got rather than
+        // tearing down a party other people may already be in.
+        if (status?.inParty && status.role === 'host' && hostCode) {
+          offer(hostCode)
           pushNotification({
             tone: 'info',
             message: `${message.fromName} is joining your watch party.`
           })
-        })
-        .catch(() => decline('They could not start a watch party just now.'))
+          return
+        }
+        // Hosting, but the code has not reached this window yet (the status
+        // that carries it is a moment behind a party hosted from the player).
+        if (status?.inParty && status.role === 'host') {
+          decline("They're starting a watch party. Try again in a moment.")
+          return
+        }
+        if (status?.inParty) {
+          decline("They're already in someone else's watch party.")
+          return
+        }
+        hostPartyRef
+          .current(mediaHubSettingsRef.current?.partyDisplayName || 'A friend')
+          .then((result) => {
+            // No nowPlaying announcement here: the party:host handler seeds
+            // the new party with the film already playing — at the LIVE
+            // playhead — in main, where both the session identity and the
+            // observed position actually live. The joiner is then caught up
+            // by the ordinary late-join replay.
+            offer(result.code)
+            pushNotification({
+              tone: 'info',
+              message: `${message.fromName} is joining your watch party.`
+            })
+          })
+          .catch(() => decline('They could not start a watch party just now.'))
+      }
+      // Nothing happens without the user saying yes: only Accept hosts a
+      // party (which can open a router port) or hands out a code. Letting
+      // the prompt lapse answers nothing.
+      pushNotification({
+        tone: 'info',
+        message: `${message.fromName} wants to join what you're watching.`,
+        durationMs: ROOM_JOIN_PROMPT_MS,
+        action: { label: 'Accept', run: accept },
+        secondaryAction: { label: 'Decline', run: () => decline('They said not right now.') }
+      })
     })
-  }, [partyStatus, partyHostCode, pushNotification])
+  }, [pushNotification])
 
   const setPartyMemberControl = useCallback(async (allow: boolean) => {
     const api = window.api?.mediaHub?.party

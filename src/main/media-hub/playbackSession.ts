@@ -67,6 +67,7 @@ import {
   stopPlayerSession,
   storedSubtitleStyle
 } from './playerBridge'
+import { lanCacheAwareFetch } from './lanCache'
 import { readSettings } from './settingsStore'
 import { logError } from './logger'
 import { setPressure } from './taskScheduler'
@@ -106,7 +107,9 @@ export function hasActivePlayback(): boolean {
 // from its local cache server — the player itself, and the throwaway mpv
 // process that captures scrub-bar thumbnails — so the remote link is opened
 // exactly once no matter what else needs bytes.
-const streamCache = createStreamCache()
+// The paired cache daemon is reached only through its pinned TLS
+// certificate; every other upstream uses the ordinary fetch.
+const streamCache = createStreamCache({ fetchImpl: lanCacheAwareFetch })
 // Disk-hygiene backstop for a title that was closed before being marked
 // watched (its cache is deliberately left in place for a likely near-term
 // resume — see stopPlayback's own comment), so a cache dir from days ago

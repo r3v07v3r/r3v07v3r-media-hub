@@ -473,7 +473,11 @@ function ProfileForm({
   const [name, setName] = useState(target?.name ?? '')
   const [isKid, setIsKid] = useState(target?.isKid ?? false)
   const [pin, setPin] = useState('')
+  // A PIN-locked profile can only be edited or deleted with its current PIN
+  // (main enforces this too — see profiles.ts requireProfilePin).
+  const [currentPin, setCurrentPin] = useState('')
   const [removePin, setRemovePin] = useState(false)
+  const needsCurrentPin = Boolean(target?.hasPin)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -486,6 +490,10 @@ function ProfileForm({
       setError('PIN must be 4-8 digits.')
       return
     }
+    if (needsCurrentPin && !currentPin) {
+      setError('Enter the current PIN for this profile.')
+      return
+    }
     setBusy(true)
     setError(null)
     try {
@@ -494,7 +502,8 @@ function ProfileForm({
           id: target.id,
           name,
           isKid,
-          pin: removePin ? null : pin || undefined
+          pin: removePin ? null : pin || undefined,
+          currentPin: needsCurrentPin ? currentPin : undefined
         })
       } else {
         await createProfile({ name, isKid, pin: pin || undefined })
@@ -509,10 +518,14 @@ function ProfileForm({
 
   async function handleDelete() {
     if (!target) return
+    if (needsCurrentPin && !currentPin) {
+      setError('Enter the current PIN for this profile.')
+      return
+    }
     setBusy(true)
     setError(null)
     try {
-      await deleteProfile(target.id)
+      await deleteProfile(target.id, needsCurrentPin ? currentPin : undefined)
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not delete this profile.')
@@ -546,6 +559,23 @@ function ProfileForm({
           />
         </div>
       </div>
+
+      {needsCurrentPin && (
+        <div className={styles.profileFormRow}>
+          <div className={styles.field}>
+            <span className={styles.fieldLabel}>Current PIN</span>
+            <input
+              className={styles.fieldInput}
+              type="password"
+              inputMode="numeric"
+              autoComplete="off"
+              value={currentPin}
+              onChange={(e) => setCurrentPin(e.target.value.replace(/\D/g, '').slice(0, 8))}
+              placeholder="Needed to save or delete"
+            />
+          </div>
+        </div>
+      )}
 
       <div className={styles.row} style={{ padding: 0 }}>
         <div className={styles.rowText}>

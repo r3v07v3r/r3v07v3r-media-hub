@@ -5,6 +5,12 @@
 // daemon that is off, unreachable or mid-update degrades to "the tier
 // contributes nothing", never to a playback error. The daemon is an
 // optimisation the household added, not a dependency the app acquired.
+//
+// Trust: every byte to and from the daemon goes over TLS to the certificate
+// pinned when this device joined (lanCacheTrust.ts) — API calls, the
+// player's /stream fetches, the rooms hop and the opt-in TorBox key alike.
+// A connection stored before the daemon spoke HTTPS is pinned on its next
+// contact and never used in the clear again.
 
 import os from 'node:os'
 
@@ -15,7 +21,6 @@ import type {
   LanCacheDevice,
   LanCacheDevicesResponse,
   LanCacheOwnItem,
-  LanCachePairResponse,
   LanCacheUpdateNowResponse,
   LanCachePingResponse,
   LanCacheJobPayload,
@@ -25,6 +30,7 @@ import type { LanCacheAppEvent, StreamCandidate } from '../../shared/media-hub/t
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import { electronModule } from './electronModule'
 import { fetchJson, type HttpError } from './httpClient'
+import { schedule } from './taskScheduler'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { sendToRenderer } from './rendererBridge'
@@ -39,6 +45,20 @@ import {
   setLanCacheKeySyncPending
 } from './settingsStore'
 import { findLanCaches, type DiscoveredLanCache } from './lanCacheDiscovery'
+import {
+  LANCACHE_PROTOCOL_VERSION,
+  formatVerificationCode,
+  shortFingerprint
+} from '../../shared/lancache/pairingProof'
+import {
+  lanCacheJson,
+  lanCacheTokenNeedsRenewal,
+  normalizeLanCacheUrl,
+  peekLanCacheFingerprint,
+  pinnedFetch,
+  requestLanCacheJoin,
+  sameLanCacheHost
+} from './lanCacheTrust'
 
 /** The update route answers only once the server has checked its release
  *  feed and staged the bundle, so it is not a sub-second call. Three
@@ -66,16 +86,55 @@ function sameConnection(a: LanCacheConnection, b: LanCacheConnection | undefined
   return Boolean(b && a.token === b.token && a.url === b.url)
 }
 
+/** httpClient's fetch for one pinned daemon. */
+function pinnedFetcher(fingerprint: string): (url: string, init: RequestInit) => Promise<Response> {
+  return (url, init) => pinnedFetch(url, init, fingerprint)
+}
+
+/** One upgrade at a time, so concurrent first calls pin once. */
+let pinning: Promise<LanCacheConnection> | null = null
+
+/**
+ * The connection with a pinned certificate. A connection stored before the
+ * daemon spoke HTTPS has none: it is pinned here, on its next contact, to
+ * the certificate its address presents (trust on first use — the only
+ * thing such a connection ever had), and never used in the clear. Rejects
+ * when the daemon there is too old to speak HTTPS.
+ */
+async function pinConnection(connection: LanCacheConnection): Promise<LanCacheConnection> {
+  if (connection.fingerprint) return connection
+  pinning ??= (async () => {
+    const url = normalizeLanCacheUrl(connection.url)
+    const fingerprint = await peekLanCacheFingerprint(url)
+    const ping = await lanCacheJson<LanCachePingResponse>(`${url}/api/ping`, {}, fingerprint)
+    if (ping.product !== 'r3-cache' || !(Number(ping.protocol) >= LANCACHE_PROTOCOL_VERSION)) {
+      throw new Error('That cache server runs an older r3-cache. Update it first.')
+    }
+    const latest = getLanCacheConnection()
+    // Left, or joined somewhere else, meanwhile: nothing to pin.
+    if (!latest || latest.token !== connection.token) throw new Error('No cache server is paired.')
+    const pinned = { ...latest, url, fingerprint }
+    setLanCacheConnection(pinned)
+    refreshTrustedHostsRef?.()
+    return pinned
+  })().finally(() => {
+    pinning = null
+  })
+  return pinning
+}
+
 /** A request to the paired cache server, or to `at` when a call that spans
- *  several awaits must keep talking to the server it started with. */
-function request<T>(
+ *  several awaits must keep talking to the server it started with. Always
+ *  over TLS to the pinned certificate. */
+async function request<T>(
   pathname: string,
   init: RequestInit = {},
   timeoutMs?: number,
   at?: LanCacheConnection
 ): Promise<T> {
-  const connection = at ?? getLanCacheConnection()
-  if (!connection) throw new Error('No cache server is paired.')
+  const stored = at ?? getLanCacheConnection()
+  if (!stored) throw new Error('No cache server is paired.')
+  const connection = await pinConnection(stored)
   return fetchJson<T>(
     `${connection.url}${pathname}`,
     {
@@ -85,8 +144,65 @@ function request<T>(
         Authorization: `Bearer ${connection.token}`
       }
     },
-    { lane: 'lancache', label: 'cache server', timeoutMs }
+    {
+      lane: 'lancache',
+      label: 'cache server',
+      timeoutMs,
+      fetchImpl: pinnedFetcher(connection.fingerprint ?? '')
+    }
   )
+}
+
+let renewal: Promise<void> | null = null
+
+/**
+ * Swaps the bearer token for a fresh one when it is within the renewal
+ * window, so a device in regular use never reaches the daemon's expiry.
+ * One renewal at a time; a failure is left for the next caller.
+ */
+export function renewLanCacheTokenIfDue(): Promise<void> {
+  const connection = getLanCacheConnection()
+  if (!connection || connection.pending) return Promise.resolve()
+  if (!lanCacheTokenNeedsRenewal(connection.tokenExpiresAt ?? 0)) return Promise.resolve()
+  renewal ??= request<{ token?: string; expiresAt?: number }>(
+    '/api/token/renew',
+    { method: 'POST' },
+    undefined,
+    connection
+  )
+    .then((renewed) => {
+      const current = getLanCacheConnection()
+      // Left or joined elsewhere meanwhile: do not resurrect the old one.
+      if (!current || current.token !== connection.token) return
+      if (!/^[a-f0-9]{64}$/.test(String(renewed.token ?? ''))) return
+      setLanCacheConnection({
+        ...current,
+        token: String(renewed.token),
+        tokenExpiresAt: Number(renewed.expiresAt) || 0
+      })
+    })
+    .catch((error) => logError('lancache:renew', error))
+    .finally(() => {
+      renewal = null
+    })
+  return renewal
+}
+
+/**
+ * streamCache's fetch. Anything addressed to the paired daemon's
+ * host:port — whatever scheme it claims — goes through the pinned TLS
+ * transport (which refuses anything but https); everything else is the
+ * ordinary fetch. This is what ties the trusted-host exemption for the
+ * daemon's private address to the daemon this device joined, and nothing
+ * that merely answers at its address.
+ */
+export const lanCacheAwareFetch: typeof fetch = (input, init) => {
+  const target = input instanceof Request ? input.url : String(input)
+  const connection = getLanCacheConnection()
+  if (connection && sameLanCacheHost(target, connection.url)) {
+    return pinnedFetch(target, init, connection.fingerprint ?? '')
+  }
+  return globalThis.fetch(input, init)
 }
 
 /**
@@ -175,6 +291,9 @@ export async function findLanCacheCandidate(contentKey: string): Promise<StreamC
 export function lanCacheStreamUrl(candidate: StreamCandidate): string | null {
   const connection = getLanCacheConnection()
   if (!connection || candidate.source !== 'lancache' || !candidate.infoHash) return null
+  // Only a pinned connection: the player fetches this through
+  // lanCacheAwareFetch, which refuses anything else.
+  if (!connection.fingerprint) return null
   return `${connection.url}/stream/${candidate.infoHash}?token=${encodeURIComponent(connection.token)}`
 }
 
@@ -399,21 +518,20 @@ export async function promoteIfApproved(): Promise<'none' | 'pending' | 'approve
   // Deliberately NOT through request(): this is the one call a pending token
   // is allowed to make, and routing it past the guard that refuses
   // everything else keeps that exception visible.
+  const pinned = await pinConnection(connection)
   const answer = await fetchJson<{ status?: string; serverName?: string }>(
-    `${connection.url}/api/pair/status`,
-    { headers: { Authorization: `Bearer ${connection.token}` } },
-    { lane: 'lancache', label: 'cache server' }
+    `${pinned.url}/api/pair/status`,
+    { headers: { Authorization: `Bearer ${pinned.token}` } },
+    { lane: 'lancache', label: 'cache server', fetchImpl: pinnedFetcher(pinned.fingerprint ?? '') }
   )
   if (answer.status !== 'approved') return 'pending'
 
   // The consent made when this device asked stays on the connection, so a
   // key saved or changed later is kept in step (syncTorBoxKeyToLanCache).
-  setLanCacheConnection({
-    url: connection.url,
-    name: answer.serverName ?? connection.name,
-    token: connection.token,
-    ...(connection.shareTorbox ? { shareTorbox: true } : {})
-  })
+  // The pin, the expiry and the rest are kept too; only `pending` goes.
+  const { pending: _wasPending, ...approved } = getLanCacheConnection() ?? pinned
+  void _wasPending
+  setLanCacheConnection({ ...approved, name: answer.serverName ?? approved.name })
   // Approval is what actually grants the player access to this LAN host, so
   // the trusted-host list is refreshed HERE — the moment that now carries
   // the authority pairing used to.
@@ -471,6 +589,11 @@ export interface JoinResult {
   serverName?: string
   /** Whether the cache now holds this person's TorBox key. */
   keySaved?: boolean
+  /** The code this device computed for its request, for the
+   *  administrator to compare with the one the server shows. */
+  verification?: string
+  /** The server's certificate, short form, as pinned. */
+  serverId?: string
 }
 
 /**
@@ -479,12 +602,23 @@ export interface JoinResult {
  * the device in answers 409; either way the entry stays for the
  * administrator to remove, which is how it always was.
  */
-async function withdrawRequest(url: string, token: string): Promise<boolean> {
+async function withdrawRequest(at: {
+  url: string
+  token: string
+  fingerprint?: string
+}): Promise<boolean> {
+  // Never to an unpinned address: the token is the thing being protected.
+  if (!at.fingerprint) return false
   try {
     await fetchJson(
-      `${url}/api/pair/withdraw`,
-      { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
-      { lane: 'lancache', label: 'cache server', timeoutMs: ADDRESS_CHECK_TIMEOUT_MS }
+      `${at.url}/api/pair/withdraw`,
+      { method: 'POST', headers: { Authorization: `Bearer ${at.token}` } },
+      {
+        lane: 'lancache',
+        label: 'cache server',
+        timeoutMs: ADDRESS_CHECK_TIMEOUT_MS,
+        fetchImpl: pinnedFetcher(at.fingerprint)
+      }
     )
     return true
   } catch {
@@ -498,7 +632,7 @@ async function withdrawRequest(url: string, token: string): Promise<boolean> {
 export async function cancelLanCacheRequest(): Promise<boolean> {
   const waiting = getLanCacheConnection()
   if (!waiting?.pending) return false
-  return withdrawRequest(waiting.url, waiting.token)
+  return withdrawRequest(waiting)
 }
 
 export async function askToJoin(
@@ -506,9 +640,11 @@ export async function askToJoin(
   options: {
     /** The consent to keep this person's TorBox key on the cache, which
      *  fetches their requests with it (and only theirs). The Join panel's
-     *  checkbox, on by default; the launch search always sets it, because
-     *  the cache cannot fetch for a device without its key. Remembered on
-     *  the connection so a changed key is kept in step. */
+     *  checkbox, OFF by default, and never set by the launch search: the
+     *  key is a credential for somebody's paid account, and an automatic
+     *  join to whatever answered on the network is no consent to hand it
+     *  over. Remembered on the connection so a changed key is kept in
+     *  step. */
     shareTorboxToken?: boolean
     /** For the launch search: whether the join is still wanted. Asked
      *  before each request and again once the server has answered, since a
@@ -516,10 +652,7 @@ export async function askToJoin(
     stillWanted?: () => boolean
   } = {}
 ): Promise<JoinResult> {
-  const url = String(rawUrl || '')
-    .trim()
-    .replace(/\/+$/, '')
-  if (!/^https?:\/\//.test(url)) return { ok: false, message: 'Enter the server URL.' }
+  if (!String(rawUrl || '').trim()) return { ok: false, message: 'Enter the server URL.' }
   const unwanted: JoinResult = { ok: false, message: 'No longer looking for a cache server.' }
   const wanted = (): boolean => options.stillWanted?.() ?? true
   // Checked before anything is sent: every POST /api/pair creates a device
@@ -527,53 +660,40 @@ export async function askToJoin(
   // made at all.
   if (!wanted()) return unwanted
   try {
-    // Identity check first: refuse to ask to join something
-    // that is not an r3-cache daemon at all.
-    const ping = await fetchJson<LanCachePingResponse>(
-      `${url}/api/ping`,
-      {},
-      { lane: 'lancache', label: 'cache server' }
+    // The certificate is learned first and every request after it is
+    // pinned to it (lanCacheTrust), so the identity check, the request and
+    // the token all concern ONE server, over TLS. The request carries a
+    // fresh nonce, from which this device's verification code is computed.
+    const joined = await schedule(
+      () =>
+        requestLanCacheJoin({
+          url: String(rawUrl),
+          deviceName: os.hostname(),
+          stillWanted: wanted
+        }),
+      { lane: 'lancache', priority: 'interactive', label: 'cache server' }
     )
-    if (ping.product !== 'r3-cache') {
-      return { ok: false, message: 'That server is not an r3-cache daemon.' }
-    }
-    if (!wanted()) return unwanted
-    const paired = await fetchJson<LanCachePairResponse>(
-      `${url}/api/pair`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // The device NAME is sent either way: it is what the server's
-        // administrator sees in the approval list, so an unnamed
-        // request is one nobody can sensibly say yes to.
-        body: JSON.stringify({ deviceName: os.hostname() })
-      },
-      { lane: 'lancache', label: 'cache server' }
-    )
-    if (!paired.token) {
-      // The daemon refuses a request when too many devices are already
-      // waiting, or when they are arriving too fast. Both are temporary
-      // and neither is about this device, so the wording says to try
-      // again rather than suggesting something is wrong here.
-      return {
-        ok: false,
-        message: 'The cache server is not taking requests right now. Try again shortly.'
-      }
-    }
+    if (!joined) return unwanted
     if (!wanted()) {
       // A join made by hand, or a Leave, won while this POST was in flight.
       // Take the request back so it does not sit in the administrator's
       // queue. (A server in open join has already let it in, and that entry
       // stays for the administrator to remove.)
-      await withdrawRequest(url, paired.token)
+      await withdrawRequest(joined)
       return unwanted
     }
-    const serverName = paired.serverName ?? ping.serverName
-    const pending = paired.status === 'pending'
+    const url = joined.url
+    const serverName = joined.serverName || undefined
+    const pending = joined.status === 'pending'
+    const verification = joined.verification
+    const serverId = shortFingerprint(joined.fingerprint)
     setLanCacheConnection({
       url,
-      name: serverName,
-      token: paired.token,
+      name: serverName ?? '',
+      token: joined.token,
+      fingerprint: joined.fingerprint,
+      tokenExpiresAt: joined.tokenExpiresAt,
+      ...(verification ? { verification } : {}),
       ...(pending ? { pending: true } : {}),
       // The consent is KEPT, and while pending not acted on: a pending
       // token authorises nothing, so posting the credential now would
@@ -591,7 +711,13 @@ export async function askToJoin(
         ok: true,
         pending: true,
         serverName,
-        message: `Waiting for ${serverName ?? 'the cache server'}'s administrator to approve this device.`
+        verification,
+        serverId,
+        message:
+          `Waiting for ${serverName ?? 'the cache server'}'s administrator to approve this device.` +
+          (verification
+            ? ` Its verification code is ${formatVerificationCode(verification)}: the administrator should see the same code beside this request before approving it.`
+            : '')
       }
     }
     // Pairing is what grants the player access to this LAN host.
@@ -605,7 +731,9 @@ export async function askToJoin(
       ok: true,
       serverName,
       keySaved,
-      message: `Paired with ${serverName ?? 'the cache server'}.`
+      verification,
+      serverId,
+      message: `Paired with ${serverName ?? 'the cache server'} (server ID ${serverId}).`
     }
   } catch (error) {
     return { ok: false, message: (error as Error).message }
@@ -651,12 +779,25 @@ type TokenCheck = 'known' | 'unknown' | 'unreachable'
  *  address may now belong to some other web service with a catch-all page
  *  (httpClient tolerates a body that is not JSON), and taking that for the
  *  daemon would hold the connection on a dead address forever. */
-async function checkToken(url: string, token: string): Promise<TokenCheck> {
+async function checkToken(url: string, token: string, fingerprint: string): Promise<TokenCheck> {
+  let target: string
   try {
+    target = normalizeLanCacheUrl(url)
+  } catch {
+    return 'unreachable'
+  }
+  try {
+    // Pinned: a server at this address with any other certificate fails
+    // the handshake before the token is written, and counts as nobody.
     const answer = await fetchJson<{ status?: unknown } | null>(
-      `${url}/api/pair/status`,
+      `${target}/api/pair/status`,
       { headers: { Authorization: `Bearer ${token}` } },
-      { lane: 'lancache', label: 'cache server', timeoutMs: ADDRESS_CHECK_TIMEOUT_MS }
+      {
+        lane: 'lancache',
+        label: 'cache server',
+        timeoutMs: ADDRESS_CHECK_TIMEOUT_MS,
+        fetchImpl: pinnedFetcher(fingerprint)
+      }
     )
     const status = answer && typeof answer === 'object' ? answer.status : undefined
     return status === 'approved' || status === 'pending' ? 'known' : 'unreachable'
@@ -682,37 +823,53 @@ export type AddressCheck = 'none' | 'current' | 'moved' | 'lost'
 /**
  * Keeps the stored address pointing at the server this device joined.
  *
- * A candidate is accepted only when it carries the stored server's NAME and
+ * A candidate is accepted only when it presents the PINNED certificate and
  * then recognises this device's token, so the move lands on the same server
- * rather than on whatever answered first. The name test comes first so the
- * token is offered only to a server that already claims to be this one, not
- * to every daemon on the network. That is hygiene, not a proof: a host on
- * the LAN could copy the name, and the token already crosses the LAN in the
- * clear on every request, so this adds nothing a LAN attacker lacks today.
+ * rather than on whatever answered first. The certificate is checked in the
+ * TLS handshake, before the token is written, so a host that merely copies
+ * the server's name learns nothing. The name test before it is only there
+ * to avoid opening connections to every daemon on the network.
  */
 export async function keepLanCacheAddressCurrent(
   discover: () => Promise<DiscoveredLanCache[]>
 ): Promise<AddressCheck> {
-  const connection = getLanCacheConnection()
-  if (!connection) return 'none'
-  if ((await checkToken(connection.url, connection.token)) === 'known') {
-    // Answering again: a key change made while it was away goes now.
+  const stored = getLanCacheConnection()
+  if (!stored) return 'none'
+  let connection: LanCacheConnection
+  try {
+    // A connection from before HTTPS is pinned at its stored address
+    // first; until it is, it cannot be followed anywhere else.
+    connection = await pinConnection(stored)
+  } catch {
+    return 'lost'
+  }
+  const fingerprint = connection.fingerprint ?? ''
+  if ((await checkToken(connection.url, connection.token, fingerprint)) === 'known') {
+    // Answering again: renew a token that is getting old, and a key change
+    // made while it was away goes now.
+    await renewLanCacheTokenIfDue()
     await retryLanCacheKeySync()
     return 'current'
   }
 
   const found = await discover()
   for (const server of found) {
-    if (server.url === connection.url) continue
+    let candidate: string
+    try {
+      candidate = normalizeLanCacheUrl(server.url)
+    } catch {
+      continue
+    }
+    if (candidate === connection.url) continue
     if (connection.name && !sameName(server.name, connection.name)) continue
-    if ((await checkToken(server.url, connection.token)) !== 'known') continue
+    if ((await checkToken(candidate, connection.token, fingerprint)) !== 'known') continue
     // Re-read: the person may have left, or joined another server, while
     // the search ran. Only the connection that was searched for is moved.
     const latest = getLanCacheConnection()
     if (!latest || latest.token !== connection.token) return 'none'
-    setLanCacheConnection({ ...latest, url: server.url })
+    setLanCacheConnection({ ...latest, url: candidate })
     refreshTrustedHostsRef?.()
-    emit({ kind: 'moved', serverName: latest.name || server.name, url: server.url })
+    emit({ kind: 'moved', serverName: latest.name || server.name, url: candidate })
     await retryLanCacheKeySync()
     return 'moved'
   }
@@ -731,12 +888,13 @@ export async function runLanCacheAutoConnect(
   const found = await discover()
   for (const server of found) {
     const result = await askToJoin(server.url, {
-      // The cache fetches each person's requests with their own key, so a
-      // join it cannot fetch for is no use; the joining toast says so. Kept
-      // with no TorBox key too: nothing is sent until one is saved (askToJoin
-      // and the sync both check), and a key saved after this launch-time
-      // join then reaches the cache without anyone asking again.
-      shareTorboxToken: true,
+      // NOT shared. This join was made by the app on its own, to whatever
+      // answered on the network, with nobody comparing verification codes;
+      // handing that server the person's TorBox key automatically is
+      // exactly what a spoofed announcement is after. The joined toast
+      // says the key is not saved, and Save my key (lanCacheShareKey) is
+      // one click once the person has looked at which server this is.
+      shareTorboxToken: false,
       // Re-asked after the search: Leave may have been pressed meanwhile.
       stillWanted: () => !getLanCacheConnection() && isLanCacheAutoJoinOn()
     })
@@ -846,10 +1004,19 @@ async function raiseJoinRequests(): Promise<void> {
   const fresh = await checkJoinRequests()
   const serverName = getLanCacheConnection()?.name || 'the cache server'
   for (const device of fresh) {
-    emit({ kind: 'join-request', id: device.id, deviceName: device.deviceName, serverName })
+    emit({
+      kind: 'join-request',
+      id: device.id,
+      deviceName: device.deviceName,
+      serverName,
+      ...(device.verification ? { verification: device.verification } : {})
+    })
     notifyDesktop(
       'A device wants to use your cache server',
-      `${device.deviceName} on your network is asking to use ${serverName}. Open R3 Media Hub to allow or deny it.`
+      `${device.deviceName} on your network is asking to use ${serverName}.` +
+        (device.verification
+          ? ` Check that it shows the code ${formatVerificationCode(device.verification)}, then open R3 Media Hub to allow or deny it.`
+          : ' Open R3 Media Hub to allow or deny it.')
     )
   }
 }
@@ -876,6 +1043,12 @@ interface PairPayload {
   /** The explicit opt-in: copy the TorBox token to the daemon so it can
    *  fetch overnight with no app running. Never implied. */
   shareTorboxToken?: boolean
+}
+
+/** The pinned server's ID, short form, for the panel; '' when unpinned. */
+function currentServerId(): string {
+  const fingerprint = getLanCacheConnection()?.fingerprint
+  return fingerprint ? shortFingerprint(fingerprint) : ''
 }
 
 export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
@@ -912,13 +1085,21 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
   })
 
   handle(MEDIA_HUB_CHANNELS.lanCacheUnpair, async () => {
-    // Best-effort credential revocation on the daemon before forgetting it.
+    // Revoke on the daemon before forgetting it: the token stops working
+    // and the daemon deletes this device's TorBox key and cancels its work.
+    // Best-effort: an unreachable daemon is still forgotten here, and the
+    // token then lapses at its expiry (or the administrator removes it). The
+    // administrator's own device cannot revoke itself (that would strand
+    // the server), so for it only the key is withdrawn, as before.
     if (isLanCacheConnected()) {
-      await request('/api/credentials', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ torboxToken: '' })
-      }).catch(() => {})
+      await request('/api/devices/self', { method: 'DELETE' }).catch(async (error) => {
+        if ((error as HttpError).status !== 409) logError('lancache:unpair', error)
+        await request('/api/credentials', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ torboxToken: '' })
+        }).catch(() => {})
+      })
     } else {
       await cancelLanCacheRequest()
     }
@@ -933,11 +1114,12 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
 
   handle(MEDIA_HUB_CHANNELS.lanCacheStatus, async () => {
     if (!isLanCacheConnected()) return { connected: false as const }
+    await renewLanCacheTokenIfDue()
     try {
       const status = await request<LanCacheStatusResponse>('/api/status')
       // It answers, so a key change that missed it earlier can go now.
       if (isLanCacheKeySyncPending()) void syncTorBoxKeyToLanCache()
-      return { connected: true as const, status }
+      return { connected: true as const, status, serverId: currentServerId() }
     } catch (error) {
       return { connected: true as const, error: (error as Error).message }
     }
@@ -960,12 +1142,20 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
       const state = await promoteIfApproved()
       syncApprovalPolling()
       const latest = getLanCacheConnection()
-      return { state, name: latest?.name ?? connection.name, url: latest?.url ?? connection.url }
+      return {
+        state,
+        name: latest?.name ?? connection.name,
+        url: latest?.url ?? connection.url,
+        verification: latest?.verification ?? connection.verification ?? '',
+        serverId: currentServerId()
+      }
     } catch (error) {
       return {
         state: 'pending' as const,
         name: connection.name,
         url: connection.url,
+        verification: connection.verification ?? '',
+        serverId: currentServerId(),
         error: (error as Error).message
       }
     }

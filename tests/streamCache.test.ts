@@ -20,6 +20,8 @@ import {
   inspectRangeReply,
   shouldAdoptAsPlayhead,
   findReusableSession,
+  isSessionToken,
+  sessionDir,
   sweepRoot
 } from '../src/main/media-hub/streamCache'
 
@@ -607,6 +609,37 @@ async function main(): Promise<void> {
   await checkAsync('a missing cache root is not an error', async () => {
     const missing = path.join(os.tmpdir(), 'r3-cache-does-not-exist-' + String(fs.constants.F_OK))
     assert.equal(await findReusableSession(missing, { title: 'D', catalogId: 't' }, 1), '')
+  })
+
+  console.log('session token validation (path traversal into recursive rm)')
+  check('accepts only the 64-hex shape start() mints', () => {
+    assert.equal(isSessionToken(TOKEN_A), true)
+    assert.equal(isSessionToken('A'.repeat(64)), false)
+    assert.equal(isSessionToken('a'.repeat(63)), false)
+    assert.equal(isSessionToken('a'.repeat(65)), false)
+    assert.equal(isSessionToken(''), false)
+    assert.equal(isSessionToken(undefined), false)
+    assert.equal(isSessionToken(42), false)
+  })
+  check('sessionDir refuses traversal tokens instead of resolving outside root', () => {
+    const root = path.join(os.tmpdir(), 'r3-cache-root')
+    for (const bad of [
+      '',
+      '..',
+      '../..',
+      '../../../..',
+      '..\\..\\Users',
+      '/etc',
+      'C:\\Windows',
+      'a'.repeat(64) + '/..',
+      `../${'a'.repeat(64)}`
+    ]) {
+      assert.throws(() => sessionDir(root, bad), /Invalid cache session token/, bad)
+    }
+  })
+  check('sessionDir places a valid token directly inside root', () => {
+    const root = path.join(os.tmpdir(), 'r3-cache-root')
+    assert.equal(sessionDir(root, TOKEN_A), path.join(path.resolve(root), TOKEN_A))
   })
 
   console.log(`

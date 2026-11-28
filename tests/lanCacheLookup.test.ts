@@ -1,5 +1,6 @@
 // The play-time lookup against a paired cache server (lanCache.ts's
-// findLanCacheCandidate), driven against a real local HTTP server. What is
+// findLanCacheCandidate), driven against a real local HTTPS server (the
+// daemon's own kind of self-signed certificate, pinned). What is
 // pinned: the lookup is awaited before TorBox is tried, so a daemon that
 // accepts the connection and never answers must cost the play click about
 // three seconds, not httpClient's thirty-second default, even when the
@@ -18,11 +19,33 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import http from 'node:http'
+import https from 'node:https'
 import type { AddressInfo } from 'node:net'
 import { registerHooks } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+
+import { createSelfSignedIdentity } from '../daemon/tlsIdentity'
+import { pinnedFetch } from '../src/main/media-hub/lanCacheTrust'
+
+const tls = createSelfSignedIdentity()
+/** As the app stores a joined server: pinned, with a fresh token. */
+const connectionTo = (
+  url: string
+): {
+  url: string
+  name: string
+  token: string
+  fingerprint: string
+  tokenExpiresAt: number
+} => ({
+  url,
+  name: 'test',
+  token: 'device-token',
+  fingerprint: tls.fingerprint,
+  tokenExpiresAt: Date.now() + 80 * 24 * 60 * 60 * 1000
+})
 
 process.env.R3_USER_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-lan-lookup-'))
 process.env.R3_ELECTRON_SHIM = '1'
@@ -52,7 +75,8 @@ async function check(name: string, fn: () => Promise<void>): Promise<void> {
  *  complete item, depending on `stall`. Returns its base URL. */
 function startDaemon(stall: boolean): Promise<{ url: string; close: () => void }> {
   const held: http.ServerResponse[] = []
-  const server = http.createServer((req, res) => {
+  // (https.createServer hands the same ServerResponse type.)
+  const server = https.createServer({ key: tls.key, cert: tls.cert }, (req, res) => {
     if (stall) {
       held.push(res)
       return
@@ -79,7 +103,7 @@ function startDaemon(stall: boolean): Promise<{ url: string; close: () => void }
     server.listen(0, '127.0.0.1', () => {
       const { port } = server.address() as AddressInfo
       resolve({
-        url: `http://127.0.0.1:${port}`,
+        url: `https://127.0.0.1:${port}`,
         close: () => {
           for (const res of held) res.destroy()
           server.close()
@@ -101,7 +125,7 @@ async function main(): Promise<void> {
     assert.equal(LAN_LOOKUP_TIMEOUT_MS, 3_000)
     const daemon = await startDaemon(true)
     try {
-      setLanCacheConnection({ url: daemon.url, name: 'test', token: 'device-token' })
+      setLanCacheConnection(connectionTo(daemon.url))
       const started = Date.now()
       const found = await findLanCacheCandidate('tt0000001::')
       const took = Date.now() - started
@@ -118,11 +142,18 @@ async function main(): Promise<void> {
     const daemon = await startDaemon(true)
     let background: Promise<unknown>[] = []
     try {
-      setLanCacheConnection({ url: daemon.url, name: 'test', token: 'device-token' })
+      setLanCacheConnection(connectionTo(daemon.url))
       // Four background calls (the lane's concurrency) that the silent daemon
       // never answers, each holding its slot for httpClient's thirty seconds.
       background = Array.from({ length: 4 }, (_, n) =>
-        fetchJson(`${daemon.url}/api/status?n=${n}`, {}, { lane: 'lancache' }).catch(() => null)
+        fetchJson(
+          `${daemon.url}/api/status?n=${n}`,
+          {},
+          {
+            lane: 'lancache',
+            fetchImpl: (url, init) => pinnedFetch(url, init, tls.fingerprint)
+          }
+        ).catch(() => null)
       )
       const started = Date.now()
       const found = await findLanCacheCandidate('tt0000001::')
@@ -138,7 +169,7 @@ async function main(): Promise<void> {
   await check('a daemon that answers still yields its complete copy', async () => {
     const daemon = await startDaemon(false)
     try {
-      setLanCacheConnection({ url: daemon.url, name: 'test', token: 'device-token' })
+      setLanCacheConnection(connectionTo(daemon.url))
       const found = await findLanCacheCandidate('tt0000001::')
       assert.equal(found?.source, 'lancache')
       assert.equal(found?.infoHash, 'abc123')

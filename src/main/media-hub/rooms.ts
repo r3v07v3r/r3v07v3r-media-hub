@@ -53,6 +53,7 @@ import {
   type PresenceRecord,
   type StoredRoom
 } from './roomRules'
+import { FriendJoinTracker } from './friendJoin'
 import { fetchJson } from './httpClient'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
@@ -69,6 +70,7 @@ import {
   type SignedEnvelope
 } from './roomIdentity'
 import { asRoomSocket, connectHopWs, type RoomSocket } from './roomsHopClient'
+import { pinnedFetch } from './lanCacheTrust'
 import {
   decrypt,
   encrypt,
@@ -518,27 +520,77 @@ function onRoomMessage(room: RoomState, raw: unknown): void {
     msg.type.startsWith('friend-join-') &&
     msg.toFriendId === selfId
   ) {
-    // A join request makes this app host a party for what it is playing,
-    // with no prompt, and hosting can open a router port. That is only for
-    // a room this device shares its watching with: the request is answered
-    // here, declined, and never reaches the window that would host. The
-    // Join them button only shows for shared activity, so this is a stale
-    // view (sharing just turned off) or a client that ignores it.
-    if (msg.type === 'friend-join-request' && !room.stored.sharing) {
-      sendRoomPayload(room, {
-        type: 'friend-join-declined',
-        toFriendId: String(msg.fromFriendId || ''),
-        fromFriendId: selfId,
-        reason: "They aren't sharing what they watch in this room."
+    // WHO is asking or answering: in a signed room the signature's verdict,
+    // never the claimed field; the legacy room has only the claim.
+    const sender = room.signed ? from : String(msg.fromFriendId || '')
+    const claimed = { ...msg, fromFriendId: sender }
+    // Consent and correlation (see friendJoin.ts). A request reaches the
+    // window that would host only while this device shares its watching in
+    // this room — otherwise it is dropped with NO reply, so a member who is
+    // not sharing stays indistinguishable from one who is not watching. An
+    // offer or decline reaches the renderer only as the single answer to a
+    // request this device sent to exactly that member, within the window.
+    if (
+      !joinTrackerFor(room).acceptIncoming(claimed, {
+        selfFriendId: selfId,
+        sharing: room.stored.sharing
       })
+    ) {
       return
     }
-    const inbound: RoomInboundMessage = {
-      roomId: room.roomId,
-      message: msg as unknown as RoomMessage
-    }
+    const clean = cleanJoinMessage(room, claimed)
+    if (!clean) return
+    const inbound: RoomInboundMessage = { roomId: room.roomId, message: clean }
     sendToRenderer(MEDIA_HUB_CHANNELS.roomsMessage, inbound)
   }
+}
+
+/** Join requests this device sent and received, per room — see friendJoin.ts.
+ *  Per room because a reply has to come back through the room the request
+ *  went out on. */
+const joinTrackers = new Map<string, FriendJoinTracker>()
+
+function joinTrackerFor(room: RoomState): FriendJoinTracker {
+  let tracker = joinTrackers.get(room.roomId)
+  if (!tracker) {
+    tracker = new FriendJoinTracker()
+    joinTrackers.set(room.roomId, tracker)
+  }
+  return tracker
+}
+
+/** Rebuilds an accepted join message from known fields only, so nothing a
+ *  peer added rides along to the renderer. A requester's display name comes
+ *  from their presence in this room when we have it, not from the request. */
+function cleanJoinMessage(room: RoomState, msg: Record<string, unknown>): RoomMessage | null {
+  const fromFriendId = String(msg.fromFriendId || '')
+  const toFriendId = String(msg.toFriendId || '')
+  const requestId = String(msg.requestId || '')
+  if (msg.type === 'friend-join-request') {
+    const known = room.presence.get(fromFriendId)?.name
+    const fromName = (known || String(msg.fromName || 'Someone')).slice(0, 40) || 'Someone'
+    return { type: 'friend-join-request', fromFriendId, toFriendId, requestId, fromName }
+  }
+  if (msg.type === 'friend-join-offer') {
+    if (typeof msg.partyCode !== 'string' || !msg.partyCode) return null
+    return {
+      type: 'friend-join-offer',
+      fromFriendId,
+      toFriendId,
+      requestId,
+      partyCode: msg.partyCode.slice(0, 1000)
+    }
+  }
+  if (msg.type === 'friend-join-declined') {
+    return {
+      type: 'friend-join-declined',
+      fromFriendId,
+      toFriendId,
+      requestId,
+      reason: String(msg.reason || 'They declined.').slice(0, 200)
+    }
+  }
+  return null
 }
 
 function scheduleReconnect(room: RoomState): void {
@@ -602,12 +654,18 @@ async function postToRelay<T>(url: string, body: unknown, refused: string): Prom
   }
 }
 
-async function daemonAdvertisesHop(url: string): Promise<boolean> {
+async function daemonAdvertisesHop(url: string, fingerprint: string): Promise<boolean> {
   const cached = hopCapability.get(url)
   if (cached && Date.now() - cached.at < HOP_CAPABILITY_TTL_MS) return cached.ok
   let ok = false
   try {
-    const response = await fetch(`${url}/api/ping`, { signal: AbortSignal.timeout(2000) })
+    // Pinned like every other request to the cache server: the answer
+    // decides where the room's traffic goes.
+    const response = await pinnedFetch(
+      `${url}/api/ping`,
+      { signal: AbortSignal.timeout(2000) },
+      fingerprint
+    )
     const ping = (await response.json()) as { roomsHop?: boolean }
     ok = ping.roomsHop === true
   } catch {
@@ -629,7 +687,15 @@ async function openSocket(room: RoomState): Promise<void> {
   let ws: RoomSocket | null = null
   const lan = getLanCacheConnection()
   const relayHost = new URL(room.relayUrl).host
-  if (lan && !lan.pending && (await daemonAdvertisesHop(lan.url))) {
+  // Only a pinned connection carries rooms: the hop's upgrade request holds
+  // the daemon token, and lanCache.ts pins an older connection on its next
+  // contact.
+  if (
+    lan &&
+    !lan.pending &&
+    lan.fingerprint &&
+    (await daemonAdvertisesHop(lan.url, lan.fingerprint))
+  ) {
     try {
       // The tap, handed to the terminal: a 'carry' cryptogram the
       // daemon forwards to the relay, which verifies it exactly like a
@@ -639,7 +705,7 @@ async function openSocket(room: RoomState): Promise<void> {
       const cryptogram = room.signed
         ? mintCryptogram(roomsIdentity(), 'carry', relayHost, room.roomId, nextCtr())
         : undefined
-      ws = await connectHopWs(lan.url, lan.token, {
+      ws = await connectHopWs(lan.url, lan.token, lan.fingerprint, {
         roomId: room.roomId,
         relayUrl: room.relayUrl,
         join: room.stored.joinSecret,
@@ -774,6 +840,7 @@ function deactivateRoom(roomId: string): void {
     // best-effort
   }
   rooms.delete(roomId)
+  joinTrackers.delete(roomId)
   if (rooms.size === 0) stopTimers()
 }
 
@@ -992,7 +1059,46 @@ export function registerRoomsIpc(): void {
       // signed room the stamp is then SIGNED, so it genuinely identifies
       // its sender rather than politely claiming to.
       const from = room.signed ? roomsIdentity().id : selfIdentity().friendId
-      sendRoomPayload(room, { ...message, fromFriendId: from })
+      const toFriendId = String(message.toFriendId || '')
+      if (!toFriendId) throw new Error('That message has no recipient.')
+      const tracker = joinTrackerFor(room)
+      // Rebuilt from known fields, not spread from the renderer's object.
+      let outgoing: Record<string, unknown>
+      if (message.type === 'friend-join-request') {
+        outgoing = {
+          type: 'friend-join-request',
+          toFriendId,
+          fromFriendId: from,
+          fromName: String(message.fromName || 'Someone').slice(0, 40),
+          // A fresh id the answer has to echo; see friendJoin.ts.
+          requestId: tracker.startRequest(toFriendId)
+        }
+      } else if (message.type === 'friend-join-offer' || message.type === 'friend-join-declined') {
+        // Offers and declines only ever answer a request we received and
+        // showed the user, once.
+        if (!tracker.authorizeReply(message)) {
+          throw new Error('That join request is no longer open.')
+        }
+        outgoing =
+          message.type === 'friend-join-offer'
+            ? {
+                type: 'friend-join-offer',
+                toFriendId,
+                fromFriendId: from,
+                requestId: message.requestId,
+                partyCode: String(message.partyCode || '')
+              }
+            : {
+                type: 'friend-join-declined',
+                toFriendId,
+                fromFriendId: from,
+                requestId: message.requestId,
+                reason: String(message.reason || '').slice(0, 200)
+              }
+      } else {
+        throw new Error('That message cannot be sent to a room.')
+      }
+      sendRoomPayload(room, outgoing)
       return { ok: true }
     }
   )

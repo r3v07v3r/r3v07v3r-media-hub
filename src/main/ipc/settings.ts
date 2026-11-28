@@ -153,8 +153,12 @@ export function publishTrustedMediaHosts(): void {
   if (jellyfin?.enabled && jellyfin.baseUrl.trim()) trusted.push(normalizeBaseUrl(jellyfin.baseUrl))
   // The paired cache daemon is the other LAN host playback may reach.
   // Pairing/unpairing calls back into this, so revocation is immediate.
+  // Only once its certificate is pinned and the address is https: the
+  // player reaches it through lanCacheAwareFetch, which checks the pin, so
+  // the private-address exemption never extends to whatever else might
+  // answer at that address.
   const lanCache = getLanCacheConnection()
-  if (lanCache) trusted.push(lanCache.url)
+  if (lanCache?.fingerprint && /^https:\/\//i.test(lanCache.url)) trusted.push(lanCache.url)
   setTrustedMediaHosts(trusted)
 }
 

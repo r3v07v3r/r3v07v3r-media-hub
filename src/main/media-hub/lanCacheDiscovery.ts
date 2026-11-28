@@ -21,7 +21,7 @@
 // the stored address stops answering, and from the Caching section.
 
 import dgram from 'node:dgram'
-import http from 'node:http'
+import https from 'node:https'
 import os from 'node:os'
 
 import {
@@ -49,6 +49,86 @@ export interface DiscoveredLanCache {
 
 const BROWSE_WINDOW_MS = 2_500
 
+interface PendingInstance {
+  name: string
+  /** The address whose packet first named this instance. Its SRV and A
+   *  records are only accepted from that same responder. */
+  source: string
+  port?: number
+  target?: string
+  host?: string
+}
+
+export type DiscoveryState = Map<string, PendingInstance>
+
+/**
+ * Folds one decoded mDNS response into the browse state.
+ *
+ * Discovery is a convenience, not a trust decision (joining pins the
+ * daemon's certificate, and its verification code is compared), but it
+ * should not be trivially steerable either: an instance is bound to the
+ * responder that first announced it, records about it from any other
+ * address are ignored, and once resolved its port and address are never
+ * overwritten by a later packet.
+ */
+export function accumulateDiscovery(
+  state: DiscoveryState,
+  records: DnsRecord[],
+  sourceAddress: string
+): void {
+  for (const record of records) {
+    if (record.type === TYPE_PTR && record.data.kind === 'ptr') {
+      if (record.name.toLowerCase() !== LANCACHE_SERVICE_TYPE) continue
+      const instance = record.data.target
+      if (!state.has(instance)) {
+        state.set(instance, {
+          name: instance.replace(`.${LANCACHE_SERVICE_TYPE}`, ''),
+          source: sourceAddress
+        })
+      }
+    }
+  }
+  for (const record of records) {
+    if (record.type !== TYPE_SRV || record.data.kind !== 'srv') continue
+    const entry = state.get(record.name)
+    if (!entry || entry.source !== sourceAddress || entry.port) continue
+    entry.port = record.data.port
+    entry.target = record.data.target.toLowerCase()
+  }
+  for (const record of records) {
+    if (record.type !== TYPE_A || record.data.kind !== 'a') continue
+    for (const entry of state.values()) {
+      if (
+        entry.source === sourceAddress &&
+        !entry.host &&
+        entry.target === record.name.toLowerCase()
+      ) {
+        entry.host = record.data.address
+      }
+    }
+  }
+  // The responder's own source address is the definitive fallback when its
+  // A record names a host this network cannot spell.
+  for (const entry of state.values()) {
+    if (entry.source === sourceAddress && entry.target && !entry.host) entry.host = sourceAddress
+  }
+}
+
+/** Resolved instances, as https URLs (the daemon has no plain listener). */
+export function discoveryResults(state: DiscoveryState): DiscoveredLanCache[] {
+  const results: DiscoveredLanCache[] = []
+  for (const entry of state.values()) {
+    if (!entry.host || !entry.port) continue
+    results.push({
+      name: entry.name,
+      host: entry.host,
+      port: entry.port,
+      url: `https://${entry.host}:${entry.port}`
+    })
+  }
+  return results
+}
+
 /**
  * Sends one PTR query and collects responses for a short window.
  *
@@ -58,8 +138,7 @@ const BROWSE_WINDOW_MS = 2_500
  */
 export function discoverLanCaches(timeoutMs = BROWSE_WINDOW_MS): Promise<DiscoveredLanCache[]> {
   return new Promise((resolve) => {
-    const found = new Map<string, { name: string; port?: number; target?: string }>()
-    const addresses = new Map<string, string>()
+    const state: DiscoveryState = new Map()
     let socket: dgram.Socket
 
     const finish = (): void => {
@@ -68,18 +147,7 @@ export function discoverLanCaches(timeoutMs = BROWSE_WINDOW_MS): Promise<Discove
       } catch {
         // Already closed.
       }
-      const results: DiscoveredLanCache[] = []
-      for (const entry of found.values()) {
-        const host = entry.target ? addresses.get(entry.target.toLowerCase()) : undefined
-        if (!host || !entry.port) continue
-        results.push({
-          name: entry.name,
-          host,
-          port: entry.port,
-          url: `http://${host}:${entry.port}`
-        })
-      }
-      resolve(results)
+      resolve(discoveryResults(state))
     }
 
     try {
@@ -92,35 +160,7 @@ export function discoverLanCaches(timeoutMs = BROWSE_WINDOW_MS): Promise<Discove
     socket.on('message', (message, rinfo) => {
       const decoded = decodeMessage(message)
       if (!decoded?.isResponse) return
-      const records: DnsRecord[] = [...decoded.answers, ...decoded.additionals]
-      for (const record of records) {
-        if (record.type === TYPE_PTR && record.data.kind === 'ptr') {
-          if (record.name.toLowerCase() !== LANCACHE_SERVICE_TYPE) continue
-          const instance = record.data.target
-          if (!found.has(instance)) {
-            found.set(instance, {
-              name: instance.replace(`.${LANCACHE_SERVICE_TYPE}`, '')
-            })
-          }
-        }
-        if (record.type === TYPE_SRV && record.data.kind === 'srv') {
-          const entry = found.get(record.name)
-          if (entry) {
-            entry.port = record.data.port
-            entry.target = record.data.target
-          }
-        }
-        if (record.type === TYPE_A && record.data.kind === 'a') {
-          addresses.set(record.name.toLowerCase(), record.data.address)
-        }
-      }
-      // The responder's own source address is the definitive fallback when
-      // its A record names a host this network cannot spell.
-      for (const entry of found.values()) {
-        if (entry.target && !addresses.has(entry.target.toLowerCase())) {
-          addresses.set(entry.target.toLowerCase(), rinfo.address)
-        }
-      }
+      accumulateDiscovery(state, [...decoded.answers, ...decoded.additionals], rinfo.address)
     })
 
     socket.bind(0, () => {
@@ -224,12 +264,22 @@ export function subnetProbeHosts(
   return [...hosts]
 }
 
-/** One /api/ping. Plain node:http rather than httpClient on purpose: a probe
- *  of 254 addresses is not API traffic, and routing it through the
- *  scheduler's 'lancache' lane would queue the play-time lookup behind it. */
+/** One /api/ping. Plain node:https rather than httpClient on purpose: a
+ *  probe of 254 addresses is not API traffic, and routing it through the
+ *  scheduler's 'lancache' lane would queue the play-time lookup behind it.
+ *  The certificate is not checked HERE — nothing secret is sent, and the
+ *  answer is only a candidate: joining pins whatever certificate it
+ *  presents, and the verification code is what tells the two apart. */
 function ping(host: string, port: number): Promise<LanCachePingResponse | null> {
   return new Promise((resolve) => {
-    const req = http.get({ host, port, path: '/api/ping', timeout: PROBE_TIMEOUT_MS }, (res) => {
+    const options = {
+      host,
+      port,
+      path: '/api/ping',
+      timeout: PROBE_TIMEOUT_MS,
+      rejectUnauthorized: false
+    }
+    const req = https.get(options, (res) => {
       if (res.statusCode !== 200) {
         res.resume()
         resolve(null)
@@ -269,7 +319,7 @@ export async function probeSubnetForLanCaches(
       const host = hosts[next++]
       const answer = await ping(host, port)
       if (answer) {
-        found.push({ name: answer.serverName || host, host, port, url: `http://${host}:${port}` })
+        found.push({ name: answer.serverName || host, host, port, url: `https://${host}:${port}` })
       }
     }
   }

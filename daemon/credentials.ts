@@ -23,13 +23,17 @@ export interface Credentials {
   /** Whether ANY device has shared a credential — status/display only;
    *  fetching always goes through tokenForDevice. */
   linkedDeviceCount(): number
+  /** Drops every credential whose device is no longer paired — run after a
+   *  revocation made outside the API (the --revoke CLI, or while the daemon
+   *  was off), so a revoked device's TorBox key does not linger. */
+  retainOnly(deviceIds: ReadonlySet<string>): Promise<number>
   load(): Promise<void>
 }
 
 interface CredentialsFile {
-  /** deviceId -> TorBox token. The id is a hash of the pairing token
-   *  (pairing.ts's deviceIdForToken), so this file never maps one secret
-   *  to another secret's plain value. */
+  /** deviceId -> TorBox token. The id is pairing.ts's stable, non-secret
+   *  device id (a hash of the device's first token), so this file never
+   *  maps one secret to another secret's plain value. */
   byDevice: Record<string, string>
 }
 
@@ -61,6 +65,13 @@ export function createCredentials(dataDir: string): Credentials {
     },
     linkedDeviceCount() {
       return Object.keys(byDevice).length
+    },
+    async retainOnly(deviceIds) {
+      const stale = Object.keys(byDevice).filter((deviceId) => !deviceIds.has(deviceId))
+      if (!stale.length) return 0
+      for (const deviceId of stale) delete byDevice[deviceId]
+      await persist()
+      return stale.length
     },
     async load() {
       try {

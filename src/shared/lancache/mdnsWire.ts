@@ -142,12 +142,28 @@ export function encodeQuery(name: string, type: number): Buffer {
 // ---------------------------------------------------------------------------
 // decoding
 
-function readName(buffer: Buffer, offset: number): { name: string; next: number } {
+// Every datagram on 5353 is decoded before anything knows who sent it, so
+// the decoder has to bound its own work. RFC 1035 limits: a name is at
+// most 255 octets and a label at most 63. Compression pointers must point
+// strictly backwards, each one before the last — that rules out self and
+// forward loops outright, so a 2-byte pointer can no longer be expanded
+// into hundreds of KB of repeated labels.
+const MAX_NAME_OCTETS = 255
+const MAX_LABEL_OCTETS = 63
+/** mDNS's own ceiling on a datagram (RFC 6762 §17). */
+export const MAX_MDNS_PACKET_BYTES = 9000
+/** Far above anything this protocol's own records ever carry. */
+export const MAX_MDNS_SECTION_COUNT = 32
+
+export function readName(buffer: Buffer, offset: number): { name: string; next: number } {
   const labels: string[] = []
   let position = offset
   let next = -1
-  let hops = 0
-  while (position < buffer.length) {
+  let octets = 0
+  // Every pointer must land before this — starts as the name's own start.
+  let limit = offset
+  for (;;) {
+    if (position >= buffer.length) throw new Error('mDNS name runs past the packet')
     const length = buffer[position]
     if (length === 0) {
       if (next === -1) next = position + 1
@@ -155,16 +171,22 @@ function readName(buffer: Buffer, offset: number): { name: string; next: number 
     }
     // Compression pointer: two bytes, top bits 11.
     if ((length & 0xc0) === 0xc0) {
-      if (position + 1 >= buffer.length) break
+      if (position + 1 >= buffer.length) throw new Error('truncated mDNS pointer')
       if (next === -1) next = position + 2
-      position = ((length & 0x3f) << 8) | buffer[position + 1]
-      if (++hops > 16) break // malformed loop guard
+      const target = ((length & 0x3f) << 8) | buffer[position + 1]
+      if (target >= limit) throw new Error('mDNS pointer does not point backwards')
+      limit = target
+      position = target
       continue
     }
+    // 0x40/0x80 label types are reserved/obsolete; anything over 63 is one.
+    if (length > MAX_LABEL_OCTETS) throw new Error('invalid mDNS label length')
+    octets += length + 1
+    if (octets > MAX_NAME_OCTETS) throw new Error('mDNS name too long')
     labels.push(buffer.subarray(position + 1, position + 1 + length).toString('utf8'))
     position += 1 + length
   }
-  return { name: labels.join('.'), next: next === -1 ? position : next }
+  return { name: labels.join('.'), next }
 }
 
 function decodeRecordData(
@@ -204,12 +226,20 @@ function decodeRecordData(
 
 export function decodeMessage(buffer: Buffer): DnsMessage | null {
   try {
-    if (buffer.length < 12) return null
+    if (buffer.length < 12 || buffer.length > MAX_MDNS_PACKET_BYTES) return null
     const flags = buffer.readUInt16BE(2)
     const questionCount = buffer.readUInt16BE(4)
     const answerCount = buffer.readUInt16BE(6)
     const authorityCount = buffer.readUInt16BE(8)
     const additionalCount = buffer.readUInt16BE(10)
+    if (
+      questionCount > MAX_MDNS_SECTION_COUNT ||
+      answerCount > MAX_MDNS_SECTION_COUNT ||
+      authorityCount > MAX_MDNS_SECTION_COUNT ||
+      additionalCount > MAX_MDNS_SECTION_COUNT
+    ) {
+      return null
+    }
 
     let offset = 12
     const questions: DnsQuestion[] = []

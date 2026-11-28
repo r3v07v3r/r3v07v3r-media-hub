@@ -37,6 +37,7 @@ import type { DatabaseSync, SQLOutputValue } from 'node:sqlite'
 
 import { COLLECTIONS_KEY_PREFIX, COLLECTIONS_STATE_TTL_MS } from '../../shared/media-hub/universes'
 import { SCHEMA_VERSION } from './migrations'
+import { sanitizeBackupProfiles } from './backupProfiles'
 
 /** Tables a backup carries, each keyed by profile. Order matters on restore:
  *  `list_items` has a foreign key into `lists`, so lists are written first. */
@@ -278,13 +279,13 @@ export function readBackup(filePath: string): BackupFile {
   // it would delete the existing rows, write orphans in their place, and
   // report success. An array was the check after the last round of review;
   // it was not enough.
-  const usableProfiles = Array.isArray(backup.profiles)
-    ? backup.profiles.filter(
-        (profile) =>
-          typeof (profile as { id?: unknown })?.id === 'string' &&
-          String((profile as { id: string }).id).trim().length > 0
-      )
-    : []
+  //
+  // Each profile is also rebuilt field by field here (see backupProfiles.ts):
+  // the restore handler saves them into settings and makes one active, so a
+  // malformed record would otherwise crash the UI on every launch, and a
+  // planted pinHash/pinSalt would be kept. Invalid entries are dropped, and the
+  // ownership check below then refuses any rows that belonged to them.
+  const usableProfiles = sanitizeBackupProfiles(backup.profiles)
   if (usableProfiles.length === 0) {
     throw new Error('That backup has no profiles in it and was not restored.')
   }
@@ -299,7 +300,7 @@ export function readBackup(filePath: string): BackupFile {
   //
   // list_items is checked through its parent list rather than directly: it has
   // no profile column, deliberately, because a list_id already names one.
-  const declared = new Set(usableProfiles.map((profile) => String((profile as { id: string }).id)))
+  const declared = new Set(usableProfiles.map((profile) => profile.id))
   const listOwners = new Map<string, string>()
   for (const row of backup.tables.lists as Row[]) {
     listOwners.set(String(row.list_id), String(row.profile_id))
@@ -316,7 +317,7 @@ export function readBackup(filePath: string): BackupFile {
     }
   }
 
-  return backup as BackupFile
+  return { ...(backup as BackupFile), profiles: usableProfiles }
 }
 
 /**

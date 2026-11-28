@@ -169,8 +169,23 @@ export function cacheRootDir(): string {
 // folder mid-download, a session already in flight must keep writing to
 // wherever it started, not split its chunks across two directories.
 // Changing the folder only takes effect for the NEXT title played.
-function sessionDir(root: string, token: string): string {
-  return path.join(root, token)
+//
+// The token is the only part of the path that ever comes from outside this
+// module (play:stream hands one back from the renderer), and everything
+// under it gets a recursive rm on delete. So it must be exactly the
+// 64-hex shape start() mints, and the joined path must still sit directly
+// inside root — a "../.." token would otherwise point the delete at any
+// directory the user can write to.
+export function sessionDir(root: string, token: string): string {
+  if (!isSessionToken(token)) throw new Error('Invalid cache session token.')
+  const resolvedRoot = path.resolve(root)
+  const dir = path.resolve(resolvedRoot, token)
+  if (path.dirname(dir) !== resolvedRoot) throw new Error('Invalid cache session token.')
+  return dir
+}
+
+export function isSessionToken(token: unknown): token is string {
+  return typeof token === 'string' && SESSION_TOKEN_RE.test(token)
 }
 
 function chunkFilePath(root: string, token: string, index: number): string {
@@ -1706,15 +1721,25 @@ export function createStreamCache({
     inputDurationSeconds: number | undefined,
     meta?: CacheSessionMeta
   ): Promise<StreamCacheStartResult> {
+    if (!isSessionToken(sessionToken)) throw new Error('Invalid cache session token.')
     const current = starts.take()
     await stopInternal(false)
     assertCurrent(current)
+    // Read and check the session's meta BEFORE adopting its token: if the
+    // token named no real session, nothing (deleteSession included) must
+    // ever act on it.
+    const localRoot = cacheRootDir()
+    const stored = JSON.parse(
+      await fsp.readFile(metaFilePath(localRoot, sessionToken), 'utf8')
+    ) as StoredMeta
+    assertCurrent(current)
+    if (stored.totalBytes === null) throw new Error('That cached copy has no recorded length.')
     // Always the disk store: a memory session cannot have survived to be
     // adopted, so a local candidate is by definition on disk.
     store = diskChunkStore
     token = sessionToken
     activeCacheTokens.add(token)
-    cacheRoot = cacheRootDir()
+    cacheRoot = localRoot
     remoteUrl = ''
     durationSeconds = inputDurationSeconds
     maxBytes = Number.POSITIVE_INFINITY
@@ -1728,12 +1753,7 @@ export function createStreamCache({
     await listen()
     assertCurrent(current)
 
-    const stored = JSON.parse(
-      await fsp.readFile(metaFilePath(cacheRoot, token), 'utf8')
-    ) as StoredMeta
-    assertCurrent(current)
     totalBytes = stored.totalBytes
-    if (totalBytes === null) throw new Error('That cached copy has no recorded length.')
 
     await adoptExistingChunks()
     assertCurrent(current)
@@ -1989,7 +2009,13 @@ export function createStreamCache({
   }
 
   async function deleteSession(): Promise<void> {
-    const dir = token ? sessionDir(cacheRoot, token) : ''
+    let dir = ''
+    try {
+      dir = token ? sessionDir(cacheRoot, token) : ''
+    } catch (error) {
+      // Not a session this module could have created: stop it, delete nothing.
+      logError('streamCache:deleteSession', error)
+    }
     await stop()
     if (dir) {
       try {
@@ -2281,7 +2307,6 @@ export async function listCacheSessions(activeToken: string): Promise<StreamCach
  *  the currently active one first (see playbackSession.ts's IPC handler).
  *  Reads cacheRootDir() fresh, same reasoning as listCacheSessions above. */
 export async function deleteCacheSession(token: string): Promise<void> {
-  if (!SESSION_TOKEN_RE.test(token)) throw new Error('Invalid cache session token.')
   await fsp.rm(sessionDir(cacheRootDir(), token), { recursive: true, force: true })
 }
 

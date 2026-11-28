@@ -25,9 +25,10 @@
 // Lua/JS user scripts. Two rules, neither optional:
 //   1. assertPlayableUrl() below re-checks every URL immediately before
 //      loadfile, the same defense-in-depth the ffmpeg spawn sites used.
-//   2. The process is launched with --no-config --load-scripts=no --ytdl=no,
-//      and every user-influenced value goes through the JSON command/property
-//      API as a discrete argument — never interpolated into an option string.
+//   2. The process is launched with --no-config --load-scripts=no --ytdl=no
+//      --access-references=no, and every user-influenced value goes through
+//      the JSON command/property API as a discrete argument — never
+//      interpolated into an option string.
 
 import { spawn, type ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
@@ -350,6 +351,12 @@ export class MpvPlayer {
       '--no-config',
       '--load-scripts=no',
       '--ytdl=no',
+      // The bytes mpv plays come from a torrent picked off public scrapers.
+      // Without this, a 'video' that is really an M3U/PLS playlist, a
+      // QuickTime reference movie or an ordered-chapters file makes mpv open
+      // the URLs inside it (LAN hosts included), behind the app's SSRF guard,
+      // which only ever checks the one URL handed to loadfile.
+      '--access-references=no',
       // Stay alive between titles, and create NO window until a file is
       // actually loaded. --force-window=no is what lets the app's own UI show
       // through when playback stops: mpv destroys its child window on `stop`,
@@ -885,6 +892,7 @@ export async function captureThumbnail(
           '--no-config',
           '--load-scripts=no',
           '--ytdl=no',
+          '--access-references=no',
           '--really-quiet',
           '--no-audio',
           '--frames=1',

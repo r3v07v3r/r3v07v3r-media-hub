@@ -378,8 +378,16 @@ export function createApi(transport: ApiTransport) {
         pair: (payload: {
           url: string
           shareTorboxToken?: boolean
-        }): Promise<{ ok: boolean; message: string; pending?: boolean }> =>
-          transport.invoke(MEDIA_HUB_CHANNELS.lanCachePair, payload),
+        }): Promise<{
+          ok: boolean
+          message: string
+          pending?: boolean
+          /** This device's verification code for the request, for the
+           *  administrator to compare with the server's. */
+          verification?: string
+          /** The pinned server certificate, short form. */
+          serverId?: string
+        }> => transport.invoke(MEDIA_HUB_CHANNELS.lanCachePair, payload),
         unpair: (): Promise<{ ok: true }> => transport.invoke(MEDIA_HUB_CHANNELS.lanCacheUnpair),
         /** Cheap paired? probe — reads the stored connection, no network. */
         titlesState: (): Promise<{ paired: boolean }> =>
@@ -396,6 +404,8 @@ export function createApi(transport: ApiTransport) {
           connected: boolean
           status?: LanCacheStatusResponse
           error?: string
+          /** The pinned server certificate, short form. */
+          serverId?: string
         }> => transport.invoke(MEDIA_HUB_CHANNELS.lanCacheStatus),
         /** Poll while a request waits for approval. Flips itself to
          *  'approved' — and grants the player access — the moment the server
@@ -406,6 +416,10 @@ export function createApi(transport: ApiTransport) {
           /** The stored address, so a panel can follow a join or a move the
            *  main process made on its own without searching the network. */
           url?: string
+          /** This device's verification code while it waits ('' if none). */
+          verification?: string
+          /** The pinned server certificate, short form. */
+          serverId?: string
           error?: string
         }> => transport.invoke(MEDIA_HUB_CHANNELS.lanCachePairStatus),
         claim: (): Promise<{ ok: boolean; message: string }> =>
@@ -1181,9 +1195,11 @@ export function createApi(transport: ApiTransport) {
           avatarTint?: [string, string]
           isKid?: boolean
           pin?: string | null
+          /** Required when the profile has a PIN (main enforces it). */
+          currentPin?: string
         }): Promise<ProfilePublic> => transport.invoke(MEDIA_HUB_CHANNELS.profilesUpdate, payload),
-        remove: (id: string): Promise<ProfilesListResult> =>
-          transport.invoke(MEDIA_HUB_CHANNELS.profilesDelete, { id }),
+        remove: (id: string, currentPin?: string): Promise<ProfilesListResult> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.profilesDelete, { id, currentPin }),
         verifyPin: (id: string, pin: string): Promise<ProfileVerifyPinResult> =>
           transport.invoke(MEDIA_HUB_CHANNELS.profilesVerifyPin, { id, pin })
       }

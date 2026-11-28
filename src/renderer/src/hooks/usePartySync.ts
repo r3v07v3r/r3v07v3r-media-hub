@@ -31,6 +31,7 @@ import {
   syncCorrection,
   type HostPositionSample
 } from '@shared/media-hub/partySync'
+import { clientAcceptsPartyMessage, partyEventSender } from '@shared/media-hub/partyAuthority'
 
 /** How long the host waits for everyone before releasing a synced seek anyway —
  *  one stuck peer must not hold the party hostage. */
@@ -301,6 +302,21 @@ export function usePartySync({
         paused?: boolean
         requestId?: string
         waitingIds?: string[]
+      }
+      // Main already filters by sender; checked again here because this is
+      // what actually drives the player. Host-only messages (position,
+      // seek-sync, ...) must come from the host, and a member's
+      // play/pause/seek counts only while the host allows member control.
+      // On the host itself every message is a member's, so the same rule
+      // applies unchanged.
+      if (
+        !clientAcceptsPartyMessage(
+          msg,
+          partyEventSender(event.from),
+          status.allowMemberControl === true
+        )
+      ) {
+        return
       }
       if (msg.type === 'play') run({ type: 'play' })
       else if (msg.type === 'pause') run({ type: 'pause' })

@@ -10,15 +10,23 @@
 // versus a client.
 //
 // Direct/LAN/WAN connections speak a small custom WebSocket protocol
-// (hello/welcome/leave/party-state, all AES-256-GCM encrypted
-// via party.ts's encryptMessage/decryptMessage with a per-party shared
-// secret) directly to peers. Relay connections speak the same encrypted
-// payloads, but wrapped in an unencrypted `{type:'relay', connId, isHost,
-// body}` envelope produced by the external R3-Party-Sync worker. Do not
-// change either wire format — it must keep interoperating with the
-// original CommonJS app's install base and with the relay worker's
-// existing protocol; the hybrid host BRIDGES the two (forwardFromMember)
-// rather than altering either.
+// (hello/welcome/leave/party-state/...) directly to peers. Since protocol
+// v2 every direct connection starts with a plaintext nonce handshake and
+// each frame is sealed with per-connection, per-direction keys and a
+// sequence number (see partyChannel.ts) — v1 frames, sealed with one static
+// key, could be captured and replayed to join or control a party. v1 peers
+// are turned away with a clear message (close code 4426 / "needs the latest
+// version"); both ends of a direct connection need this version. Relay
+// connections speak party.ts's encryptMessage/decryptMessage payloads,
+// wrapped in an unencrypted `{type:'relay', connId, isHost, body}` envelope
+// produced by the external R3-Party-Sync worker; that wire format is
+// unchanged. The hybrid host BRIDGES the two (forwardFromMember) rather
+// than altering either.
+//
+// Authority: only the host may send host-only messages (nowPlaying,
+// preparing, party-state, seek-sync, position, ...), and member
+// play/pause/seek count only while the host allows member control. Every
+// receiver enforces that — see shared/media-hub/partyAuthority.ts.
 
 import crypto from 'node:crypto'
 import { WebSocket, WebSocketServer } from 'ws'
@@ -46,6 +54,22 @@ import {
   type PartyLanEndpoint,
   type PartyRelayEndpoint
 } from './party'
+import {
+  PARTY_CLOSE_UPDATE_REQUIRED,
+  PARTY_OUTDATED_PEER_MESSAGE,
+  PartyClientHandshake,
+  PartyHostHandshake,
+  isLegacyPartyFrame,
+  type PartyDirectChannel
+} from './partyChannel'
+import {
+  clientAcceptsPartyMessage,
+  directSenderOf,
+  hostAcceptsFromMember,
+  hostShouldForwardMemberMessage,
+  relaySenderOf,
+  type PartySenderRole
+} from '../../shared/media-hub/partyAuthority'
 import { encrypt, partySyncCredentials, readSettings, writeSettings } from './settingsStore'
 import { currentPlaybackForParty } from './playerBridge'
 import { sendToRenderer } from './rendererBridge'
@@ -66,6 +90,10 @@ const MAX_PARTY_MESSAGE_BYTES = 64 * 1024
 // unbounded connections (each one holds a live socket + a Map entry on the
 // host for as long as it stays open).
 const MAX_PARTY_MEMBERS = 32
+// A direct-mode socket that has not finished the v2 handshake (client-hello
+// then a sealed hello) by now is dropped, so half-open connections cannot
+// pile up on the host.
+const DIRECT_HANDSHAKE_TIMEOUT_MS = 10_000
 
 // A decrypted (or relay-envelope) message off the wire. Deliberately loose
 // (mirrors the original's untyped `msg`/`envelope` objects) — every handler
@@ -91,6 +119,8 @@ interface PartyHostMember {
    *  would duplicate it for its whole side. See forwardFromMember. */
   via: 'direct' | 'relay'
   ws?: WebSocket | null
+  /** Direct members only: this connection's v2 session (see partyChannel.ts). */
+  channel?: PartyDirectChannel | null
 }
 
 /** The full nowPlaying event as broadcast — kept verbatim so a late joiner
@@ -157,6 +187,8 @@ interface PartyStateClient {
   /** Which transport this client's single connection uses. */
   mode: PartyMode
   ws: WebSocket
+  /** Direct mode only: the v2 session with the host. Null over the relay. */
+  channel: PartyDirectChannel | null
   secret: string
   members: PartyMemberSummary[]
   selfName: string
@@ -206,22 +238,39 @@ function partyMemberSummaries(): PartyMemberSummary[] {
   return current.members || []
 }
 
-function partyBroadcast(payload: string): void {
+/** Sends one message to a direct member over its own v2 session — each
+ *  direct connection has its own keys and sequence, so a payload is sealed
+ *  separately for every socket. */
+function sendToDirectMember(member: PartyHostMember, payload: unknown): void {
+  if (member.ws && member.channel && member.ws.readyState === WebSocket.OPEN) {
+    member.ws.send(member.channel.seal(payload))
+  }
+}
+
+/** One relay send, encrypted once with the party secret. */
+function sendToRelay(current: PartyStateHost, payload: unknown): void {
+  if (current.relay && current.relay.ws.readyState === WebSocket.OPEN) {
+    current.relay.ws.send(encryptMessage(current.secret, payload))
+  }
+}
+
+function partyBroadcast(payload: unknown): void {
   const current = party
   if (!current) return
   if (current.role === 'host') {
     // Both transports, every time: each direct member has its own socket,
     // and one send to the relay reaches every relay member (the worker
     // fans it out, and never echoes to this sender).
-    for (const m of current.members.values()) {
-      if (m.ws && m.ws.readyState === WebSocket.OPEN) m.ws.send(payload)
-    }
-    if (current.relay && current.relay.ws.readyState === WebSocket.OPEN) {
-      current.relay.ws.send(payload)
-    }
+    for (const m of current.members.values()) sendToDirectMember(m, payload)
+    sendToRelay(current, payload)
     return
   }
-  if (current.ws && current.ws.readyState === WebSocket.OPEN) current.ws.send(payload)
+  if (!current.ws || current.ws.readyState !== WebSocket.OPEN) return
+  if (current.channel) {
+    current.ws.send(current.channel.seal(payload))
+    return
+  }
+  current.ws.send(encryptMessage(current.secret, payload))
 }
 
 /**
@@ -232,16 +281,14 @@ function partyBroadcast(payload: string): void {
  * would deliver it twice over there. A direct member's message reached only
  * this host, so it goes to every other direct socket AND once to the relay.
  */
-function forwardFromMember(fromId: string, payload: string): void {
+function forwardFromMember(fromId: string, payload: unknown): void {
   const current = party
   if (!current || current.role !== 'host') return
   const senderVia = current.members.get(fromId)?.via
   for (const [id, m] of current.members) {
-    if (id !== fromId && m.ws && m.ws.readyState === WebSocket.OPEN) m.ws.send(payload)
+    if (id !== fromId) sendToDirectMember(m, payload)
   }
-  if (senderVia !== 'relay' && current.relay && current.relay.ws.readyState === WebSocket.OPEN) {
-    current.relay.ws.send(payload)
-  }
+  if (senderVia !== 'relay') sendToRelay(current, payload)
 }
 
 /** Hands a payload to ONE member, whichever side they joined from. A relay
@@ -249,16 +296,14 @@ function forwardFromMember(fromId: string, payload: string): void {
  *  copy goes out as a broadcast, which every other member must therefore
  *  treat idempotently (the nowPlaying replay is deduped follower-side by
  *  "am I already playing this"). */
-function sendToMember(member: PartyHostMember, payload: string): void {
+function sendToMember(member: PartyHostMember, payload: unknown): void {
   const current = party
   if (!current || current.role !== 'host') return
   if (member.via === 'direct') {
-    if (member.ws && member.ws.readyState === WebSocket.OPEN) member.ws.send(payload)
+    sendToDirectMember(member, payload)
     return
   }
-  if (current.relay && current.relay.ws.readyState === WebSocket.OPEN) {
-    current.relay.ws.send(payload)
-  }
+  sendToRelay(current, payload)
 }
 
 /** The application window and the native player controls are separate
@@ -279,13 +324,12 @@ function broadcastPartyState(): void {
   // is a film to come back to — that is what the hub's "Join the film"
   // button renders from. The full replayable event stays host-side.
   const nowPlaying = nowPlayingSummary(current)
-  const payload = encryptMessage(current.secret, {
+  partyBroadcast({
     type: 'party-state',
     members,
     allowMemberControl: current.allowMemberControl,
     nowPlaying
   })
-  partyBroadcast(payload)
   sendPartyEvent({
     type: 'party-state',
     members,
@@ -294,16 +338,18 @@ function broadcastPartyState(): void {
   })
 }
 
-/** What a member may only send while the host has "Everyone can control
- *  playback" on. Gated on receipt, not just in the member's UI, so a member
- *  whose switch state is stale (or whose build ignores it) cannot pause the
- *  party anyway. */
-function isMemberControlAction(msg: PartyMessage | null | undefined): boolean {
-  return msg?.type === 'seek' || msg?.type === 'play' || msg?.type === 'pause'
-}
-
+/** Acts on a message that has already passed the sender check for this end
+ *  of the connection: the host calls it for member frames (and filters them
+ *  here, first thing), clients call it only after clientAcceptsPartyMessage.
+ *  `fromId` is 'host' for host-originated frames on a client, otherwise the
+ *  sending member's id. */
 function handlePartyMessage(fromId: string, msg: PartyMessage): void {
   const current = party
+  // The host is the authority: a member can never make it apply, emit or
+  // forward a host-only message (nowPlaying, party-state, seek-sync, ...),
+  // and play/pause/seek count only while member control is on — gated on
+  // receipt, not just in the member's UI.
+  if (current?.role === 'host' && !hostAcceptsFromMember(msg, current.allowMemberControl)) return
   if (msg?.type === 'chat') {
     const incoming = msg.chat as Partial<PartyChatMessage> | undefined
     const text = typeof incoming?.text === 'string' ? incoming.text.trim().slice(0, 1000) : ''
@@ -326,7 +372,7 @@ function handlePartyMessage(fromId: string, msg: PartyMessage): void {
     // The host bridges a member's message to whichever members its own
     // transport didn't already reach — see forwardFromMember.
     if (current?.role === 'host') {
-      forwardFromMember(fromId, encryptMessage(current.secret, { type: 'chat', chat }))
+      forwardFromMember(fromId, { type: 'chat', chat })
     }
     sendPartyEvent({ type: 'chat', chat })
     return
@@ -342,7 +388,7 @@ function handlePartyMessage(fromId: string, msg: PartyMessage): void {
     // names the outgoing title, and the asker will get the new one's
     // broadcast within seconds anyway.
     if (member && current.nowPlaying && !current.preparing) {
-      sendToMember(member, encryptMessage(current.secret, current.nowPlaying))
+      sendToMember(member, current.nowPlaying)
     }
     return
   }
@@ -367,11 +413,23 @@ function handlePartyMessage(fromId: string, msg: PartyMessage): void {
     msg?.type === 'queue-sync'
   )
     return
-  if (current?.role === 'host' && isMemberControlAction(msg) && !current.allowMemberControl) return
-  if (current?.role === 'host') {
-    forwardFromMember(fromId, encryptMessage(current.secret, { ...msg, from: fromId }))
+  // 'ready' (and any other member-only type) stops at the host. Only member
+  // playback control is forwarded, only while allowed, and always stamped
+  // with the member's id so clients never mistake it for the host's own.
+  if (
+    current?.role === 'host' &&
+    hostShouldForwardMemberMessage(msg, current.allowMemberControl)
+  ) {
+    forwardFromMember(fromId, { ...msg, from: fromId })
   }
   sendPartyEvent({ type: 'message', from: fromId, message: msg })
+}
+
+/** Client side of the authority check, shared by direct and relay mode. */
+function clientAccepts(msg: PartyMessage, sender: PartySenderRole): boolean {
+  const current = party
+  if (!current || current.role !== 'client') return false
+  return clientAcceptsPartyMessage(msg, sender, current.allowMemberControl)
 }
 
 /** Tears down the active party (host: closes the ws server/all member sockets and stops any UPnP mapping; client/relay-host: sends a best-effort `leave` then closes its socket) and clears `party`. Called both from `party:leave` and from `app.on('before-quit', ...)` in src/main/index.ts. */
@@ -427,28 +485,69 @@ export function closeParty(): void {
   party = null
 }
 
+/** Opens a direct-mode connection and runs the v2 handshake (see
+ *  partyChannel.ts): client-hello, wait for the host's server-hello, then
+ *  the sealed hello. Resolves once the hello is sent; the caller attaches
+ *  its message handler straight away, and the host's sealed welcome
+ *  follows — which is still what proves the host holds the secret. */
 function connectPartyWs(
   endpoint: PartyLanEndpoint,
   secret: string,
   name: string
-): Promise<WebSocket> {
+): Promise<{ ws: WebSocket; channel: PartyDirectChannel }> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://${endpoint.ip}:${endpoint.port}`, {
       maxPayload: MAX_PARTY_MESSAGE_BYTES
     })
-    const timer = setTimeout(() => {
-      ws.terminate()
-      reject(new Error('Connection timed out.'))
-    }, 5000)
+    const handshake = new PartyClientHandshake(secret)
+    let opened = false
+    let settled = false
+    const finish = (error: Error | null, channel?: PartyDirectChannel): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      ws.off('message', onMessage)
+      ws.off('close', onClose)
+      if (error || !channel) {
+        try {
+          ws.terminate()
+        } catch {
+          // already gone
+        }
+        reject(error || new Error('Could not reach the watch party host.'))
+        return
+      }
+      resolve({ ws, channel })
+    }
+    const timer = setTimeout(() => finish(new Error('Connection timed out.')), 5000)
+    const onMessage = (raw: unknown): void => {
+      const text = String(raw)
+      const channel = handshake.acceptServerHello(text)
+      if (!channel) {
+        finish(
+          new Error(
+            isLegacyPartyFrame(text)
+              ? PARTY_OUTDATED_PEER_MESSAGE
+              : 'The watch party host answered with something unexpected.'
+          )
+        )
+        return
+      }
+      ws.send(channel.seal({ type: 'hello', name }))
+      finish(null, channel)
+    }
+    // A v1 host cannot parse the plaintext client-hello and drops the socket
+    // without a word, so a close after open but before the server-hello
+    // most likely means an old host.
+    const onClose = (): void =>
+      finish(new Error(opened ? PARTY_OUTDATED_PEER_MESSAGE : 'Could not reach the watch party host.'))
+    ws.on('message', onMessage)
+    ws.on('close', onClose)
     ws.once('open', () => {
-      clearTimeout(timer)
-      ws.send(encryptMessage(secret, { type: 'hello', name }))
-      resolve(ws)
+      opened = true
+      ws.send(handshake.hello())
     })
-    ws.once('error', (error) => {
-      clearTimeout(timer)
-      reject(error)
-    })
+    ws.on('error', (error) => finish(error instanceof Error ? error : new Error(String(error))))
   })
 }
 
@@ -643,40 +742,67 @@ export function registerWatchPartyIpc(): void {
       // Not while a title change is in flight: the stored event still names
       // the OUTGOING title — see PartyStateHost.preparing.
       if (hostState.nowPlaying && !hostState.preparing) {
-        sendToMember(member, encryptMessage(secret, hostState.nowPlaying))
+        sendToMember(member, hostState.nowPlaying)
       }
     }
 
     wss.on('connection', (ws) => {
       let memberId: string | null = null
+      // Fresh per connection: the host nonce in it is what makes a captured
+      // hello useless on any other socket.
+      const handshake = new PartyHostHandshake(secret)
+      const handshakeTimer = setTimeout(() => {
+        if (!memberId) ws.terminate()
+      }, DIRECT_HANDSHAKE_TIMEOUT_MS)
       ws.on('message', (raw) => {
-        const msg = decryptMessage(secret, raw.toString()) as PartyMessage | null
-        if (!msg) {
+        const text = raw.toString()
+        const channel = handshake.established
+        if (!channel) {
+          const outcome = handshake.acceptClientHello(text)
+          if (!outcome.ok) {
+            if (outcome.reason === 'legacy') {
+              ws.close(PARTY_CLOSE_UPDATE_REQUIRED, 'Update required')
+            } else {
+              ws.close()
+            }
+            return
+          }
+          ws.send(outcome.reply)
+          return
+        }
+        // Any frame that is forged, replayed, reordered or reflected fails
+        // here, and the connection is dropped rather than resynchronised.
+        const msg = channel.open(text) as PartyMessage | null
+        if (!msg || typeof msg !== 'object') {
           ws.close()
           return
         }
-        if (msg.type === 'hello' && !memberId) {
-          if (members.size >= MAX_PARTY_MEMBERS) {
+        if (!memberId) {
+          // The first sealed frame must be the hello.
+          if (msg.type !== 'hello' || members.size >= MAX_PARTY_MEMBERS) {
             ws.close()
             return
           }
+          clearTimeout(handshakeTimer)
           memberId = createMemberId()
           const member: PartyHostMember = {
             id: memberId,
             name: String(msg.name || 'Guest').slice(0, 40) || 'Guest',
             isHost: false,
             via: 'direct',
-            ws
+            ws,
+            channel
           }
           members.set(memberId, member)
-          ws.send(encryptMessage(secret, { type: 'welcome', id: memberId }))
+          sendToDirectMember(member, { type: 'welcome', id: memberId })
           admit(member)
           return
         }
-        if (!memberId) return
+        if (msg.type === 'hello') return
         handlePartyMessage(memberId, msg)
       })
       ws.on('close', () => {
+        clearTimeout(handshakeTimer)
         if (memberId) {
           members.delete(memberId)
           broadcastPartyState()
@@ -928,6 +1054,7 @@ export function registerWatchPartyIpc(): void {
         role: 'client',
         mode: 'relay',
         ws,
+        channel: null,
         secret,
         members: [],
         selfName: displayName,
@@ -957,26 +1084,27 @@ export function registerWatchPartyIpc(): void {
         // that arrives after (see admit in the host handler).
         if (envelope.type !== 'relay') return
         const msg = decryptMessage(secret, envelope.body || '') as PartyMessage | null
-        if (!msg) return
+        if (!msg || typeof msg !== 'object') return
+        // The relay sets isHost from the host's room token, so it is the one
+        // sender identity a member cannot forge here; what the host bridges
+        // over from its direct members carries their id in `from`.
+        const sender = relaySenderOf(envelope.isHost, msg)
+        if (sender === 'host' && msg.type === 'leave') {
+          party = null
+          sendPartyEvent({ type: 'host-disconnected' })
+          return
+        }
+        if (!clientAccepts(msg, sender)) return
         if (msg.type === 'party-state') {
           applyPartyState(msg)
           return
         }
         // Legacy queue and play-request messages from older builds are dropped.
         if (msg.type === 'queue-sync') return
-        if (envelope.isHost && msg.type === 'leave') {
-          party = null
-          sendPartyEvent({ type: 'host-disconnected' })
-          return
-        }
-        if (!envelope.isHost && msg.type === 'nowPlaying') return
-        if (
-          !envelope.isHost &&
-          isMemberControlAction(msg) &&
-          !(party?.role === 'client' && party.allowMemberControl)
-        )
-          return
-        handlePartyMessage(envelope.isHost ? 'host' : String(envelope.connId || ''), msg)
+        // A member's id: the host's `from` stamp on a bridged frame, the
+        // relay's connId otherwise — never a field a member wrote itself.
+        const memberId = envelope.isHost === true ? String(msg.from) : String(envelope.connId || '')
+        handlePartyMessage(sender === 'host' ? 'host' : memberId, msg)
       })
       ws.on('close', () => {
         if (party?.role === 'client') {
@@ -1014,11 +1142,12 @@ export function registerWatchPartyIpc(): void {
       endpoint: PartyLanEndpoint,
       secret: string
     ): Promise<void> => {
-      const connectedWs = await connectPartyWs(endpoint, secret, displayName)
+      const { ws: connectedWs, channel } = await connectPartyWs(endpoint, secret, displayName)
       const clientDirectState: PartyStateClient = {
         role: 'client',
         mode: 'direct',
         ws: connectedWs,
+        channel,
         secret,
         members: [],
         selfName: displayName,
@@ -1044,8 +1173,17 @@ export function registerWatchPartyIpc(): void {
         settleWelcome = { resolve, reject }
       })
       connectedWs.on('message', (raw) => {
-        const msg = decryptMessage(secret, raw.toString()) as PartyMessage | null
-        if (!msg) return
+        // Sealed with this connection's host->client key and sequence, so
+        // nothing captured, replayed or reflected gets past this.
+        const msg = channel.open(raw.toString()) as PartyMessage | null
+        if (!msg || typeof msg !== 'object') {
+          connectedWs.close()
+          return
+        }
+        // Everything arrives over the host's socket; what the host forwards
+        // for a member carries that member's id in `from`.
+        const sender = directSenderOf(msg)
+        if (!clientAccepts(msg, sender)) return
         if (msg.type === 'welcome') {
           if (party?.role === 'client') party.selfId = String(msg.id || '')
           welcomed = true
@@ -1058,7 +1196,7 @@ export function registerWatchPartyIpc(): void {
         }
         // Legacy queue and play-request messages from older builds are dropped.
         if (msg.type === 'queue-sync') return
-        handlePartyMessage('host', msg)
+        handlePartyMessage(sender === 'host' ? 'host' : String(msg.from), msg)
       })
       connectedWs.on('close', () => {
         if (!welcomed) {
@@ -1179,7 +1317,7 @@ export function registerWatchPartyIpc(): void {
             ? payload.sentAt
             : Date.now()
       }
-      partyBroadcast(encryptMessage(current.secret, { type: 'chat', chat }))
+      partyBroadcast({ type: 'chat', chat })
       // A direct host never receives its own broadcast, and relay echo timing
       // should not decide when a sent message appears in the UI.
       sendPartyEvent({ type: 'chat', chat })
@@ -1214,7 +1352,7 @@ export function registerWatchPartyIpc(): void {
     // announcement (or the cancellation, which leaves the old title as the
     // honest answer again). See PartyStateHost.preparing.
     current.preparing = Boolean(item)
-    partyBroadcast(encryptMessage(current.secret, event))
+    partyBroadcast(event)
     return { ok: true }
   })
 
@@ -1238,7 +1376,7 @@ export function registerWatchPartyIpc(): void {
       episode: Number.isFinite(p.episode) ? p.episode : undefined,
       position: Number(p.position) || 0
     }
-    partyBroadcast(encryptMessage(current.secret, event))
+    partyBroadcast(event)
     // Kept for whoever arrives NEXT: the admit path replays this to late
     // joiners, and the roster broadcast below tells everyone already here
     // (the hub's "Join the film" button included) what is on. The
@@ -1310,7 +1448,7 @@ export function registerWatchPartyIpc(): void {
       if (Number.isFinite(action.position)) event.position = Number(action.position)
       if (typeof action.requestId === 'string') event.requestId = action.requestId
       if (Array.isArray(action.waitingIds)) event.waitingIds = action.waitingIds.map(String)
-      partyBroadcast(encryptMessage(current.secret, event))
+      partyBroadcast(event)
       return { ok: true }
     }
   )

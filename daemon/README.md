@@ -14,8 +14,11 @@ administrator's app ("… wants to use r3-host. Allow it?") with **Allow** and
 **Deny**, plus a desktop notification when the app is not in front; with
 open join switched on, devices are let in with no prompt. If the server's
 address changes, the app finds the same server again (same name, and it
-still recognises this device's token) and updates the stored address. There
-is no pairing code.
+still recognises this device's token, and presents the certificate this
+device pinned when it joined) and updates the stored address. There is no
+pairing code to type; instead each request shows a six-digit **verification
+code** on the joining device and beside the request in the administrator's
+app, and the two should match (see [Who may use what](#who-may-use-what)).
 
 The app looks over mDNS first, then falls back to
 asking the addresses around it for `/api/ping` on port 8945. That fallback
@@ -89,8 +92,14 @@ Environment variables: `R3_CACHE_DIR` (the data directory), `R3_CACHE_NO_MDNS=1`
 for testing the updater), and `XDG_DATA_HOME`, honoured for the default data
 directory on Linux.
 
-Command-line flags: `--install`, `--uninstall`, `--claim-admin` and
-`--version`.
+Command-line flags: `--install`, `--uninstall`, `--claim-admin`,
+`--devices`, `--revoke <device id|all>` and `--version`.
+
+`--devices` lists the paired devices (id, name, status, expiry) from the
+data directory; `--revoke <id>` removes one device and `--revoke all`
+removes every device, each withdrawing the removed devices' TorBox keys. A
+running daemon picks the change up within seconds and cancels their queued
+work; no restart is needed.
 
 `--claim-admin` is the recovery for a lost administrator device, or for an
 administrator who chose **Leave**:
@@ -178,8 +187,24 @@ The console window shows the same banner as above.
   is switched on, or while the server reports itself unclaimed (it has no
   administrator yet, or `--claim-admin` has reopened it), since then any
   device could claim the server outright anyway. There is nothing to type
-  on either side. Asking is unauthenticated, so requests are throttled and
-  the pending list is capped.
+  on either side. Asking is unauthenticated, so requests are throttled (per
+  address and overall) and the pending list is capped, with at most a few
+  waiting requests from any one address.
+- **Verification code.** The joining app learns the daemon's certificate
+  when it first connects and pins it. From that certificate, the new token
+  and a random value of its own it computes a six-digit code, shown while
+  the request waits; the daemon computes the same code from its own
+  certificate and shows it beside the request (in the app's device list and
+  toast, and in the daemon's log). If the two differ, something on the
+  network is in between: deny the request. Requests let in automatically
+  (open join, or an unclaimed server) are not compared by anyone, so leave
+  open join off on a network you do not trust.
+- **Tokens.** The daemon stores only a hash of each device's token
+  (`auth.json`; an older plaintext file is converted on first start, keeping
+  every device). Tokens last 90 days; the app renews its own token in the
+  background once it has less than 30 days left, so a device in use never
+  notices. A device that stays away longer than that has to ask to join
+  again.
 - **The administrator.** The first device to claim the server. From
   **Control centre → Caching** they **Approve** or **Deny** devices that
   ask, **Remove** approved ones (which withdraws that device's TorBox key
@@ -242,11 +267,19 @@ The console window shows the same banner as above.
   on the administrator role, and coming back counts as a new device, so an
   administrator who leaves cannot take the role back from the app;
   `--claim-admin` (under [Running it](#running-it)) is the way back.
-- **Plain HTTP on the LAN.** The daemon serves the network over plain
-  HTTP with no encryption. A device's token travels in the clear on every
-  request, and in the stream address the player opens, so anyone who can
-  watch traffic on the network can copy it and act as that device. Run it
-  only on a network you trust.
+- **HTTPS on the LAN.** The daemon serves the network over HTTPS only,
+  with a self-signed certificate it creates on first start and keeps in its
+  data directory (`tls-cert.pem`, `tls-key.pem`; delete both to make a new
+  one, after which every device has to join again). The app pins that
+  certificate at the join and checks it on every connection, the stream and
+  the Rooms relay included, before any token is sent; a different
+  certificate at the same address gets nothing. The startup banner prints
+  the certificate's short **Server ID**, which the app shows too. Apps from
+  before this change cannot talk to the daemon, and this app cannot join an
+  older daemon: update both.
+- **Your TorBox key is never shared by default.** The app offers the key to
+  the server only when you tick the box as you ask to join; the automatic
+  join at launch never sends it.
 
 The design is written up in [docs/CACHE-PERMISSIONS.md](../docs/CACHE-PERMISSIONS.md).
 
@@ -330,7 +363,7 @@ Two harnesses, for two different questions.
 hardware, joining, Range serving, and the app's own player gate:
 
 ```
-LANCACHE_URL=http://<host>:8945 npx tsx scripts/verify-lancache.ts
+LANCACHE_URL=https://<host>:8945 npx tsx scripts/verify-lancache.ts
 ```
 
 It asks to join under its own name and waits for you to approve
